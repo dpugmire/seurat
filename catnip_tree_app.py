@@ -77,30 +77,41 @@ state = server.state
 state.tree_items = build_tree_from_paths(EXAMPLE_PATHS)
 
 # Tree state
-state.tree_selected = []        # list of selected item ids (paths)
 state.tree_opened = []          # list of opened item ids -> start fully collapsed
+state.tree_activated = []       # list of activated (clicked) item ids
 state.selection_details = "Nothing selected yet."
 
 
-# Callback when selection changes
-@state.change("tree_selected")
-def on_tree_selection(tree_selected, **kwargs):
+# Callback when *any* node is clicked/activated
+@state.change("tree_activated")
+def on_tree_activated(tree_activated, **kwargs):
     """
-    Called whenever the VTreeview selection changes.
+    Called whenever the VTreeview activated nodes change.
 
-    tree_selected: list of selected item 'id's (we set these to full paths).
+    tree_activated: list of activated item 'id's (we set these to full paths).
     """
-    print("tree_selected changed:", tree_selected)
+    print("tree_activated changed:", tree_activated)
 
-    if not tree_selected:
+    if not tree_activated:
         state.selection_details = "Nothing selected."
         return
 
-    last = tree_selected[-1]
+    last = tree_activated[-1]
+    parts = last.split("/")
+    depth = len(parts)
+    if depth == 1:
+        node_type = "CampaignFile"
+    elif depth == 2:
+        node_type = "DataFile"
+    elif depth == 3:
+        node_type = "Variable"
+    else:
+        node_type = f"Depth {depth}"
+
     state.selection_details = (
-        "Selected IDs (paths):\n"
-        f"{tree_selected}\n\n"
-        f"Most recent: {last}"
+        f"Activated (clicked) node type: {node_type}\n"
+        f"Full path: {last}\n"
+        f"All activated IDs: {tree_activated}"
     )
 
 # -----------------------------------------------------------------------------
@@ -132,15 +143,15 @@ with SinglePageLayout(server) as layout:
                                 item_value="id",
                                 item_children="children",
 
-                                # Selection binding (Vuetify3: v-model:selected)
-                                v_model_selected=("tree_selected", []),
-
                                 # Open state binding (Vuetify3: v-model:opened)
                                 v_model_opened=("tree_opened", []),
 
-                                # Make nodes selectable (checkbox selection)
-                                selectable=True,
-                                select_strategy="leaf",  # only leaves selectable
+                                # Activation binding (Vuetify3: v-model:activated)
+                                v_model_activated=("tree_activated", []),
+                                activatable=True,
+
+                                # This flag expands when clicked. If off, it only expands when click on the arrow.
+                                #open_on_click=True,
 
                                 density="compact",
                             )
@@ -148,7 +159,7 @@ with SinglePageLayout(server) as layout:
                 # Right: selection details
                 with v3.VCol(cols=8):
                     with v3.VCard(elevation=2):
-                        v3.VCardTitle("Selection Details")
+                        v3.VCardTitle("Selection Details (Activated Node)")
                         with v3.VCardText():
                             html.Pre(
                                 "{{ selection_details }}",
