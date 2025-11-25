@@ -1,14 +1,59 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 from trame.app import get_server
 from trame.ui.vuetify3 import SinglePageLayout
-from trame.widgets import vuetify3 as v3
-from trame.widgets import html
+from trame.widgets import vuetify3 as v3, html
 
-# -------------------------------------------------------------------------
-# Sample data: flat paths like you described
-# -------------------------------------------------------------------------
-PATH_STRINGS = [
+# -----------------------------------------------------------------------------
+# Data -> Tree utilities
+# -----------------------------------------------------------------------------
+
+def build_tree_from_paths(path_list):
+    """
+    Build a Vuetify3 VTreeview-compatible items structure from a list of
+    'a/b/c' path strings.
+
+    Each node has:
+        - id:   full path up to that level (used as item_value)
+        - name: label shown in the tree (segment name)
+        - path: full path (for convenience)
+        - children: list of children (if any)
+    """
+    root = {}
+
+    for p in path_list:
+        parts = p.split("/")
+        current = root
+        current_path = ""
+        for part in parts:
+            current_path = part if not current_path else f"{current_path}/{part}"
+            if part not in current:
+                current[part] = {
+                    "__path__": current_path,
+                    "__children__": {},
+                }
+            current = current[part]["__children__"]
+
+    def to_items(level_dict):
+        items = []
+        for name in sorted(level_dict.keys()):
+            info = level_dict[name]
+            children_items = to_items(info["__children__"])
+            item = {
+                "id": info["__path__"],   # we use full path as the ID
+                "name": name,             # label in the tree
+                "path": info["__path__"], # keep full path as metadata
+            }
+            if children_items:
+                item["children"] = children_items
+            items.append(item)
+        return items
+
+    return to_items(root)
+
+
+# Example paths (eventually replace with DB-driven list)
+EXAMPLE_PATHS = [
     "campaignFile0/DataFile0/temp",
     "campaignFile0/DataFile0/pressure",
     "campaignFile0/DataFile0/velocity",
@@ -19,147 +64,100 @@ PATH_STRINGS = [
     "campaignFile1/DataFile0/sensor1",
 ]
 
-
-def build_tree_from_paths(paths, sep="/"):
-    """
-    Convert a list of path strings like:
-        campaignFile0/DataFile0/temp
-    into a nested structure suitable for VTreeview.
-
-    Each node has:
-      - id: full path (unique)
-      - label: the current segment
-      - path: full path
-      - children: list of child nodes (if any)
-    """
-    root = {}
-
-    for p in paths:
-        parts = [part for part in p.split(sep) if part]
-        current_level = root
-        for depth, part in enumerate(parts):
-            if part not in current_level:
-                current_level[part] = {
-                    "label": part,
-                    "path": sep.join(parts[: depth + 1]),
-                    "children": {},
-                }
-            current_level = current_level[part]["children"]
-
-    def to_list(level_dict):
-        nodes = []
-        for key, entry in level_dict.items():
-            children_list = to_list(entry["children"])
-            node = {
-                "id": entry["path"],   # what VTreeview will use as value
-                "label": entry["label"],
-                "path": entry["path"],
-            }
-            if children_list:
-                node["children"] = children_list
-            nodes.append(node)
-        return nodes
-
-    return to_list(root)
-
-
-# -------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 # Trame setup
-# -------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+
 server = get_server()
-state, ctrl = server.state, server.controller
+server.client_type = "vue3"  # important for vuetify3
 
-# Build tree once at startup
-state.tree_items = build_tree_from_paths(PATH_STRINGS)
+state = server.state
 
-# Selection state (VTreeview uses a list of selected ids)
-state.selected_nodes = []
-state.current_path = ""
-state.current_level = ""   # "campaign", "datafile", "variable"
+# Precompute tree items
+state.tree_items = build_tree_from_paths(EXAMPLE_PATHS)
+
+# Tree state
+state.tree_selected = []        # list of selected item ids (paths)
+state.tree_opened = []          # list of opened item ids -> start fully collapsed
+state.selection_details = "Nothing selected yet."
 
 
-@state.change("selected_nodes")
-def on_tree_selection(selected_nodes, **kwargs):
-    """Update info panel when the user selects something in the tree."""
-    if not selected_nodes:
-        state.current_path = ""
-        state.current_level = ""
+# Callback when selection changes
+@state.change("tree_selected")
+def on_tree_selection(tree_selected, **kwargs):
+    """
+    Called whenever the VTreeview selection changes.
+
+    tree_selected: list of selected item 'id's (we set these to full paths).
+    """
+    print("tree_selected changed:", tree_selected)
+
+    if not tree_selected:
+        state.selection_details = "Nothing selected."
         return
 
-    # Simple single-selection example: use the first selected id
-    path = selected_nodes[0]
-    state.current_path = path
+    last = tree_selected[-1]
+    state.selection_details = (
+        "Selected IDs (paths):\n"
+        f"{tree_selected}\n\n"
+        f"Most recent: {last}"
+    )
 
-    depth = len([p for p in path.split("/") if p])
-    if depth == 1:
-        state.current_level = "CampaignFile"
-    elif depth == 2:
-        state.current_level = "DataFile"
-    elif depth == 3:
-        state.current_level = "Variable"
-    else:
-        state.current_level = f"Depth {depth}"
+# -----------------------------------------------------------------------------
+# UI
+# -----------------------------------------------------------------------------
 
-
-# -------------------------------------------------------------------------
-# UI layout
-# -------------------------------------------------------------------------
 with SinglePageLayout(server) as layout:
-    layout.title.set_text("Campaign Browser")
+    layout.title.set_text("CatNip Campaign Tree")
 
-    # Top toolbar (you can add controls here later)
+    # Top toolbar
     with layout.toolbar:
-        v3.VToolbarTitle("Campaign Browser")
+        v3.VToolbarTitle("CatNip Campaign Tree")
         v3.VSpacer()
+        v3.VBtn("Quit", icon="mdi-close", variant="text", click=server.stop)
 
-    # Main content: left tree, right detail panel
+    # Main content: left tree, right details
     with layout.content:
-        with v3.VContainer(fluid=True, classes="pa-2 fill-height"):
-            with v3.VRow(classes="fill-height"):
-                # Left: Tree view
-                with v3.VCol(cols=4, classes="fill-height"):
-                    with v3.VCard(classes="fill-height d-flex flex-column"):
-                        v3.VCardTitle("Campaign / Datafile / Variable")
-                        with v3.VCardText(classes="py-0 flex-grow-1 overflow-auto"):
+        with v3.VContainer(fluid=True, class_="pa-2"):
+            with v3.VRow():
+                # Left: tree
+                with v3.VCol(cols=4):
+                    with v3.VCard(elevation=2):
+                        v3.VCardTitle("Campaign Browser")
+                        with v3.VCardText():
                             v3.VTreeview(
-                                # Data
+                                # Tree data
                                 items=("tree_items",),
-                                # Selection
-                                v_model_selected=("selected_nodes", []),
-                                # Tell VTreeview how to read our item structure
-                                item_title="label",
+                                item_title="name",
                                 item_value="id",
                                 item_children="children",
-                                # UX options
-                                activatable=True,
-                                hoverable=True,
-                                open_all=True,
-                                dense=True,
-                                shaped=True,
+
+                                # Selection binding (Vuetify3: v-model:selected)
+                                v_model_selected=("tree_selected", []),
+
+                                # Open state binding (Vuetify3: v-model:opened)
+                                v_model_opened=("tree_opened", []),
+
+                                # Make nodes selectable (checkbox selection)
+                                selectable=True,
+                                select_strategy="leaf",  # only leaves selectable
+
+                                density="compact",
                             )
 
-                # Right: Detail / info area
-                with v3.VCol(cols=8, classes="fill-height"):
-                    with v3.VCard(classes="fill-height d-flex flex-column"):
+                # Right: selection details
+                with v3.VCol(cols=8):
+                    with v3.VCard(elevation=2):
                         v3.VCardTitle("Selection Details")
-                        with v3.VCardText(classes="flex-grow-1 overflow-auto"):
-                            # Use safe HTML to get bold and code without multiple children
-                            html.P(
-                                "Level: <strong>{{ current_level }}</strong>",
-                                safe=True,
-                            )
-                            html.P(
-                                "Full path: <code>{{ current_path }}</code>",
-                                safe=True,
-                            )
-                            html.Hr()
-                            html.P(
-                                "You can use `current_path` to drive plots, "
-                                "table views, or RPC calls into your Mongo/ADIOS stack."
+                        with v3.VCardText():
+                            html.Pre(
+                                "{{ selection_details }}",
+                                style="white-space: pre-wrap; font-family: monospace;",
                             )
 
-# -------------------------------------------------------------------------
-# Start the app
-# -------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# Main
+# -----------------------------------------------------------------------------
+
 if __name__ == "__main__":
     server.start()
