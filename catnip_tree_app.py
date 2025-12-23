@@ -64,6 +64,12 @@ EXAMPLE_PATHS = [
     "campaignFile1/DataFile0/sensor1",
 ]
 
+CAMPAIGN_CENTRIC = EXAMPLE_PATHS
+VARIABLE_CENTRIC = ["temp/DataFile0/campaignFile0", "temp/DataFile1/campaignFile0", "pressure/DataFile0/campaignFile0",
+                    "pressure/DataFile1/campaignFile0", "velocity/DataFile0/campaignFile0", "velocity/DataFile1/campaignFile0",
+                    "sensor0/DataFile0/campaignFile1", "sensor1/DataFile0/campaignFile1"]
+FILE_CENTRIC = ["DataFile0", "DataFile1"]
+
 # -----------------------------------------------------------------------------
 # Trame setup
 # -----------------------------------------------------------------------------
@@ -80,6 +86,9 @@ state.tree_items = build_tree_from_paths(EXAMPLE_PATHS)
 state.tree_opened = []          # list of opened item ids -> start fully collapsed
 state.tree_activated = []       # list of activated (clicked) item ids
 state.selection_details = "Nothing selected yet."
+
+# View mode for radio group
+state.view_mode = "Campaign"    # one of: "Campaign", "DataFile", "Variable"
 
 
 # Callback when *any* node is clicked/activated
@@ -109,10 +118,22 @@ def on_tree_activated(tree_activated, **kwargs):
         node_type = f"Depth {depth}"
 
     state.selection_details = (
+        f"View mode: {state.view_mode}\n"
         f"Activated (clicked) node type: {node_type}\n"
         f"Full path: {last}\n"
         f"All activated IDs: {tree_activated}"
     )
+
+@state.change("view_mode")
+def on_view_mode_change(view_mode, **kwargs):
+    print("view_mode changed to:", view_mode)
+
+    # For now, just reflect it in the details text
+    state.selection_details = (
+        f"View mode changed to: {view_mode}\n\n"
+        f"{state.selection_details}"
+    )
+
 
 # -----------------------------------------------------------------------------
 # UI
@@ -131,11 +152,33 @@ with SinglePageLayout(server) as layout:
     with layout.content:
         with v3.VContainer(fluid=True, class_="pa-2"):
             with v3.VRow():
-                # Left: tree
+                # Left: tree + "View:" controls
                 with v3.VCol(cols=4):
                     with v3.VCard(elevation=2):
-                        v3.VCardTitle("Campaign Browser")
+                        #v3.VCardTitle("Campaign Browser")
                         with v3.VCardText():
+                            # --- View mode row -------------------------------------------------
+                            with v3.VRow(
+                                class_="align-center mb-2",
+                                density="compact",
+                                style="font-size: 1.0rem;",
+                            ):
+                                # Label
+                                html.Span("View:", class_="mr-2")
+
+                                # Small inline radio group
+                                with v3.VRadioGroup(
+                                    v_model=("view_mode", "Campaign"),
+                                    inline=True,
+                                    density="compact",
+                                    class_="ma-0 pa-0",
+                                    style="font-size: 0.6rem;",
+                                ):
+                                    v3.VRadio(label="Campaign", value="Campaign", density="compact")
+                                    v3.VRadio(label="DataFile", value="DataFile", density="compact")
+                                    v3.VRadio(label="Variable", value="Variable", density="compact")
+
+                            # --- Tree view ----------------------------------------------------
                             v3.VTreeview(
                                 # Tree data
                                 items=("tree_items",),
@@ -150,16 +193,15 @@ with SinglePageLayout(server) as layout:
                                 v_model_activated=("tree_activated", []),
                                 activatable=True,
 
-                                # This flag expands when clicked. If off, it only expands when click on the arrow.
-                                #open_on_click=True,
-
+                                # IMPORTANT: only arrow toggles open/close
+                                # (do NOT set open_on_click=True)
                                 density="compact",
                             )
 
                 # Right: selection details
                 with v3.VCol(cols=8):
                     with v3.VCard(elevation=2):
-                        v3.VCardTitle("Selection Details (Activated Node)")
+                        v3.VCardTitle("Selection Details")
                         with v3.VCardText():
                             html.Pre(
                                 "{{ selection_details }}",

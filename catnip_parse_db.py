@@ -110,7 +110,8 @@ def parse_campaign(campaign_path:str) :
 
 
 clear_collection()
-parse_campaign("one_file.aca")
+#parse_campaign("one_file.aca")
+parse_campaign("kh.aca")
 
 collection = get_collection()
 
