@@ -25,26 +25,28 @@ def _to_simple_string(input: str) -> str:
     return input.translate(str.maketrans("", "", '"'))
 
 
-def extract_file_var(input: str) -> tuple[str, str, str, str]:
+def extract_file_var(input: str) -> tuple[str, str, str, str, str]:
     parts = input.split("/")
     if len(parts) < 2:
         raise ValueError(f"Invalid file variable format: {input}")
     producer = parts[0]
+    casename = parts[1]
     varname = parts[-1]
     filename = parts[-2]
     varpath = "/".join(parts[0:-1])
-    return (varname, filename, varpath, producer)
+    return (varname, filename, varpath, producer, casename)
 
 
-def extract_file_var_img(input: str) -> tuple[str, str, str, str]:
+def extract_file_var_img(input: str) -> tuple[str, str, str, str, str]:
     parts = input.split("/")
     if len(parts) < 4:
         raise ValueError(f"Invalid image variable format: {input}")
     producer = parts[0]
+    casename = parts[1]
     varname = parts[3]
     filename = parts[2]
     varpath = input
-    return (varname, filename, varpath, producer)
+    return (varname, filename, varpath, producer, casename)
 
 
 def get_visualization_name(input: str) -> str:
@@ -138,10 +140,9 @@ def parse_campaign(campaign_path: str, collection):
                 var_location = _to_simple_string(attrs_dict[loc_key]["Value"])
 
             if var_type == "variable":
-                var, file, varpath, producer = extract_file_var(varname)
+                var, file, varpath, producer, casename = extract_file_var(varname)
             else:
-                var, file, varpath, producer = extract_file_var_img(varname)
-
+                var, file, varpath, producer, casename = extract_file_var_img(varname)
             metadata = varinfo
 
             if var_type == "image":
@@ -159,6 +160,7 @@ def parse_campaign(campaign_path: str, collection):
                     "variable_path": varpath,
                     "variable_type": var_type,
                     "producer": producer,
+                    "casename": casename,
                     "variable_location": var_location,
                     "metadata": metadata,
                     "movie_cache": 1,
@@ -174,11 +176,16 @@ def parse_campaign(campaign_path: str, collection):
                     "variable_path": varpath,
                     "variable_type": var_type,
                     "producer": producer,
+                    "casename": casename,
                     "variable_location": var_location,
                     "metadata": metadata,
                 }
 
             collection.insert_one(document)
+    #sanity checks...
+    print(collection.distinct("campaign_path"))
+    print(collection.count_documents({}))
+
 
 
 def main():

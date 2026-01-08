@@ -25,7 +25,7 @@ MAX_ROWS = int(os.getenv("MAX_ROWS", "500"))
 CAMPAIGN_PATH = "kh.aca"  # testing file to always load
 
 # Middle-pane columns
-DISPLAY_FIELDS = ["producer", "file", "variable_type"]
+DISPLAY_FIELDS = ["producer", "casename"]
 
 
 # -----------------------------------------------------------------------------
@@ -175,10 +175,25 @@ class CampaignDb:
 
             tiles: List[Dict[str, str]] = []
             for vis in vis_names:
+                doc0 = self.collection.find_one(
+                    {**query, "visualization_name": vis},
+                    {
+                        "_id": 1,
+                        "visualization_name": 1,
+                        "variable_name": 1,
+                        "variable_path": 1,
+                        "producer": 1,
+                        "campaign_path": 1,
+                        "file": 1,
+                        "image_bytes": 1,
+                    },
+                    sort=[("_id", 1)],
+                )
+
                 doc = self.collection.find_one(
                     {**query, "visualization_name": vis},
                     {"_id": 0, "visualization_name": 1, "image_bytes": 1},
-                    sort=[("_id", -1)],     # most recent / "last" inserted
+                    sort=[("_id", 1)],     # most recent / "last" inserted
                 )
                 if not doc:
                     continue
@@ -337,7 +352,8 @@ def ingest_campaign_every_time(**_kwargs):
         state.dbStatus = f"Loading {CAMPAIGN_PATH}..."
 
         # Avoid duplicates for this test file
-        collection.delete_many({"campaign_path": CAMPAIGN_PATH})
+        collection.drop()
+        #collection.delete_many({"campaign_path": CAMPAIGN_PATH})
 
         # Ingest
         parse_campaign(CAMPAIGN_PATH, collection)
