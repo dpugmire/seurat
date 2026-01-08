@@ -241,6 +241,10 @@ state.selectedVar = ""
 state.tableFields = list(DISPLAY_FIELDS)
 state.tableRows = []
 
+# --- sorting (client-side, no DB requery) ---
+state.tableSortField = DISPLAY_FIELDS[0] if DISPLAY_FIELDS else ""
+state.tableSortAsc = True
+
 # Right pane: details + images
 state.detailsDoc = {}
 state.detailsJson = ""
@@ -249,7 +253,6 @@ state.imageTiles = []
 state.imageGrid = []
 state.imageStatus = ""
 state.selectedRowId = ""
-
 
 
 def refresh_variable_list():
@@ -263,6 +266,38 @@ def pick_var(var_name: str, **_):
     state.selectedVar = var_name
 
 
+@ctrl.add("sort_table")
+def sort_table(field: str, **_):
+    """
+    Sort currently-loaded tableRows by a field, toggling direction on repeated clicks.
+    No DB re-query.
+    """
+    if not field:
+        return
+
+    # Toggle direction if same field, else reset to ascending
+    if state.tableSortField == field:
+        state.tableSortAsc = not bool(state.tableSortAsc)
+    else:
+        state.tableSortField = field
+        state.tableSortAsc = True
+
+    asc = bool(state.tableSortAsc)
+    rows = list(state.tableRows or [])
+
+    def keyfn(row: Dict[str, str]):
+        v = row.get(field, "")
+        if v is None:
+            return ("__str__", "")
+        s = str(v)
+        try:
+            return ("__num__", float(s))
+        except Exception:
+            return ("__str__", s.lower())
+
+    state.tableRows = sorted(rows, key=keyfn, reverse=(not asc))
+
+
 @ctrl.add("show_details")
 def show_details(row: Dict[str, str], **_):
     """
@@ -273,7 +308,7 @@ def show_details(row: Dict[str, str], **_):
     # Full doc -> details pane
     id_str = row.get("_id", "")
     doc = db.get_document_by_id(id_str)
-    doc = doc['metadata'] if 'metadata' in doc else {}
+    doc = doc["metadata"] if "metadata" in doc else {}
     state.detailsDoc = doc
     state.detailsJson = json.dumps(doc, indent=2, default=str) if doc else ""
 
@@ -301,6 +336,7 @@ def select_row(row: Dict[str, str], **_):
     # populate right pane
     show_details(row)
 
+
 @state.change("selectedVar")
 def on_selected_var(selectedVar, **_):
     if not selectedVar:
@@ -326,7 +362,12 @@ def on_selected_var(selectedVar, **_):
         if db.ok
         else f'DB error • "{selectedVar}" • {db.last_error}'
     )
+
     state.tableRows = rows
+
+    # Apply current/default sort (client-side)
+    if state.tableSortField:
+        sort_table(state.tableSortField)
 
     # Clear right pane when switching left variable
     state.selectedRowId = ""
@@ -353,7 +394,7 @@ def ingest_campaign_every_time(**_kwargs):
 
         # Avoid duplicates for this test file
         collection.drop()
-        #collection.delete_many({"campaign_path": CAMPAIGN_PATH})
+        # collection.delete_many({"campaign_path": CAMPAIGN_PATH})
 
         # Ingest
         parse_campaign(CAMPAIGN_PATH, collection)
@@ -421,7 +462,24 @@ with SinglePageLayout(server) as layout:
                                 with html.Thead():
                                     with html.Tr():
                                         for f in DISPLAY_FIELDS:
-                                            html.Th(f)
+                                            with html.Th(
+                                                style="cursor: pointer; user-select: none;",
+                                                click=(ctrl.sort_table, f"['{f}']"),
+                                            ):
+                                                html.Span(f)
+
+                                                with vuetify.Template(v_if=(f"tableSortField === '{f}'",)):
+                                                    vuetify.VIcon(
+                                                        ("tableSortAsc ? 'mdi-arrow-up' : 'mdi-arrow-down'",),
+                                                        size="x-small",
+                                                        class_="ml-1",
+                                                    )
+                                                with vuetify.Template(v_else=True):
+                                                    vuetify.VIcon(
+                                                        "mdi-sort",
+                                                        size="x-small",
+                                                        class_="ml-1",
+                                                    )
 
                                 with html.Tbody():
                                     with vuetify.Template(v_for="item in tableRows", key="item._id"):
@@ -432,7 +490,6 @@ with SinglePageLayout(server) as layout:
                                         ):
                                             for f in DISPLAY_FIELDS:
                                                 html.Td(f"{{{{ item['{f}'] }}}}")
-
 
                 # Right: details (top) + images grid (bottom)
                 with vuetify.VCol(cols=4):
@@ -478,6 +535,7 @@ with SinglePageLayout(server) as layout:
                                                             )
                                                     with vuetify.Template(v_else=True):
                                                         html.Div("")
+
 
 if __name__ == "__main__":
     server.start()
