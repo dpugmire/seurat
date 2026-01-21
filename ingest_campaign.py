@@ -1,4 +1,4 @@
-import os, io, struct
+import os, io, struct, re
 import argparse
 from pymongo import MongoClient
 from adios2 import FileReader
@@ -6,6 +6,7 @@ from adios2 import FileReader
 import numpy as np
 from PIL import Image
 from bson.binary import Binary
+from typing import Optional
 
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
 MONGO_DB = os.getenv("MONGO_DB", "catnip_campaigns")
@@ -56,6 +57,7 @@ def get_visualization_name(input: str) -> str:
         return parts[idx + 1]
     return ""
 
+
 def png_size(png_bytes: bytes) -> tuple[int, int]:
     # assumes valid PNG
     width, height = struct.unpack(">II", png_bytes[16:24])
@@ -63,6 +65,7 @@ def png_size(png_bytes: bytes) -> tuple[int, int]:
 
 
 _PNG_SIG = b"\x89PNG\r\n\x1a\n"
+
 
 def array_to_png_bytes(img: np.ndarray) -> bytes:
     """
@@ -78,8 +81,6 @@ def array_to_png_bytes(img: np.ndarray) -> bytes:
 
     # Case A: 1D "byte stream" (likely already PNG bytes)
     if img.ndim == 1:
-        # Convert to raw bytes
-        # (handles uint8 / int8 / etc. safely by casting)
         if img.dtype != np.uint8:
             img_u8 = img.astype(np.uint8, copy=False)
         else:
@@ -87,11 +88,7 @@ def array_to_png_bytes(img: np.ndarray) -> bytes:
 
         data = img_u8.tobytes()
 
-        # Optional: validate PNG signature (helps catch wrong data)
-        # If this fails but you *know* it's a different format, remove the check.
         if not data.startswith(_PNG_SIG):
-            # Not necessarily wrong, but it isn't a PNG file stream.
-            # You can still store it, but the browser won't display it as PNG.
             raise ValueError(
                 f"1D image payload does not look like PNG bytes. "
                 f"len={len(data)} first8={data[:8]!r}"
@@ -101,8 +98,6 @@ def array_to_png_bytes(img: np.ndarray) -> bytes:
 
     # Case B: pixel arrays -> encode to PNG
     if img.dtype != np.uint8:
-        # If data is float in [0,1] or [0,255], you may need scaling.
-        # For now, assume it is already 0..255-ish.
         img = np.clip(img, 0, 255).astype(np.uint8)
 
     if img.ndim == 2:
@@ -120,9 +115,24 @@ def array_to_png_bytes(img: np.ndarray) -> bytes:
     return buf.getvalue()
 
 
+# Match ".../image.000450.png/..." and capture 000450
+_FRAME_RE = re.compile(r"(?:^|/)(?:image)\.(\d+)\.png(?:/|$)")
+
+
+def extract_frame_index_from_varpath(varpath: str) -> Optional[int]:
+    if not varpath:
+        return None
+    m = _FRAME_RE.search(varpath)
+    if not m:
+        return None
+    try:
+        return int(m.group(1))
+    except Exception:
+        return None
+
+
 def parse_campaign(campaign_path: str, collection):
-    #collection = get_collection()
-    print('reading: ', campaign_path)
+    print("reading: ", campaign_path)
 
     with FileReader(campaign_path) as fr:
         vars_dict = fr.available_variables()
@@ -143,15 +153,26 @@ def parse_campaign(campaign_path: str, collection):
                 var, file, varpath, producer, casename = extract_file_var(varname)
             else:
                 var, file, varpath, producer, casename = extract_file_var_img(varname)
+
             metadata = varinfo
 
             if var_type == "image":
-                #get the bytes.
                 img_data = fr.read(varpath)
                 png_bytes = array_to_png_bytes(img_data)
                 img_width, img_height = png_size(png_bytes)
 
                 visualization_name = get_visualization_name(varname)
+
+                # NEW: frame_index from ".../image.000450.png/..."
+                frame_index = extract_frame_index_from_varpath(varpath)
+                if frame_index is None:
+                    # fallback: try to locate the "image.*.png" segment (avoid 480x480)
+                    parts = varpath.split("/")
+                    candidate = next((p for p in parts if p.startswith("image.") and p.endswith(".png")), "")
+                    if candidate:
+                        digits = re.findall(r"(\d+)", candidate)
+                        frame_index = int(digits[-1]) if digits else None
+
                 document = {
                     "campaign_path": campaign_path,
                     "file": file,
@@ -164,6 +185,7 @@ def parse_campaign(campaign_path: str, collection):
                     "variable_location": var_location,
                     "metadata": metadata,
                     "movie_cache": 1,
+                    "frame_index": int(frame_index) if frame_index is not None else 0,
                     "image_bytes": Binary(png_bytes),
                     "image_width": img_width,
                     "image_height": img_height,
@@ -182,10 +204,9 @@ def parse_campaign(campaign_path: str, collection):
                 }
 
             collection.insert_one(document)
-    #sanity checks...
+
     print(collection.distinct("campaign_path"))
     print(collection.count_documents({}))
-
 
 
 def main():

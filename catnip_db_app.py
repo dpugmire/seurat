@@ -1,6 +1,7 @@
 import os
 import base64
 import statistics
+import ast
 from typing import List, Dict, Any, Optional
 
 from pymongo import MongoClient
@@ -75,6 +76,96 @@ def chunk_tiles(tiles: List[Dict[str, str]], cols: int) -> List[List[Optional[Di
     return rows
 
 
+# -----------------------------------------------------------------------------
+# Query parsing: restricted python-like boolean expression -> Mongo filter
+# -----------------------------------------------------------------------------
+FIELD_ALIASES = {
+    "var": "variable_name",
+    "type": "variable_type",
+}
+
+ALLOWED_FIELDS = {
+    "variable_name",
+    "variable_type",
+    "producer",
+    "casename",
+    "file",
+    "visualization_name",
+    "variable_path",
+    "campaign_path",
+    "variable_location",
+    "frame_index",
+}
+
+def _field_name(name: str) -> str:
+    mapped = FIELD_ALIASES.get(name, name)
+    if mapped not in ALLOWED_FIELDS:
+        raise ValueError(f"Unknown/unsupported field: {name}")
+    return mapped
+
+def _const(node: ast.AST):
+    if isinstance(node, ast.Constant):
+        return node.value
+    if isinstance(node, (ast.List, ast.Tuple)):
+        return [_const(elt) for elt in node.elts]
+    raise ValueError(f"Only constants/lists are allowed, got: {type(node).__name__}")
+
+def python_query_to_mongo(expr: str) -> Dict[str, Any]:
+    expr = (expr or "").strip()
+    if not expr:
+        return {}
+
+    tree = ast.parse(expr, mode="eval")
+
+    def compile_node(node: ast.AST) -> Dict[str, Any]:
+        if isinstance(node, ast.BoolOp):
+            op = "$and" if isinstance(node.op, ast.And) else "$or"
+            parts = [compile_node(v) for v in node.values]
+            flat: List[Dict[str, Any]] = []
+            for p in parts:
+                if isinstance(p, dict) and op in p and len(p) == 1:
+                    flat.extend(p[op])
+                else:
+                    flat.append(p)
+            return {op: flat}
+
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+            inner = compile_node(node.operand)
+            return {"$nor": [inner]}
+
+        if isinstance(node, ast.Compare):
+            if len(node.ops) != 1 or len(node.comparators) != 1:
+                raise ValueError("Chained comparisons are not supported")
+
+            left = node.left
+            op = node.ops[0]
+            right = node.comparators[0]
+
+            if not isinstance(left, ast.Name):
+                raise ValueError("Left side must be a field name")
+
+            field = _field_name(left.id)
+
+            if isinstance(op, ast.Eq):
+                return {field: _const(right)}
+            if isinstance(op, ast.NotEq):
+                return {field: {"$ne": _const(right)}}
+            if isinstance(op, ast.In):
+                return {field: {"$in": _const(right)}}
+            if isinstance(op, ast.NotIn):
+                return {field: {"$nin": _const(right)}}
+
+            raise ValueError(f"Unsupported operator: {type(op).__name__}")
+
+        if isinstance(node, ast.Name):
+            field = _field_name(node.id)
+            return {field: {"$ne": None}}
+
+        raise ValueError(f"Unsupported expression: {type(node).__name__}")
+
+    return compile_node(tree.body)
+
+
 class CampaignDb:
     def __init__(self, collection):
         self.collection = collection
@@ -87,11 +178,15 @@ class CampaignDb:
             self.ok = False
             self.last_error = f"{type(e).__name__}: {e}"
 
-    def distinct_variable_names(self) -> List[str]:
+    def distinct_variable_names(self, extra_filter: Optional[Dict[str, Any]] = None) -> List[str]:
         if not self.ok:
             return []
         try:
-            names = self.collection.distinct("variable_name")
+            query: Dict[str, Any] = {"variable_type": "variable"}
+            if extra_filter:
+                query = {"$and": [query, extra_filter]}
+
+            names = self.collection.distinct("variable_name", query)
             names = [n for n in names if isinstance(n, str)]
             names.sort()
             return names
@@ -174,12 +269,6 @@ class CampaignDb:
             return {}
 
     def get_first_image_tiles_for_variable(self, variable_name: str, limit: int = 4) -> List[Dict[str, str]]:
-        """
-        Gather images for all sources for the given variable:
-          - variable_name matches
-          - variable_type == 'image'
-        Then return the first `limit` image docs (by _id ascending) as tiles.
-        """
         if not self.ok or not variable_name:
             return []
 
@@ -263,6 +352,12 @@ state.dbStatus = "Connected" if db.ok else f"DB error: {db.last_error}"
 state.variableNames = []
 state.selectedVar = ""
 
+# Query UI
+state.queryText = ""
+state.queryStatus = ""
+state.queryError = ""
+state.queryFilter = {}
+
 # Details panel fields
 state.detailsSelectedVar = ""
 state.detailsNumSources = 0
@@ -287,7 +382,7 @@ state.imageStatus = ""
 
 
 def refresh_variable_list():
-    state.variableNames = db.distinct_variable_names()
+    state.variableNames = db.distinct_variable_names(extra_filter=state.queryFilter or None)
     state.dbOk = db.ok
     state.dbStatus = "Connected" if db.ok else f"DB error: {db.last_error}"
 
@@ -306,6 +401,13 @@ def clear_details():
     state.sourceRows = []
     state.sourceSortField = SOURCE_FIELDS[0]
     state.sourceSortAsc = True
+
+
+def clear_right_panes():
+    clear_details()
+    state.imageTiles = []
+    state.imageGrid = []
+    state.imageStatus = ""
 
 
 @ctrl.add("pick_var")
@@ -349,13 +451,57 @@ def sort_sources(field: str, **_):
     state.sourceRows = sorted(rows, key=keyfn, reverse=(not asc))
 
 
+@ctrl.add("run_query")
+def run_query(**_):
+    q = (state.queryText or "").strip()
+
+    if not q:
+        state.queryFilter = {}
+        state.queryError = ""
+        state.queryStatus = "Query cleared"
+        refresh_variable_list()
+
+        if state.selectedVar and state.selectedVar not in (state.variableNames or []):
+            state.selectedVar = ""
+            clear_right_panes()
+        return
+
+    try:
+        filt = python_query_to_mongo(q)
+        state.queryFilter = filt
+        state.queryError = ""
+        state.queryStatus = "Query OK"
+    except Exception as e:
+        state.queryFilter = {}
+        state.queryError = f"{type(e).__name__}: {e}"
+        state.queryStatus = "Query ERROR"
+        return
+
+    refresh_variable_list()
+
+    if state.selectedVar and state.selectedVar not in (state.variableNames or []):
+        state.selectedVar = ""
+        clear_right_panes()
+
+
+@ctrl.add("clear_query")
+def clear_query(**_):
+    # Reset textbox + clear applied filter + refresh variable list
+    state.queryText = ""
+    state.queryFilter = {}
+    state.queryError = ""
+    state.queryStatus = "Query cleared"
+    refresh_variable_list()
+
+    if state.selectedVar and state.selectedVar not in (state.variableNames or []):
+        state.selectedVar = ""
+        clear_right_panes()
+
+
 @state.change("selectedVar")
 def on_selected_var(selectedVar, **_):
     if not selectedVar:
-        clear_details()
-        state.imageTiles = []
-        state.imageGrid = []
-        state.imageStatus = ""
+        clear_right_panes()
         state.dbOk = db.ok
         state.dbStatus = "Connected" if db.ok else f"DB error: {db.last_error}"
         return
@@ -395,9 +541,6 @@ def on_selected_var(selectedVar, **_):
     if state.sourceSortField:
         sort_sources(state.sourceSortField)
 
-    # -------------------------------------------------------------------------
-    # Images: first 4 images across ALL sources for this variable
-    # -------------------------------------------------------------------------
     tiles = db.get_first_image_tiles_for_variable(selectedVar, limit=MAX_IMAGE_TILES)
     state.imageTiles = tiles
     state.imageGrid = chunk_tiles(tiles, cols=2)
@@ -420,13 +563,9 @@ def ingest_campaign_every_time(**_kwargs):
         state.dbOk = True
         state.dbStatus = f"Loading {CAMPAIGN_PATH}..."
 
-        # Avoid duplicates for this test file
         collection.drop()
-
-        # Ingest
         parse_campaign(CAMPAIGN_PATH, collection)
 
-        # Update UI
         refresh_variable_list()
         state.dbStatus = f"Loaded {CAMPAIGN_PATH} • variables={len(state.variableNames)}"
     except Exception as e:
@@ -454,6 +593,38 @@ with SinglePageLayout(server) as layout:
 
     with layout.content:
         with vuetify.VContainer(fluid=True, class_="pa-2"):
+
+            # Query row
+            with vuetify.VCard(variant="outlined", class_="mb-2"):
+                with vuetify.VCardText(class_="py-2"):
+                    with html.Div(style="display: flex; align-items: center; gap: 10px; width: 100%;"):
+                        html.Span("Query:", class_="text-body-2")
+                        vuetify.VTextField(
+                            v_model=("queryText",),
+                            placeholder="e.g. var == 'omega' and producer == 'ns'",
+                            density="compact",
+                            hide_details=True,
+                            style="max-width: 560px;",
+                        )
+                        vuetify.VBtn(
+                            "Query",
+                            click=ctrl.run_query,
+                            variant="outlined",
+                            size="small",
+                        )
+                        vuetify.VBtn(
+                            "Clear Query",
+                            click=ctrl.clear_query,
+                            variant="text",
+                            size="small",
+                        )
+                        vuetify.VSpacer()
+                        html.Span("{{ queryStatus }}", class_="text-caption")
+
+                with vuetify.Template(v_if="queryError"):
+                    with vuetify.VCardText(class_="pt-0"):
+                        html.Div("{{ queryError }}", class_="text-caption", style="color: #b00020;")
+
             vuetify.VAlert(
                 "{{ dbStatus }}",
                 type=("dbOk ? 'success' : 'error'",),
@@ -479,7 +650,6 @@ with SinglePageLayout(server) as layout:
                 # Right: details (top) + images (bottom)
                 with vuetify.VCol(cols=9):
                     with vuetify.VCard(variant="outlined"):
-                        # Header: Details + SOURCES(N) on same line
                         with vuetify.VCardTitle():
                             with html.Div(style="display: flex; align-items: center; gap: 12px; width: 100%;"):
                                 html.Div("{{ detailsSelectedVar ? ('Details: ' + detailsSelectedVar) : 'Details' }}")
@@ -499,7 +669,6 @@ with SinglePageLayout(server) as layout:
                         with vuetify.VCardText(style="height: 36vh; overflow-y: auto;"):
                             with vuetify.Template(v_if="detailsSelectedVar"):
                                 with vuetify.VRow(dense=True):
-                                    # Left: compact min/max stats table
                                     with vuetify.VCol(cols=5):
                                         with vuetify.VTable(density="compact"):
                                             with html.Thead():
@@ -512,18 +681,15 @@ with SinglePageLayout(server) as layout:
                                                     html.Td("Global")
                                                     html.Td("{{ detailsGlobalMin }}")
                                                     html.Td("{{ detailsGlobalMax }}")
-
                                                 with html.Tr():
                                                     html.Td("Median")
                                                     html.Td("{{ detailsMedianMin }}")
                                                     html.Td("{{ detailsMedianMax }}")
-
                                                 with html.Tr():
                                                     html.Td("Mean")
                                                     html.Td("{{ detailsMeanMin }}")
                                                     html.Td("{{ detailsMeanMax }}")
 
-                                    # Right: sources table, toggleable
                                     with vuetify.VCol(cols=7):
                                         with vuetify.Template(v_if="showSources"):
                                             with html.Div(
@@ -544,7 +710,6 @@ with SinglePageLayout(server) as layout:
                                                                     click=(ctrl.sort_sources, f"['{f}']"),
                                                                 ):
                                                                     html.Span(f)
-
                                                                     with vuetify.Template(v_if=(f"sourceSortField === '{f}'",)):
                                                                         vuetify.VIcon(
                                                                             ("sourceSortAsc ? 'mdi-arrow-up' : 'mdi-arrow-down'",),
@@ -557,7 +722,6 @@ with SinglePageLayout(server) as layout:
                                                                             size="x-small",
                                                                             class_="ml-1",
                                                                         )
-
                                                     with html.Tbody():
                                                         with vuetify.Template(v_for="(r, i) in sourceRows", key="i"):
                                                             with html.Tr():
@@ -566,10 +730,8 @@ with SinglePageLayout(server) as layout:
                                                                 html.Td("{{ r.file }}", style="white-space: nowrap;")
                                                                 html.Td("{{ r.min }}", style="white-space: nowrap;")
                                                                 html.Td("{{ r.max }}", style="white-space: nowrap;")
-
                                         with vuetify.Template(v_else=True):
                                             html.Div("Sources table.", class_="text-caption")
-
                             with vuetify.Template(v_else=True):
                                 html.Div("Select a variable", class_="text-caption")
 
@@ -583,7 +745,6 @@ with SinglePageLayout(server) as layout:
 
                         with vuetify.VCardText(style="height: 42vh; overflow-y: auto;"):
                             with vuetify.Template(v_if="imageTiles.length"):
-                                # 2x2 grid (first 4 images)
                                 with vuetify.VTable(density="compact"):
                                     with html.Tbody():
                                         with vuetify.Template(v_for="(row, rIdx) in imageGrid", key="rIdx"):
@@ -606,16 +767,8 @@ with SinglePageLayout(server) as layout:
                                                         with vuetify.Template(v_else=True):
                                                             html.Div("")
                             with vuetify.Template(v_else=True):
-                                html.Div(
-                                    "Select a variable to begin.",
-                                    class_="text-caption",
-                                    v_if="!selectedVar",
-                                )
-                                html.Div(
-                                    "No images (yet).",
-                                    class_="text-caption",
-                                    v_else=True,
-                                )
+                                html.Div("Select a variable to begin.", class_="text-caption", v_if="!selectedVar")
+                                html.Div("No images (yet).", class_="text-caption", v_else=True)
 
 
 if __name__ == "__main__":
