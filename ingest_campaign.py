@@ -6,7 +6,7 @@ from adios2 import FileReader
 import numpy as np
 from PIL import Image
 from bson.binary import Binary
-from typing import Optional
+from typing import Optional, Any
 
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
 MONGO_DB = os.getenv("MONGO_DB", "catnip_campaigns")
@@ -24,6 +24,23 @@ def clear_collection():
 
 def _to_simple_string(input: str) -> str:
     return input.translate(str.maketrans("", "", '"'))
+
+
+def _to_float(value: Any) -> Optional[float]:
+    """
+    Best-effort conversion to float.
+    Handles ADIOS metadata values that may be strings.
+    Returns None if conversion fails.
+    """
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except Exception:
+        try:
+            return float(str(value).strip())
+        except Exception:
+            return None
 
 
 def extract_file_var(input: str) -> tuple[str, str, str, str, str]:
@@ -131,6 +148,30 @@ def extract_frame_index_from_varpath(varpath: str) -> Optional[int]:
         return None
 
 
+def _extract_min_max_from_varinfo(varinfo: Any) -> tuple[Optional[float], Optional[float]]:
+    """
+    ADIOS available_variables() returns a dict of metadata values.
+    Typically 'Min'/'Max' appear as strings.
+    We normalize those into numeric min/max fields for DB querying.
+    """
+    if not isinstance(varinfo, dict):
+        return (None, None)
+
+    # Primary: top-level keys from ADIOS variable info
+    raw_min = varinfo.get("Min", None)
+    raw_max = varinfo.get("Max", None)
+
+    # Some pipelines might store these under different capitalization.
+    if raw_min is None:
+        raw_min = varinfo.get("min", None)
+    if raw_max is None:
+        raw_max = varinfo.get("max", None)
+
+    fmin = _to_float(raw_min)
+    fmax = _to_float(raw_max)
+    return (fmin, fmax)
+
+
 def parse_campaign(campaign_path: str, collection):
     print("reading: ", campaign_path)
 
@@ -163,7 +204,7 @@ def parse_campaign(campaign_path: str, collection):
 
                 visualization_name = get_visualization_name(varname)
 
-                # NEW: frame_index from ".../image.000450.png/..."
+                # frame_index from ".../image.000450.png/..."
                 frame_index = extract_frame_index_from_varpath(varpath)
                 if frame_index is None:
                     # fallback: try to locate the "image.*.png" segment (avoid 480x480)
@@ -191,6 +232,9 @@ def parse_campaign(campaign_path: str, collection):
                     "image_height": img_height,
                 }
             else:
+                # NEW: normalize min/max into top-level numeric fields for querying
+                fmin, fmax = _extract_min_max_from_varinfo(varinfo)
+
                 document = {
                     "campaign_path": campaign_path,
                     "file": file,
@@ -201,6 +245,10 @@ def parse_campaign(campaign_path: str, collection):
                     "casename": casename,
                     "variable_location": var_location,
                     "metadata": metadata,
+                    # These fields enable queries like: min > 1.0, max <= 10
+                    # They will be absent/None if not available.
+                    "min": fmin,
+                    "max": fmax,
                 }
 
             collection.insert_one(document)

@@ -82,6 +82,8 @@ def chunk_tiles(tiles: List[Dict[str, str]], cols: int) -> List[List[Optional[Di
 FIELD_ALIASES = {
     "var": "variable_name",
     "type": "variable_type",
+    "min": "min",
+    "max": "max",
 }
 
 ALLOWED_FIELDS = {
@@ -95,7 +97,10 @@ ALLOWED_FIELDS = {
     "campaign_path",
     "variable_location",
     "frame_index",
+    "min",
+    "max",
 }
+
 
 def _field_name(name: str) -> str:
     mapped = FIELD_ALIASES.get(name, name)
@@ -103,12 +108,23 @@ def _field_name(name: str) -> str:
         raise ValueError(f"Unknown/unsupported field: {name}")
     return mapped
 
+
 def _const(node: ast.AST):
     if isinstance(node, ast.Constant):
         return node.value
+
+    # NEW: allow unary +/- for numeric constants (e.g. -1.0)
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
+        v = _const(node.operand)
+        if not isinstance(v, (int, float)):
+            raise ValueError("Unary +/- is only allowed on numeric constants")
+        return +v if isinstance(node.op, ast.UAdd) else -v
+
     if isinstance(node, (ast.List, ast.Tuple)):
         return [_const(elt) for elt in node.elts]
+
     raise ValueError(f"Only constants/lists are allowed, got: {type(node).__name__}")
+
 
 def python_query_to_mongo(expr: str) -> Dict[str, Any]:
     expr = (expr or "").strip()
@@ -146,6 +162,7 @@ def python_query_to_mongo(expr: str) -> Dict[str, Any]:
 
             field = _field_name(left.id)
 
+            # Equality / membership
             if isinstance(op, ast.Eq):
                 return {field: _const(right)}
             if isinstance(op, ast.NotEq):
@@ -154,6 +171,16 @@ def python_query_to_mongo(expr: str) -> Dict[str, Any]:
                 return {field: {"$in": _const(right)}}
             if isinstance(op, ast.NotIn):
                 return {field: {"$nin": _const(right)}}
+
+            # NEW: numeric comparisons (works for min/max once they are numeric in DB)
+            if isinstance(op, ast.Gt):
+                return {field: {"$gt": _const(right)}}
+            if isinstance(op, ast.GtE):
+                return {field: {"$gte": _const(right)}}
+            if isinstance(op, ast.Lt):
+                return {field: {"$lt": _const(right)}}
+            if isinstance(op, ast.LtE):
+                return {field: {"$lte": _const(right)}}
 
             raise ValueError(f"Unsupported operator: {type(op).__name__}")
 
@@ -203,6 +230,9 @@ class CampaignDb:
     def variable_min_max_summary(self, variable_name: str, extra_filter: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Summary computed over the current QueryView if extra_filter is provided.
+
+        NOTE: Now that ingest writes numeric 'min'/'max', we prefer those.
+        We still fall back to metadata/Min/Max for backward compatibility.
         """
         if not self.ok or not variable_name:
             return {}
@@ -221,6 +251,9 @@ class CampaignDb:
             "metadata": 1,
             "Min": 1,
             "Max": 1,
+            # NEW: prefer normalized numeric fields
+            "min": 1,
+            "max": 1,
         }
 
         try:
@@ -234,15 +267,19 @@ class CampaignDb:
             for doc in cursor:
                 num_sources += 1
 
-                md = doc.get("metadata", {})
-                if not isinstance(md, dict):
-                    md = {}
+                # NEW: prefer top-level numeric min/max
+                fmin = _to_float(doc.get("min", None))
+                fmax = _to_float(doc.get("max", None))
 
-                raw_min = md.get("Min", doc.get("Min", None))
-                raw_max = md.get("Max", doc.get("Max", None))
-
-                fmin = _to_float(raw_min)
-                fmax = _to_float(raw_max)
+                # Fallback for older DBs
+                if fmin is None or fmax is None:
+                    md = doc.get("metadata", {})
+                    if not isinstance(md, dict):
+                        md = {}
+                    raw_min = md.get("Min", doc.get("Min", None))
+                    raw_max = md.get("Max", doc.get("Max", None))
+                    fmin = _to_float(raw_min) if fmin is None else fmin
+                    fmax = _to_float(raw_max) if fmax is None else fmax
 
                 if (fmin is not None) and (fmax is not None):
                     mins.append(fmin)
@@ -481,7 +518,6 @@ def update_selected_var_panels(var_name: str):
     if not tiles:
         state.imageStatus = f"No images found for this variable in QueryView: {state.queryViewLabel}"
     else:
-        # user asked to display the QueryView, not the ok/missing breakdown
         state.imageStatus = f"Images: {len(tiles)} • QueryView: {state.queryViewLabel}"
 
 
@@ -542,7 +578,6 @@ def run_query(**_):
             state.selectedVar = ""
             clear_right_panes()
         else:
-            # same selectedVar value won't trigger @state.change
             update_selected_var_panels(state.selectedVar)
 
         return
@@ -645,7 +680,7 @@ with SinglePageLayout(server) as layout:
                         html.Span("Query:", class_="text-body-2")
                         vuetify.VTextField(
                             v_model=("queryText",),
-                            placeholder="e.g. var == 'omega' and producer == 'ns'",
+                            placeholder="e.g. var == 'omega' and producer == 'ns' and min > 1.0",
                             density="compact",
                             hide_details=True,
                             style="max-width: 560px;",
@@ -697,7 +732,6 @@ with SinglePageLayout(server) as layout:
                 # Right: details (top) + images (bottom)
                 with vuetify.VCol(cols=9):
                     with vuetify.VCard(variant="outlined"):
-                        # Header: Details + SOURCES(N) on same line + QueryView label
                         with vuetify.VCardTitle():
                             with html.Div(style="display: flex; align-items: center; gap: 12px; width: 100%;"):
                                 html.Div("{{ detailsSelectedVar ? ('Details: ' + detailsSelectedVar) : 'Details' }}")
@@ -720,7 +754,6 @@ with SinglePageLayout(server) as layout:
                         with vuetify.VCardText(style="height: 36vh; overflow-y: auto;"):
                             with vuetify.Template(v_if="detailsSelectedVar"):
                                 with vuetify.VRow(dense=True):
-                                    # Left: compact min/max stats table (computed over QueryView)
                                     with vuetify.VCol(cols=5):
                                         with vuetify.VTable(density="compact"):
                                             with html.Thead():
@@ -744,7 +777,6 @@ with SinglePageLayout(server) as layout:
                                                     html.Td("{{ detailsMeanMin }}")
                                                     html.Td("{{ detailsMeanMax }}")
 
-                                    # Right: sources table, toggleable (rows from QueryView)
                                     with vuetify.VCol(cols=7):
                                         with vuetify.Template(v_if="showSources"):
                                             with html.Div(
