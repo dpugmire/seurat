@@ -166,6 +166,12 @@ def python_query_to_mongo(expr: str) -> Dict[str, Any]:
     return compile_node(tree.body)
 
 
+def _and_filter(base: Dict[str, Any], extra: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not extra:
+        return base
+    return {"$and": [base, extra]}
+
+
 class CampaignDb:
     def __init__(self, collection):
         self.collection = collection
@@ -182,9 +188,8 @@ class CampaignDb:
         if not self.ok:
             return []
         try:
-            query: Dict[str, Any] = {"variable_type": "variable"}
-            if extra_filter:
-                query = {"$and": [query, extra_filter]}
+            base = {"variable_type": "variable"}
+            query = _and_filter(base, extra_filter)
 
             names = self.collection.distinct("variable_name", query)
             names = [n for n in names if isinstance(n, str)]
@@ -195,14 +200,18 @@ class CampaignDb:
             self.ok = False
             return []
 
-    def variable_min_max_summary(self, variable_name: str) -> Dict[str, Any]:
+    def variable_min_max_summary(self, variable_name: str, extra_filter: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """
+        Summary computed over the current QueryView if extra_filter is provided.
+        """
         if not self.ok or not variable_name:
             return {}
 
-        query: Dict[str, Any] = {
+        base_query: Dict[str, Any] = {
             "variable_name": variable_name,
             "variable_type": "variable",
         }
+        query = _and_filter(base_query, extra_filter)
 
         proj = {
             "_id": 0,
@@ -268,14 +277,23 @@ class CampaignDb:
             self.ok = False
             return {}
 
-    def get_first_image_tiles_for_variable(self, variable_name: str, limit: int = 4) -> List[Dict[str, str]]:
+    def get_first_image_tiles_for_variable(
+        self,
+        variable_name: str,
+        extra_filter: Optional[Dict[str, Any]] = None,
+        limit: int = 4,
+    ) -> List[Dict[str, str]]:
+        """
+        Images gathered from the current QueryView if extra_filter is provided.
+        """
         if not self.ok or not variable_name:
             return []
 
-        query: Dict[str, Any] = {
+        base_query: Dict[str, Any] = {
             "variable_name": variable_name,
             "variable_type": "image",
         }
+        query = _and_filter(base_query, extra_filter)
 
         proj = {
             "_id": 1,
@@ -356,7 +374,8 @@ state.selectedVar = ""
 state.queryText = ""
 state.queryStatus = ""
 state.queryError = ""
-state.queryFilter = {}
+state.queryFilter = {}          # Mongo filter for QueryView
+state.queryViewLabel = "ALL"    # Display label in panels
 
 # Details panel fields
 state.detailsSelectedVar = ""
@@ -410,6 +429,62 @@ def clear_right_panes():
     state.imageStatus = ""
 
 
+def update_selected_var_panels(var_name: str):
+    """
+    Populate Details + Images from the current QueryView (state.queryFilter).
+    """
+    if not var_name:
+        clear_right_panes()
+        return
+
+    qf = state.queryFilter or None
+
+    summary = db.variable_min_max_summary(var_name, extra_filter=qf)
+
+    state.dbOk = db.ok
+    state.dbStatus = (
+        f'Connected • Selected variable: "{var_name}" • QueryView: {state.queryViewLabel}'
+        if db.ok
+        else f'DB error • "{var_name}" • {db.last_error}'
+    )
+
+    state.detailsSelectedVar = var_name
+    state.detailsNumSources = int(summary.get("num_sources", 0))
+
+    state.detailsGlobalMin = _fmt(summary.get("global_min", None))
+    state.detailsGlobalMax = _fmt(summary.get("global_max", None))
+    state.detailsMeanMin = _fmt(summary.get("mean_min", None))
+    state.detailsMeanMax = _fmt(summary.get("mean_max", None))
+    state.detailsMedianMin = _fmt(summary.get("median_min", None))
+    state.detailsMedianMax = _fmt(summary.get("median_max", None))
+
+    rows = summary.get("sources", []) or []
+    state.sourceRows = [
+        {
+            "producer": r.get("producer", ""),
+            "casename": r.get("casename", ""),
+            "file": r.get("file", ""),
+            "min": _fmt(r.get("min", None)),
+            "max": _fmt(r.get("max", None)),
+        }
+        for r in rows
+    ]
+
+    state.showSources = False
+    if state.sourceSortField:
+        sort_sources(state.sourceSortField)
+
+    tiles = db.get_first_image_tiles_for_variable(var_name, extra_filter=qf, limit=MAX_IMAGE_TILES)
+    state.imageTiles = tiles
+    state.imageGrid = chunk_tiles(tiles, cols=2)
+
+    if not tiles:
+        state.imageStatus = f"No images found for this variable in QueryView: {state.queryViewLabel}"
+    else:
+        # user asked to display the QueryView, not the ok/missing breakdown
+        state.imageStatus = f"Images: {len(tiles)} • QueryView: {state.queryViewLabel}"
+
+
 @ctrl.add("pick_var")
 def pick_var(var_name: str, **_):
     state.selectedVar = var_name
@@ -455,26 +530,35 @@ def sort_sources(field: str, **_):
 def run_query(**_):
     q = (state.queryText or "").strip()
 
+    # Clear (empty query means ALL)
     if not q:
         state.queryFilter = {}
         state.queryError = ""
         state.queryStatus = "Query cleared"
+        state.queryViewLabel = "ALL"
         refresh_variable_list()
 
         if state.selectedVar and state.selectedVar not in (state.variableNames or []):
             state.selectedVar = ""
             clear_right_panes()
+        else:
+            # same selectedVar value won't trigger @state.change
+            update_selected_var_panels(state.selectedVar)
+
         return
 
+    # Parse + apply
     try:
         filt = python_query_to_mongo(q)
         state.queryFilter = filt
         state.queryError = ""
         state.queryStatus = "Query OK"
+        state.queryViewLabel = q
     except Exception as e:
         state.queryFilter = {}
         state.queryError = f"{type(e).__name__}: {e}"
         state.queryStatus = "Query ERROR"
+        state.queryViewLabel = "ALL"
         return
 
     refresh_variable_list()
@@ -482,20 +566,24 @@ def run_query(**_):
     if state.selectedVar and state.selectedVar not in (state.variableNames or []):
         state.selectedVar = ""
         clear_right_panes()
+    else:
+        update_selected_var_panels(state.selectedVar)
 
 
 @ctrl.add("clear_query")
 def clear_query(**_):
-    # Reset textbox + clear applied filter + refresh variable list
     state.queryText = ""
     state.queryFilter = {}
     state.queryError = ""
     state.queryStatus = "Query cleared"
+    state.queryViewLabel = "ALL"
     refresh_variable_list()
 
     if state.selectedVar and state.selectedVar not in (state.variableNames or []):
         state.selectedVar = ""
         clear_right_panes()
+    else:
+        update_selected_var_panels(state.selectedVar)
 
 
 @state.change("selectedVar")
@@ -506,51 +594,7 @@ def on_selected_var(selectedVar, **_):
         state.dbStatus = "Connected" if db.ok else f"DB error: {db.last_error}"
         return
 
-    summary = db.variable_min_max_summary(selectedVar)
-
-    state.dbOk = db.ok
-    state.dbStatus = (
-        f'Connected • Selected variable: "{selectedVar}"'
-        if db.ok
-        else f'DB error • "{selectedVar}" • {db.last_error}'
-    )
-
-    state.detailsSelectedVar = selectedVar
-    state.detailsNumSources = int(summary.get("num_sources", 0))
-
-    state.detailsGlobalMin = _fmt(summary.get("global_min", None))
-    state.detailsGlobalMax = _fmt(summary.get("global_max", None))
-    state.detailsMeanMin = _fmt(summary.get("mean_min", None))
-    state.detailsMeanMax = _fmt(summary.get("mean_max", None))
-    state.detailsMedianMin = _fmt(summary.get("median_min", None))
-    state.detailsMedianMax = _fmt(summary.get("median_max", None))
-
-    rows = summary.get("sources", []) or []
-    state.sourceRows = [
-        {
-            "producer": r.get("producer", ""),
-            "casename": r.get("casename", ""),
-            "file": r.get("file", ""),
-            "min": _fmt(r.get("min", None)),
-            "max": _fmt(r.get("max", None)),
-        }
-        for r in rows
-    ]
-
-    state.showSources = False
-    if state.sourceSortField:
-        sort_sources(state.sourceSortField)
-
-    tiles = db.get_first_image_tiles_for_variable(selectedVar, limit=MAX_IMAGE_TILES)
-    state.imageTiles = tiles
-    state.imageGrid = chunk_tiles(tiles, cols=2)
-
-    if not tiles:
-        state.imageStatus = "No images found for this variable."
-    else:
-        ok = sum(1 for t in tiles if t.get("status") == "ok")
-        bad = len(tiles) - ok
-        state.imageStatus = f"Images: {len(tiles)} (ok={ok}, missing-bytes={bad})"
+    update_selected_var_panels(selectedVar)
 
 
 def ingest_campaign_every_time(**_kwargs):
@@ -637,7 +681,10 @@ with SinglePageLayout(server) as layout:
                 # Left: variable list
                 with vuetify.VCol(cols=3):
                     with vuetify.VCard(variant="outlined"):
-                        vuetify.VCardTitle("Variables")
+                        with vuetify.VCardTitle():
+                            html.Div("Variables")
+                            vuetify.VSpacer()
+                            html.Div("{{ 'View: ' + queryViewLabel }}", class_="text-caption")
                         with vuetify.VCardText(style="height: 80vh; overflow-y: auto;"):
                             with vuetify.VList(density="compact"):
                                 with vuetify.Template(v_for="v in variableNames", key="v"):
@@ -650,6 +697,7 @@ with SinglePageLayout(server) as layout:
                 # Right: details (top) + images (bottom)
                 with vuetify.VCol(cols=9):
                     with vuetify.VCard(variant="outlined"):
+                        # Header: Details + SOURCES(N) on same line + QueryView label
                         with vuetify.VCardTitle():
                             with html.Div(style="display: flex; align-items: center; gap: 12px; width: 100%;"):
                                 html.Div("{{ detailsSelectedVar ? ('Details: ' + detailsSelectedVar) : 'Details' }}")
@@ -666,9 +714,13 @@ with SinglePageLayout(server) as layout:
                                         size="small",
                                     )
 
+                                vuetify.VSpacer()
+                                html.Div("{{ 'QueryView: ' + queryViewLabel }}", class_="text-caption")
+
                         with vuetify.VCardText(style="height: 36vh; overflow-y: auto;"):
                             with vuetify.Template(v_if="detailsSelectedVar"):
                                 with vuetify.VRow(dense=True):
+                                    # Left: compact min/max stats table (computed over QueryView)
                                     with vuetify.VCol(cols=5):
                                         with vuetify.VTable(density="compact"):
                                             with html.Thead():
@@ -681,15 +733,18 @@ with SinglePageLayout(server) as layout:
                                                     html.Td("Global")
                                                     html.Td("{{ detailsGlobalMin }}")
                                                     html.Td("{{ detailsGlobalMax }}")
+
                                                 with html.Tr():
                                                     html.Td("Median")
                                                     html.Td("{{ detailsMedianMin }}")
                                                     html.Td("{{ detailsMedianMax }}")
+
                                                 with html.Tr():
                                                     html.Td("Mean")
                                                     html.Td("{{ detailsMeanMin }}")
                                                     html.Td("{{ detailsMeanMax }}")
 
+                                    # Right: sources table, toggleable (rows from QueryView)
                                     with vuetify.VCol(cols=7):
                                         with vuetify.Template(v_if="showSources"):
                                             with html.Div(
@@ -732,6 +787,7 @@ with SinglePageLayout(server) as layout:
                                                                 html.Td("{{ r.max }}", style="white-space: nowrap;")
                                         with vuetify.Template(v_else=True):
                                             html.Div("Sources table.", class_="text-caption")
+
                             with vuetify.Template(v_else=True):
                                 html.Div("Select a variable", class_="text-caption")
 
@@ -741,7 +797,7 @@ with SinglePageLayout(server) as layout:
                         with vuetify.VCardTitle():
                             html.Div("Images")
                             vuetify.VSpacer()
-                            html.Div("{{ imageStatus }}", class_="text-caption")
+                            html.Div("{{ 'QueryView: ' + queryViewLabel }}", class_="text-caption")
 
                         with vuetify.VCardText(style="height: 42vh; overflow-y: auto;"):
                             with vuetify.Template(v_if="imageTiles.length"):
@@ -768,7 +824,7 @@ with SinglePageLayout(server) as layout:
                                                             html.Div("")
                             with vuetify.Template(v_else=True):
                                 html.Div("Select a variable to begin.", class_="text-caption", v_if="!selectedVar")
-                                html.Div("No images (yet).", class_="text-caption", v_else=True)
+                                html.Div("No images in this QueryView.", class_="text-caption", v_else=True)
 
 
 if __name__ == "__main__":
