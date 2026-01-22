@@ -522,27 +522,17 @@ class CampaignDb:
                         note = f"{type(e).__name__}: {e}"
                         src = ""
 
-                label_parts = []
-                if vis:
-                    label_parts.append(vis)
-                if producer:
-                    label_parts.append(producer)
-                if casename:
-                    label_parts.append(casename)
-                if file:
-                    label_parts.append(file)
-                label = " • ".join(label_parts) if label_parts else "movie"
-
+                # NOTE: keep a short label; details are shown via UI toggle now
                 tiles.append(
                     {
-                        "label": label,
-                        "src": src,
-                        "status": status,
-                        "note": note,
+                        "variable_name": variable_name,
                         "visualization_name": vis,
                         "producer": producer,
                         "casename": casename,
                         "file": file,
+                        "src": src,
+                        "status": status,
+                        "note": note,
                     }
                 )
 
@@ -596,10 +586,13 @@ state.sourceRows = []
 state.sourceSortField = SOURCE_FIELDS[0]
 state.sourceSortAsc = True
 
-# Movies panel (4 tiles)
+# Movies panel
 state.movieTiles = []
-state.movieGrid = []
 state.movieStatus = ""
+
+# NEW: per-visualization details toggle in Movies panel
+# key: "vis|producer|casename|file" -> bool
+state.movieDetailsOpen = {}
 
 
 def refresh_variable_list():
@@ -627,8 +620,16 @@ def clear_details():
 def clear_right_panes():
     clear_details()
     state.movieTiles = []
-    state.movieGrid = []
     state.movieStatus = ""
+   
+
+
+def _movie_key(tile: Dict[str, Any]) -> str:
+    vis = str(tile.get("visualization_name", "") or "")
+    producer = str(tile.get("producer", "") or "")
+    casename = str(tile.get("casename", "") or "")
+    file = str(tile.get("file", "") or "")
+    return f"{vis}|{producer}|{casename}|{file}"
 
 
 def update_selected_var_panels(var_name: str):
@@ -686,21 +687,25 @@ def update_selected_var_panels(var_name: str):
             fps=MOVIE_FPS,
         )
         state.movieTiles = tiles
-        state.movieGrid = chunk_tiles(tiles, cols=2)
+
+        # NEW: reset detail-open map on variable change
+        state.movieDetailsOpen = {}
 
         if not tiles:
             state.movieStatus = f"No movies found for this variable in QueryView: {state.queryViewLabel}"
+            state.movieStatus = ""
         else:
             ok = sum(1 for t in tiles if t.get("status") == "ok" and t.get("src"))
             bad = len(tiles) - ok
             state.movieStatus = (
-                f"Movies: {len(tiles)} (ok={ok}, issues={bad}) • "
+                f"xxxMovies: {len(tiles)} (ok={ok}, issues={bad}) • "
                 f"{MOVIE_FPS} fps • limit_frames={MAX_MOVIE_FRAMES} • "
                 f"QueryView: {state.queryViewLabel}"
             )
+            state.movieStatus = ""
     except Exception as e:
         state.movieTiles = []
-        state.movieGrid = []
+        state.movieDetailsOpen = {}
         state.movieStatus = f"Movie query/build failed: {type(e).__name__}: {e}"
 
 
@@ -743,6 +748,14 @@ def sort_sources(field: str, **_):
         return ("__str__", s.lower())
 
     state.sourceRows = sorted(rows, key=keyfn, reverse=(not asc))
+
+
+# NEW: per-movie Details button toggle
+@ctrl.add("toggle_movie_details")
+def toggle_movie_details(key: str, **_):
+    k = str(key or "")
+    current = bool((state.movieDetailsOpen or {}).get(k, False))
+    state.movieDetailsOpen = {**(state.movieDetailsOpen or {}), k: (not current)}
 
 
 @ctrl.add("run_query")
@@ -1002,43 +1015,92 @@ with SinglePageLayout(server) as layout:
 
                     html.Div(style="height: 8px")
 
+                    # -----------------------------------------------------------------
+                    # Movies panel (UPDATED LAYOUT)
+                    # -----------------------------------------------------------------
                     with vuetify.VCard(variant="outlined"):
                         with vuetify.VCardTitle():
-                            html.Div("Visualizations (Movies)")
+                            html.Div("Visualizations")
                             vuetify.VSpacer()
                             html.Div("{{ movieStatus }}", class_="text-caption")
-
                         with vuetify.VCardText(style="height: 42vh; overflow-y: auto;"):
                             with vuetify.Template(v_if="movieTiles.length"):
-                                with vuetify.VTable(density="compact"):
-                                    with html.Tbody():
-                                        with vuetify.Template(v_for="(row, rIdx) in movieGrid", key="rIdx"):
-                                            with html.Tr():
-                                                with vuetify.Template(v_for="(tile, cIdx) in row", key="cIdx"):
-                                                    with html.Td(style="vertical-align: top; width: 50%;"):
-                                                        with vuetify.Template(v_if="tile"):
-                                                            html.Div("{{ tile.label }}", class_="text-caption mb-1")
+                                with vuetify.VRow(dense=True):
+                                    with vuetify.Template(v_for="(tile, i) in movieTiles", key="i"):
+                                        # 3 columns on desktop
+                                        with vuetify.VCol(cols="12", sm="6", md="4", class_="pa-1"):
+                                            with vuetify.VCardTitle(class_="pa-1"):
+                                                with html.Div(style="display:flex; align-items:center; gap:8px; width:100%;"):
+                                                    html.Div(
+                                                        "{{ tile.visualization_name || 'visualization' }}",
+                                                        style="flex:1; min-width:0; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;",
+                                                    )
+                                                    vuetify.VBtn(
+                                                        "DETAILS",
+                                                        size="x-small",
+                                                        variant="tonal",
+                                                        class_="ml-1",
+                                                        click=(
+                                                            ctrl.toggle_movie_details,
+                                                            "[ (tile.visualization_name || '') + '|' + (tile.producer || '') + '|' + (tile.casename || '') + '|' + (tile.file || '') ]",
+                                                        ),
+                                                    )
 
-                                                            with vuetify.Template(v_if="tile.src"):
-                                                                html.Video(
-                                                                    src=("tile.src",),
-                                                                    controls=True,
-                                                                    autoplay=False,
-                                                                    loop=True,
-                                                                    muted=True,
-                                                                    style="max-width: 256px; max-height: 256px; background: #000;",
-                                                                )
-                                                            with vuetify.Template(v_else=True):
-                                                                html.Div(
-                                                                    "{{ tile.note ? tile.note : 'No movie src' }}",
-                                                                    class_="text-caption",
-                                                                    style="color: #b00020;",
-                                                                )
-                                                        with vuetify.Template(v_else=True):
-                                                            html.Div("")
+                                                # Movie preview (smaller)
+                                                with vuetify.VCardText(class_="pt-0 pb-1"):
+                                                    with vuetify.Template(v_if="tile.src"):
+                                                        html.Video(
+                                                            src=("tile.src",),
+                                                            controls=True,
+                                                            autoplay=False,
+                                                            loop=True,
+                                                            muted=True,
+                                                            style=(
+                                                                "display:block;"
+                                                                "width: 100%;"
+                                                                "height: 240px;"          # <- smaller overall
+                                                                "object-fit: cover;"         # <- fills the box; crops if needed
+                                                                "border-radius: 4px;"
+                                                                "background: transparent;"
+                                                            ),
+                                                        )
+
+                                                    with vuetify.Template(v_else=True):
+                                                        html.Div(
+                                                            "{{ tile.note ? tile.note : 'No movie src' }}",
+                                                            class_="text-caption",
+                                                            style="color: #b00020;",
+                                                        )
+
+                                                # Expandable details
+                                                with vuetify.VExpandTransition():
+                                                    with vuetify.VCardText(
+                                                        class_="pt-0",
+                                                        v_show=(
+                                                            "movieDetailsOpen[(tile.visualization_name || '') + '|' + (tile.producer || '') + '|' + (tile.casename || '') + '|' + (tile.file || '')]"
+                                                        ),
+                                                    ):
+                                                        with vuetify.VTable(density="compact"):
+                                                            with html.Tbody():
+                                                                with html.Tr():
+                                                                    html.Td("producer", class_="text-caption font-weight-medium", style="width: 160px;")
+                                                                    html.Td("{{ tile.producer }}", class_="text-caption")
+                                                                with html.Tr():
+                                                                    html.Td("casename", class_="text-caption font-weight-medium")
+                                                                    html.Td("{{ tile.casename }}", class_="text-caption")
+                                                                with html.Tr():
+                                                                    html.Td("file", class_="text-caption font-weight-medium")
+                                                                    html.Td("{{ tile.file }}", class_="text-caption")
+                                                                with html.Tr():
+                                                                    html.Td("status", class_="text-caption font-weight-medium")
+                                                                    html.Td("{{ tile.status }}", class_="text-caption")
+                                                                with html.Tr():
+                                                                    html.Td("note", class_="text-caption font-weight-medium")
+                                                                    html.Td("{{ tile.note }}", class_="text-caption")
                             with vuetify.Template(v_else=True):
                                 html.Div("Select a variable to begin.", class_="text-caption", v_if="!selectedVar")
                                 html.Div("No movies in this QueryView.", class_="text-caption", v_else=True)
+
 
 
 if __name__ == "__main__":
