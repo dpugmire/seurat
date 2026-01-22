@@ -2,7 +2,9 @@ import os
 import base64
 import statistics
 import ast
-from typing import List, Dict, Any, Optional
+import subprocess
+import tempfile
+from typing import List, Dict, Any, Optional, Tuple
 
 from pymongo import MongoClient
 from pymongo.errors import PyMongoError
@@ -26,6 +28,10 @@ CAMPAIGN_PATH = "kh.aca"  # testing file to always load
 SOURCE_FIELDS = ["producer", "casename", "file", "min", "max"]
 MAX_IMAGE_TILES = 4
 
+# Movie (prototype): build mp4 in-memory and embed as data URI
+MOVIE_FPS = int(os.getenv("MOVIE_FPS", "24"))
+MAX_MOVIE_FRAMES = int(os.getenv("MAX_MOVIE_FRAMES", "240"))  # keep small-ish for now
+
 # -----------------------------------------------------------------------------
 # Mongo: one shared client/collection
 # -----------------------------------------------------------------------------
@@ -38,6 +44,13 @@ def png_bytes_to_data_uri(png_bytes: bytes) -> str:
         return ""
     b64 = base64.b64encode(png_bytes).decode("ascii")
     return f"data:image/png;base64,{b64}"
+
+
+def mp4_bytes_to_data_uri(mp4_bytes: bytes) -> str:
+    if not mp4_bytes:
+        return ""
+    b64 = base64.b64encode(mp4_bytes).decode("ascii")
+    return f"data:video/mp4;base64,{b64}"
 
 
 def _to_float(value: Any) -> Optional[float]:
@@ -74,6 +87,58 @@ def chunk_tiles(tiles: List[Dict[str, str]], cols: int) -> List[List[Optional[Di
             row.append(None)
         rows.append(row)
     return rows
+
+
+def frames_to_mp4_bytes(png_frames: List[bytes], fps: int = 24) -> bytes:
+    """
+    Lowest-friction prototype approach:
+      - write frames to a temp dir as frame_000000.png ...
+      - call ffmpeg to produce an mp4 (H.264) to a temp file
+      - return mp4 bytes
+    """
+    if not png_frames:
+        return b""
+
+    if fps <= 0:
+        fps = 24
+
+    with tempfile.TemporaryDirectory(prefix="catnip_movie_") as tmpdir:
+        # Write frames
+        for i, b in enumerate(png_frames):
+            fname = os.path.join(tmpdir, f"frame_{i:06d}.png")
+            with open(fname, "wb") as f:
+                f.write(b)
+
+        # Encode
+        out_mp4 = os.path.join(tmpdir, "movie.mp4")
+
+        # -pix_fmt yuv420p increases compatibility with browsers
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-framerate",
+            str(int(fps)),
+            "-i",
+            os.path.join(tmpdir, "frame_%06d.png"),
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-movflags",
+            "+faststart",
+            out_mp4,
+        ]
+
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            stderr = (result.stderr or "").strip()
+            raise RuntimeError(f"ffmpeg failed (code {result.returncode}): {stderr}")
+
+        with open(out_mp4, "rb") as f:
+            return f.read()
 
 
 # -----------------------------------------------------------------------------
@@ -113,7 +178,7 @@ def _const(node: ast.AST):
     if isinstance(node, ast.Constant):
         return node.value
 
-    # NEW: allow unary +/- for numeric constants (e.g. -1.0)
+    # allow unary +/- for numeric constants (e.g. -1.0)
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
         v = _const(node.operand)
         if not isinstance(v, (int, float)):
@@ -162,7 +227,6 @@ def python_query_to_mongo(expr: str) -> Dict[str, Any]:
 
             field = _field_name(left.id)
 
-            # Equality / membership
             if isinstance(op, ast.Eq):
                 return {field: _const(right)}
             if isinstance(op, ast.NotEq):
@@ -172,7 +236,6 @@ def python_query_to_mongo(expr: str) -> Dict[str, Any]:
             if isinstance(op, ast.NotIn):
                 return {field: {"$nin": _const(right)}}
 
-            # NEW: numeric comparisons (works for min/max once they are numeric in DB)
             if isinstance(op, ast.Gt):
                 return {field: {"$gt": _const(right)}}
             if isinstance(op, ast.GtE):
@@ -217,7 +280,6 @@ class CampaignDb:
         try:
             base = {"variable_type": "variable"}
             query = _and_filter(base, extra_filter)
-
             names = self.collection.distinct("variable_name", query)
             names = [n for n in names if isinstance(n, str)]
             names.sort()
@@ -227,13 +289,11 @@ class CampaignDb:
             self.ok = False
             return []
 
-    def variable_min_max_summary(self, variable_name: str, extra_filter: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """
-        Summary computed over the current QueryView if extra_filter is provided.
-
-        NOTE: Now that ingest writes numeric 'min'/'max', we prefer those.
-        We still fall back to metadata/Min/Max for backward compatibility.
-        """
+    def variable_min_max_summary(
+        self,
+        variable_name: str,
+        extra_filter: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         if not self.ok or not variable_name:
             return {}
 
@@ -251,7 +311,6 @@ class CampaignDb:
             "metadata": 1,
             "Min": 1,
             "Max": 1,
-            # NEW: prefer normalized numeric fields
             "min": 1,
             "max": 1,
         }
@@ -267,11 +326,9 @@ class CampaignDb:
             for doc in cursor:
                 num_sources += 1
 
-                # NEW: prefer top-level numeric min/max
                 fmin = _to_float(doc.get("min", None))
                 fmax = _to_float(doc.get("max", None))
 
-                # Fallback for older DBs
                 if fmin is None or fmax is None:
                     md = doc.get("metadata", {})
                     if not isinstance(md, dict):
@@ -320,9 +377,6 @@ class CampaignDb:
         extra_filter: Optional[Dict[str, Any]] = None,
         limit: int = 4,
     ) -> List[Dict[str, str]]:
-        """
-        Images gathered from the current QueryView if extra_filter is provided.
-        """
         if not self.ok or not variable_name:
             return []
 
@@ -381,8 +435,13 @@ class CampaignDb:
                         "label": label,
                         "src": src,
                         "status": "ok" if src else "no-bytes",
+                        "visualization_name": str(vis or ""),
+                        "producer": str(producer or ""),
+                        "casename": str(casename or ""),
+                        "file": str(file or ""),
                     }
                 )
+
 
             return tiles
 
@@ -390,6 +449,114 @@ class CampaignDb:
             self.last_error = f"{type(e).__name__}: {e}"
             self.ok = False
             return []
+
+    def get_movie_frames_for_variable(
+        self,
+        variable_name: str,
+        extra_filter: Optional[Dict[str, Any]] = None,
+        limit_frames: int = 240,
+    ) -> Tuple[List[bytes], int]:
+        """
+        Return (frames, total_count) from QueryView, sorted by frame_index.
+        Frames are raw PNG bytes from image_bytes.
+        """
+        if not self.ok or not variable_name:
+            return ([], 0)
+
+        base_query: Dict[str, Any] = {
+            "variable_name": variable_name,
+            "variable_type": "image",
+        }
+        query = _and_filter(base_query, extra_filter)
+
+        proj = {
+            "_id": 1,
+            "image_bytes": 1,
+            "frame_index": 1,
+        }
+
+        try:
+            total = self.collection.count_documents(query)
+
+            cursor = (
+                self.collection
+                .find(query, proj)
+                .sort([("frame_index", 1), ("_id", 1)])
+                .limit(int(limit_frames))
+            )
+
+            frames: List[bytes] = []
+            for doc in cursor:
+                img = doc.get("image_bytes", None)
+                if not img:
+                    continue
+                try:
+                    frames.append(bytes(img))
+                except Exception:
+                    continue
+
+            print('numframes= ', total)
+            return (frames, int(total))
+
+        except Exception as e:
+            self.last_error = f"{type(e).__name__}: {e}"
+            self.ok = False
+            return ([], 0)
+
+    def get_movie_frames_for_stream(
+        self,
+        variable_name: str,
+        visualization_name: str,
+        producer: str,
+        casename: str,
+        file: str = "",
+        extra_filter: Optional[Dict[str, Any]] = None,
+        limit_frames: int = 240,
+    ) -> tuple[List[bytes], int]:
+        if not self.ok or not variable_name:
+            return ([], 0)
+
+        base_query: Dict[str, Any] = {
+            "variable_name": variable_name,
+            "variable_type": "image",
+            "visualization_name": visualization_name,
+            "producer": producer,
+            "casename": casename,
+        }
+        # Optional extra disambiguation
+        if file:
+            base_query["file"] = file
+
+        query = _and_filter(base_query, extra_filter)
+
+        proj = {
+            "_id": 1,
+            "image_bytes": 1,
+            "frame_index": 1,
+        }
+
+        try:
+            total = int(self.collection.count_documents(query))
+            cursor = (
+                self.collection
+                .find(query, proj)
+                .sort([("frame_index", 1), ("_id", 1)])
+                .limit(int(limit_frames))
+            )
+
+            frames: List[bytes] = []
+            for doc in cursor:
+                img = doc.get("image_bytes", None)
+                if img:
+                    frames.append(bytes(img))
+
+            return (frames, total)
+
+        except Exception as e:
+            self.last_error = f"{type(e).__name__}: {e}"
+            self.ok = False
+            return ([], 0)
+
 
 
 # -----------------------------------------------------------------------------
@@ -436,6 +603,15 @@ state.imageTiles = []
 state.imageGrid = []
 state.imageStatus = ""
 
+# Movie panel (embedded mp4 data URI)
+state.movieSrc = ""
+state.movieStatus = ""
+state.movieVis = ""
+state.movieProducer = ""
+state.movieCasename = ""
+state.movieFile = ""
+
+
 
 def refresh_variable_list():
     state.variableNames = db.distinct_variable_names(extra_filter=state.queryFilter or None)
@@ -464,11 +640,13 @@ def clear_right_panes():
     state.imageTiles = []
     state.imageGrid = []
     state.imageStatus = ""
+    state.movieSrc = ""
+    state.movieStatus = ""
 
 
 def update_selected_var_panels(var_name: str):
     """
-    Populate Details + Images from the current QueryView (state.queryFilter).
+    Populate Details + Images + Movie from the current QueryView (state.queryFilter).
     """
     if not var_name:
         clear_right_panes()
@@ -511,14 +689,63 @@ def update_selected_var_panels(var_name: str):
     if state.sourceSortField:
         sort_sources(state.sourceSortField)
 
+    # Images tiles (first 4)
     tiles = db.get_first_image_tiles_for_variable(var_name, extra_filter=qf, limit=MAX_IMAGE_TILES)
     state.imageTiles = tiles
     state.imageGrid = chunk_tiles(tiles, cols=2)
+
+    # NEW: lock movie stream to the first displayed image tile
+    state.movieVis = ""
+    state.movieProducer = ""
+    state.movieCasename = ""
+    state.movieFile = ""
+    if tiles:
+        t0 = tiles[0]
+        state.movieVis = t0.get("visualization_name", "")
+        state.movieProducer = t0.get("producer", "")
+        state.movieCasename = t0.get("casename", "")
+        state.movieFile = t0.get("file", "")
+
+        state.imageTiles = tiles
+        state.imageGrid = chunk_tiles(tiles, cols=2)
 
     if not tiles:
         state.imageStatus = f"No images found for this variable in QueryView: {state.queryViewLabel}"
     else:
         state.imageStatus = f"Images: {len(tiles)} • QueryView: {state.queryViewLabel}"
+
+    # Movie (mp4 via ffmpeg, embedded as data URI)
+    state.movieSrc = ""
+    state.movieStatus = ""
+
+    try:
+        frames, total = db.get_movie_frames_for_stream(
+            var_name,
+            visualization_name=state.movieVis,
+            producer=state.movieProducer,
+            casename=state.movieCasename,
+            file=state.movieFile,          # optional; keep if helpful
+            extra_filter=qf,
+            limit_frames=MAX_MOVIE_FRAMES,
+        )
+
+        if not frames:
+            state.movieStatus = f"No frames for movie in QueryView: {state.queryViewLabel}"
+            return
+
+        mp4 = frames_to_mp4_bytes(frames, fps=MOVIE_FPS)
+        state.movieSrc = mp4_bytes_to_data_uri(mp4)
+
+        if total > len(frames):
+            state.movieStatus = (
+                f"Movie: showing {len(frames)} of {total} frames • {MOVIE_FPS} fps • (limit MAX_MOVIE_FRAMES={MAX_MOVIE_FRAMES})"
+            )
+        else:
+            state.movieStatus = f"Movie: {len(frames)} frames • {MOVIE_FPS} fps"
+
+    except Exception as e:
+        state.movieSrc = ""
+        state.movieStatus = f"Movie build failed: {type(e).__name__}: {e}"
 
 
 @ctrl.add("pick_var")
@@ -729,7 +956,7 @@ with SinglePageLayout(server) as layout:
                                         click=(ctrl.pick_var, "[v]"),
                                     )
 
-                # Right: details (top) + images (bottom)
+                # Right: details (top) + images/movies (bottom)
                 with vuetify.VCol(cols=9):
                     with vuetify.VCard(variant="outlined"):
                         with vuetify.VCardTitle():
@@ -766,12 +993,10 @@ with SinglePageLayout(server) as layout:
                                                     html.Td("Global")
                                                     html.Td("{{ detailsGlobalMin }}")
                                                     html.Td("{{ detailsGlobalMax }}")
-
                                                 with html.Tr():
                                                     html.Td("Median")
                                                     html.Td("{{ detailsMedianMin }}")
                                                     html.Td("{{ detailsMedianMax }}")
-
                                                 with html.Tr():
                                                     html.Td("Mean")
                                                     html.Td("{{ detailsMeanMin }}")
@@ -819,7 +1044,6 @@ with SinglePageLayout(server) as layout:
                                                                 html.Td("{{ r.max }}", style="white-space: nowrap;")
                                         with vuetify.Template(v_else=True):
                                             html.Div("Sources table.", class_="text-caption")
-
                             with vuetify.Template(v_else=True):
                                 html.Div("Select a variable", class_="text-caption")
 
@@ -827,11 +1051,30 @@ with SinglePageLayout(server) as layout:
 
                     with vuetify.VCard(variant="outlined"):
                         with vuetify.VCardTitle():
-                            html.Div("Images")
+                            html.Div("Visualizations")
                             vuetify.VSpacer()
                             html.Div("{{ 'QueryView: ' + queryViewLabel }}", class_="text-caption")
 
                         with vuetify.VCardText(style="height: 42vh; overflow-y: auto;"):
+
+                            # Movie player
+                            with vuetify.Template(v_if="movieSrc"):
+                                html.Div("{{ movieStatus }}", class_="text-caption mb-2")
+                                html.Video(
+                                    src=("movieSrc",),
+                                    controls=True,
+                                    autoplay=False,
+                                    loop=True,
+                                    muted=True,
+                                    style="max-width: 256px; max-height: 256px; background: #000;",
+                                )
+                                html.Hr(style="margin: 12px 0;")
+
+                            with vuetify.Template(v_else=True):
+                                with vuetify.Template(v_if="movieStatus"):
+                                    html.Div("{{ movieStatus }}", class_="text-caption mb-2")
+
+                            # 2x2 image tiles (first 4)
                             with vuetify.Template(v_if="imageTiles.length"):
                                 with vuetify.VTable(density="compact"):
                                     with html.Tbody():
@@ -844,7 +1087,7 @@ with SinglePageLayout(server) as layout:
                                                             with vuetify.Template(v_if="tile.src"):
                                                                 html.Img(
                                                                     src=("tile.src",),
-                                                                    style="max-width: 100%; max-height: 260px; object-fit: contain;",
+                                                                    style="max-width: 100%; max-height: 220px; object-fit: contain;",
                                                                 )
                                                             with vuetify.Template(v_else=True):
                                                                 html.Div(
