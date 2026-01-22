@@ -74,9 +74,9 @@ def _fmt(value: Optional[float]) -> str:
         return str(value)
 
 
-def chunk_tiles(tiles: List[Dict[str, str]], cols: int) -> List[List[Optional[Dict[str, str]]]]:
-    rows: List[List[Optional[Dict[str, str]]]] = []
-    row: List[Optional[Dict[str, str]]] = []
+def chunk_tiles(tiles: List[Dict[str, Any]], cols: int) -> List[List[Optional[Dict[str, Any]]]]:
+    rows: List[List[Optional[Dict[str, Any]]]] = []
+    row: List[Optional[Dict[str, Any]]] = []
     for t in tiles:
         row.append(t)
         if len(row) == cols:
@@ -109,7 +109,6 @@ def frames_to_mp4_bytes(png_frames: List[bytes], fps: int = 24) -> bytes:
             with open(fname, "wb") as f:
                 f.write(b)
 
-        # Encode
         out_mp4 = os.path.join(tmpdir, "movie.mp4")
 
         # -pix_fmt yuv420p increases compatibility with browsers
@@ -371,137 +370,7 @@ class CampaignDb:
             self.ok = False
             return {}
 
-    def get_first_image_tiles_for_variable(
-        self,
-        variable_name: str,
-        extra_filter: Optional[Dict[str, Any]] = None,
-        limit: int = 4,
-    ) -> List[Dict[str, str]]:
-        if not self.ok or not variable_name:
-            return []
-
-        base_query: Dict[str, Any] = {
-            "variable_name": variable_name,
-            "variable_type": "image",
-        }
-        query = _and_filter(base_query, extra_filter)
-
-        proj = {
-            "_id": 1,
-            "producer": 1,
-            "casename": 1,
-            "file": 1,
-            "visualization_name": 1,
-            "image_bytes": 1,
-        }
-
-        try:
-            cursor = (
-                self.collection
-                .find(query, proj)
-                .sort([("_id", 1)])
-                .limit(int(limit))
-            )
-
-            tiles: List[Dict[str, str]] = []
-            for doc in cursor:
-                vis = doc.get("visualization_name", "")
-                producer = doc.get("producer", "")
-                casename = doc.get("casename", "")
-                file = doc.get("file", "")
-
-                label_parts = []
-                if vis:
-                    label_parts.append(str(vis))
-                if producer:
-                    label_parts.append(str(producer))
-                if casename:
-                    label_parts.append(str(casename))
-                if file:
-                    label_parts.append(str(file))
-
-                label = " • ".join(label_parts) if label_parts else "image"
-
-                img = doc.get("image_bytes", None)
-                src = ""
-                if img:
-                    try:
-                        src = png_bytes_to_data_uri(bytes(img))
-                    except Exception:
-                        src = ""
-
-                tiles.append(
-                    {
-                        "label": label,
-                        "src": src,
-                        "status": "ok" if src else "no-bytes",
-                        "visualization_name": str(vis or ""),
-                        "producer": str(producer or ""),
-                        "casename": str(casename or ""),
-                        "file": str(file or ""),
-                    }
-                )
-
-
-            return tiles
-
-        except Exception as e:
-            self.last_error = f"{type(e).__name__}: {e}"
-            self.ok = False
-            return []
-
-    def get_movie_frames_for_variable(
-        self,
-        variable_name: str,
-        extra_filter: Optional[Dict[str, Any]] = None,
-        limit_frames: int = 240,
-    ) -> Tuple[List[bytes], int]:
-        """
-        Return (frames, total_count) from QueryView, sorted by frame_index.
-        Frames are raw PNG bytes from image_bytes.
-        """
-        if not self.ok or not variable_name:
-            return ([], 0)
-
-        base_query: Dict[str, Any] = {
-            "variable_name": variable_name,
-            "variable_type": "image",
-        }
-        query = _and_filter(base_query, extra_filter)
-
-        proj = {
-            "_id": 1,
-            "image_bytes": 1,
-            "frame_index": 1,
-        }
-
-        try:
-            total = self.collection.count_documents(query)
-
-            cursor = (
-                self.collection
-                .find(query, proj)
-                .sort([("frame_index", 1), ("_id", 1)])
-                .limit(int(limit_frames))
-            )
-
-            frames: List[bytes] = []
-            for doc in cursor:
-                img = doc.get("image_bytes", None)
-                if not img:
-                    continue
-                try:
-                    frames.append(bytes(img))
-                except Exception:
-                    continue
-
-            print('numframes= ', total)
-            return (frames, int(total))
-
-        except Exception as e:
-            self.last_error = f"{type(e).__name__}: {e}"
-            self.ok = False
-            return ([], 0)
+    # --- Frame queries --------------------------------------------------------
 
     def get_movie_frames_for_stream(
         self,
@@ -512,7 +381,10 @@ class CampaignDb:
         file: str = "",
         extra_filter: Optional[Dict[str, Any]] = None,
         limit_frames: int = 240,
-    ) -> tuple[List[bytes], int]:
+    ) -> Tuple[List[bytes], int]:
+        """
+        Return (frames, total_count) for ONE visualization stream, sorted by frame_index.
+        """
         if not self.ok or not variable_name:
             return ([], 0)
 
@@ -523,7 +395,6 @@ class CampaignDb:
             "producer": producer,
             "casename": casename,
         }
-        # Optional extra disambiguation
         if file:
             base_query["file"] = file
 
@@ -548,7 +419,10 @@ class CampaignDb:
             for doc in cursor:
                 img = doc.get("image_bytes", None)
                 if img:
-                    frames.append(bytes(img))
+                    try:
+                        frames.append(bytes(img))
+                    except Exception:
+                        continue
 
             return (frames, total)
 
@@ -557,6 +431,130 @@ class CampaignDb:
             self.ok = False
             return ([], 0)
 
+    def get_first_movie_tiles_for_variable(
+        self,
+        variable_name: str,
+        extra_filter: Optional[Dict[str, Any]] = None,
+        limit: int = 4,
+        limit_frames: int = 240,
+        fps: int = 24,
+    ) -> List[Dict[str, Any]]:
+        """
+        Return up to `limit` DISTINCT visualization streams as MOVIES.
+
+        Distinctness key: (visualization_name, producer, casename, file)
+
+        For each stream:
+          - fetch frames (respecting QueryView via extra_filter)
+          - build mp4 via ffmpeg
+          - return tile with src=data:video/mp4;base64,...
+        """
+        if not self.ok or not variable_name:
+            return []
+
+        base_query: Dict[str, Any] = {
+            "variable_name": variable_name,
+            "variable_type": "image",
+            "visualization_name": {"$ne": ""},
+        }
+        query = _and_filter(base_query, extra_filter)
+
+        proj = {
+            "_id": 1,
+            "producer": 1,
+            "casename": 1,
+            "file": 1,
+            "visualization_name": 1,
+        }
+
+        try:
+            cursor = (
+                self.collection
+                .find(query, proj)
+                .sort([("_id", 1)])
+            )
+
+            seen = set()
+            tiles: List[Dict[str, Any]] = []
+
+            for doc in cursor:
+                vis = str(doc.get("visualization_name", "") or "")
+                producer = str(doc.get("producer", "") or "")
+                casename = str(doc.get("casename", "") or "")
+                file = str(doc.get("file", "") or "")
+
+                if not vis:
+                    continue
+
+                key = (vis, producer, casename, file)
+                if key in seen:
+                    continue
+                seen.add(key)
+
+                # fetch frames for this stream
+                frames, total = self.get_movie_frames_for_stream(
+                    variable_name,
+                    visualization_name=vis,
+                    producer=producer,
+                    casename=casename,
+                    file=file,
+                    extra_filter=extra_filter,
+                    limit_frames=limit_frames,
+                )
+
+                src = ""
+                status = "ok"
+                note = ""
+
+                if not frames:
+                    status = "no-frames"
+                    note = "no frames"
+                else:
+                    try:
+                        mp4 = frames_to_mp4_bytes(frames, fps=fps)
+                        src = mp4_bytes_to_data_uri(mp4)
+                        if total > len(frames):
+                            note = f"{len(frames)} of {total} frames"
+                        else:
+                            note = f"{len(frames)} frames"
+                    except Exception as e:
+                        status = "build-failed"
+                        note = f"{type(e).__name__}: {e}"
+                        src = ""
+
+                label_parts = []
+                if vis:
+                    label_parts.append(vis)
+                if producer:
+                    label_parts.append(producer)
+                if casename:
+                    label_parts.append(casename)
+                if file:
+                    label_parts.append(file)
+                label = " • ".join(label_parts) if label_parts else "movie"
+
+                tiles.append(
+                    {
+                        "label": label,
+                        "src": src,
+                        "status": status,
+                        "note": note,
+                        "visualization_name": vis,
+                        "producer": producer,
+                        "casename": casename,
+                        "file": file,
+                    }
+                )
+
+                if len(tiles) >= int(limit):
+                    break
+
+            return tiles
+
+        except Exception as e:
+            self.last_error = f"{type(e).__name__}: {e}"
+            self.ok = False
+            return []
 
 
 # -----------------------------------------------------------------------------
@@ -598,19 +596,10 @@ state.sourceRows = []
 state.sourceSortField = SOURCE_FIELDS[0]
 state.sourceSortAsc = True
 
-# Images panel
-state.imageTiles = []
-state.imageGrid = []
-state.imageStatus = ""
-
-# Movie panel (embedded mp4 data URI)
-state.movieSrc = ""
+# Movies panel (4 tiles)
+state.movieTiles = []
+state.movieGrid = []
 state.movieStatus = ""
-state.movieVis = ""
-state.movieProducer = ""
-state.movieCasename = ""
-state.movieFile = ""
-
 
 
 def refresh_variable_list():
@@ -637,16 +626,14 @@ def clear_details():
 
 def clear_right_panes():
     clear_details()
-    state.imageTiles = []
-    state.imageGrid = []
-    state.imageStatus = ""
-    state.movieSrc = ""
+    state.movieTiles = []
+    state.movieGrid = []
     state.movieStatus = ""
 
 
 def update_selected_var_panels(var_name: str):
     """
-    Populate Details + Images + Movie from the current QueryView (state.queryFilter).
+    Populate Details + Movies from the current QueryView (state.queryFilter).
     """
     if not var_name:
         clear_right_panes()
@@ -689,63 +676,32 @@ def update_selected_var_panels(var_name: str):
     if state.sourceSortField:
         sort_sources(state.sourceSortField)
 
-    # Images tiles (first 4)
-    tiles = db.get_first_image_tiles_for_variable(var_name, extra_filter=qf, limit=MAX_IMAGE_TILES)
-    state.imageTiles = tiles
-    state.imageGrid = chunk_tiles(tiles, cols=2)
-
-    # NEW: lock movie stream to the first displayed image tile
-    state.movieVis = ""
-    state.movieProducer = ""
-    state.movieCasename = ""
-    state.movieFile = ""
-    if tiles:
-        t0 = tiles[0]
-        state.movieVis = t0.get("visualization_name", "")
-        state.movieProducer = t0.get("producer", "")
-        state.movieCasename = t0.get("casename", "")
-        state.movieFile = t0.get("file", "")
-
-        state.imageTiles = tiles
-        state.imageGrid = chunk_tiles(tiles, cols=2)
-
-    if not tiles:
-        state.imageStatus = f"No images found for this variable in QueryView: {state.queryViewLabel}"
-    else:
-        state.imageStatus = f"Images: {len(tiles)} • QueryView: {state.queryViewLabel}"
-
-    # Movie (mp4 via ffmpeg, embedded as data URI)
-    state.movieSrc = ""
-    state.movieStatus = ""
-
+    # Movies: 4 distinct visualization streams
     try:
-        frames, total = db.get_movie_frames_for_stream(
+        tiles = db.get_first_movie_tiles_for_variable(
             var_name,
-            visualization_name=state.movieVis,
-            producer=state.movieProducer,
-            casename=state.movieCasename,
-            file=state.movieFile,          # optional; keep if helpful
             extra_filter=qf,
+            limit=4,
             limit_frames=MAX_MOVIE_FRAMES,
+            fps=MOVIE_FPS,
         )
+        state.movieTiles = tiles
+        state.movieGrid = chunk_tiles(tiles, cols=2)
 
-        if not frames:
-            state.movieStatus = f"No frames for movie in QueryView: {state.queryViewLabel}"
-            return
-
-        mp4 = frames_to_mp4_bytes(frames, fps=MOVIE_FPS)
-        state.movieSrc = mp4_bytes_to_data_uri(mp4)
-
-        if total > len(frames):
-            state.movieStatus = (
-                f"Movie: showing {len(frames)} of {total} frames • {MOVIE_FPS} fps • (limit MAX_MOVIE_FRAMES={MAX_MOVIE_FRAMES})"
-            )
+        if not tiles:
+            state.movieStatus = f"No movies found for this variable in QueryView: {state.queryViewLabel}"
         else:
-            state.movieStatus = f"Movie: {len(frames)} frames • {MOVIE_FPS} fps"
-
+            ok = sum(1 for t in tiles if t.get("status") == "ok" and t.get("src"))
+            bad = len(tiles) - ok
+            state.movieStatus = (
+                f"Movies: {len(tiles)} (ok={ok}, issues={bad}) • "
+                f"{MOVIE_FPS} fps • limit_frames={MAX_MOVIE_FRAMES} • "
+                f"QueryView: {state.queryViewLabel}"
+            )
     except Exception as e:
-        state.movieSrc = ""
-        state.movieStatus = f"Movie build failed: {type(e).__name__}: {e}"
+        state.movieTiles = []
+        state.movieGrid = []
+        state.movieStatus = f"Movie query/build failed: {type(e).__name__}: {e}"
 
 
 @ctrl.add("pick_var")
@@ -793,7 +749,6 @@ def sort_sources(field: str, **_):
 def run_query(**_):
     q = (state.queryText or "").strip()
 
-    # Clear (empty query means ALL)
     if not q:
         state.queryFilter = {}
         state.queryError = ""
@@ -806,10 +761,8 @@ def run_query(**_):
             clear_right_panes()
         else:
             update_selected_var_panels(state.selectedVar)
-
         return
 
-    # Parse + apply
     try:
         filt = python_query_to_mongo(q)
         state.queryFilter = filt
@@ -956,7 +909,7 @@ with SinglePageLayout(server) as layout:
                                         click=(ctrl.pick_var, "[v]"),
                                     )
 
-                # Right: details (top) + images/movies (bottom)
+                # Right: details (top) + movies (bottom)
                 with vuetify.VCol(cols=9):
                     with vuetify.VCard(variant="outlined"):
                         with vuetify.VCardTitle():
@@ -1051,47 +1004,33 @@ with SinglePageLayout(server) as layout:
 
                     with vuetify.VCard(variant="outlined"):
                         with vuetify.VCardTitle():
-                            html.Div("Visualizations")
+                            html.Div("Visualizations (Movies)")
                             vuetify.VSpacer()
-                            html.Div("{{ 'QueryView: ' + queryViewLabel }}", class_="text-caption")
+                            html.Div("{{ movieStatus }}", class_="text-caption")
 
                         with vuetify.VCardText(style="height: 42vh; overflow-y: auto;"):
-
-                            # Movie player
-                            with vuetify.Template(v_if="movieSrc"):
-                                html.Div("{{ movieStatus }}", class_="text-caption mb-2")
-                                html.Video(
-                                    src=("movieSrc",),
-                                    controls=True,
-                                    autoplay=False,
-                                    loop=True,
-                                    muted=True,
-                                    style="max-width: 256px; max-height: 256px; background: #000;",
-                                )
-                                html.Hr(style="margin: 12px 0;")
-
-                            with vuetify.Template(v_else=True):
-                                with vuetify.Template(v_if="movieStatus"):
-                                    html.Div("{{ movieStatus }}", class_="text-caption mb-2")
-
-                            # 2x2 image tiles (first 4)
-                            with vuetify.Template(v_if="imageTiles.length"):
+                            with vuetify.Template(v_if="movieTiles.length"):
                                 with vuetify.VTable(density="compact"):
                                     with html.Tbody():
-                                        with vuetify.Template(v_for="(row, rIdx) in imageGrid", key="rIdx"):
+                                        with vuetify.Template(v_for="(row, rIdx) in movieGrid", key="rIdx"):
                                             with html.Tr():
                                                 with vuetify.Template(v_for="(tile, cIdx) in row", key="cIdx"):
                                                     with html.Td(style="vertical-align: top; width: 50%;"):
                                                         with vuetify.Template(v_if="tile"):
                                                             html.Div("{{ tile.label }}", class_="text-caption mb-1")
+
                                                             with vuetify.Template(v_if="tile.src"):
-                                                                html.Img(
+                                                                html.Video(
                                                                     src=("tile.src",),
-                                                                    style="max-width: 100%; max-height: 220px; object-fit: contain;",
+                                                                    controls=True,
+                                                                    autoplay=False,
+                                                                    loop=True,
+                                                                    muted=True,
+                                                                    style="max-width: 256px; max-height: 256px; background: #000;",
                                                                 )
                                                             with vuetify.Template(v_else=True):
                                                                 html.Div(
-                                                                    "No image_bytes",
+                                                                    "{{ tile.note ? tile.note : 'No movie src' }}",
                                                                     class_="text-caption",
                                                                     style="color: #b00020;",
                                                                 )
@@ -1099,7 +1038,7 @@ with SinglePageLayout(server) as layout:
                                                             html.Div("")
                             with vuetify.Template(v_else=True):
                                 html.Div("Select a variable to begin.", class_="text-caption", v_if="!selectedVar")
-                                html.Div("No images in this QueryView.", class_="text-caption", v_else=True)
+                                html.Div("No movies in this QueryView.", class_="text-caption", v_else=True)
 
 
 if __name__ == "__main__":
