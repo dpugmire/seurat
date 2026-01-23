@@ -1,0 +1,270 @@
+import statistics
+from typing import Any, Dict, List, Optional, Tuple
+
+from pymongo.errors import PyMongoError
+
+from media_utils import frames_to_mp4_bytes, mp4_bytes_to_data_uri
+from query_parser import and_filter
+
+
+def to_float(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except Exception:
+        try:
+            return float(str(value).strip())
+        except Exception:
+            return None
+
+
+class CampaignDb:
+    def __init__(self, collection):
+        self.collection = collection
+        self.ok = True
+        self.last_error = ""
+
+        try:
+            _ = self.collection.database.client.admin.command("ping")
+        except Exception as e:
+            self.ok = False
+            self.last_error = f"{type(e).__name__}: {e}"
+
+    def distinct_variable_names(self, extra_filter: Optional[Dict[str, Any]] = None) -> List[str]:
+        if not self.ok:
+            return []
+        try:
+            base = {"variable_type": "variable"}
+            query = and_filter(base, extra_filter)
+            names = self.collection.distinct("variable_name", query)
+            names = [n for n in names if isinstance(n, str)]
+            names.sort()
+            return names
+        except PyMongoError as e:
+            self.last_error = f"{type(e).__name__}: {e}"
+            self.ok = False
+            return []
+
+    def variable_min_max_summary(
+        self,
+        variable_name: str,
+        extra_filter: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        if not self.ok or not variable_name:
+            return {}
+
+        base_query: Dict[str, Any] = {
+            "variable_name": variable_name,
+            "variable_type": "variable",
+        }
+        query = and_filter(base_query, extra_filter)
+
+        proj = {
+            "_id": 0,
+            "producer": 1,
+            "casename": 1,
+            "file": 1,
+            "metadata": 1,
+            "Min": 1,
+            "Max": 1,
+            "min": 1,
+            "max": 1,
+        }
+
+        try:
+            cursor = self.collection.find(query, proj)
+
+            mins: List[float] = []
+            maxs: List[float] = []
+            num_sources = 0
+            sources: List[Dict[str, Any]] = []
+
+            for doc in cursor:
+                num_sources += 1
+
+                fmin = to_float(doc.get("min", None))
+                fmax = to_float(doc.get("max", None))
+
+                if fmin is None or fmax is None:
+                    md = doc.get("metadata", {})
+                    if not isinstance(md, dict):
+                        md = {}
+                    raw_min = md.get("Min", doc.get("Min", None))
+                    raw_max = md.get("Max", doc.get("Max", None))
+                    fmin = to_float(raw_min) if fmin is None else fmin
+                    fmax = to_float(raw_max) if fmax is None else fmax
+
+                if (fmin is not None) and (fmax is not None):
+                    mins.append(fmin)
+                    maxs.append(fmax)
+
+                sources.append(
+                    {
+                        "producer": "" if doc.get("producer", None) is None else str(doc.get("producer")),
+                        "casename": "" if doc.get("casename", None) is None else str(doc.get("casename")),
+                        "file": "" if doc.get("file", None) is None else str(doc.get("file")),
+                        "min": fmin,
+                        "max": fmax,
+                    }
+                )
+
+            valid = len(mins)
+
+            return {
+                "variable": variable_name,
+                "num_sources": num_sources,
+                "global_min": min(mins) if valid else None,
+                "global_max": max(maxs) if valid else None,
+                "mean_min": statistics.fmean(mins) if valid else None,
+                "mean_max": statistics.fmean(maxs) if valid else None,
+                "median_min": statistics.median(mins) if valid else None,
+                "median_max": statistics.median(maxs) if valid else None,
+                "sources": sources,
+            }
+
+        except Exception as e:
+            self.last_error = f"{type(e).__name__}: {e}"
+            self.ok = False
+            return {}
+
+    def get_movie_frames_for_stream(
+        self,
+        variable_name: str,
+        visualization_name: str,
+        producer: str,
+        casename: str,
+        file: str = "",
+        extra_filter: Optional[Dict[str, Any]] = None,
+        limit_frames: int = 240,
+    ) -> Tuple[List[bytes], int]:
+        if not self.ok or not variable_name:
+            return ([], 0)
+
+        base_query: Dict[str, Any] = {
+            "variable_name": variable_name,
+            "variable_type": "image",
+            "visualization_name": visualization_name,
+            "producer": producer,
+            "casename": casename,
+        }
+        if file:
+            base_query["file"] = file
+
+        query = and_filter(base_query, extra_filter)
+
+        proj = {"_id": 1, "image_bytes": 1, "frame_index": 1}
+
+        try:
+            total = int(self.collection.count_documents(query))
+            cursor = (
+                self.collection.find(query, proj)
+                .sort([("frame_index", 1), ("_id", 1)])
+                .limit(int(limit_frames))
+            )
+
+            frames: List[bytes] = []
+            for doc in cursor:
+                img = doc.get("image_bytes", None)
+                if img:
+                    try:
+                        frames.append(bytes(img))
+                    except Exception:
+                        continue
+
+            return (frames, total)
+
+        except Exception as e:
+            self.last_error = f"{type(e).__name__}: {e}"
+            self.ok = False
+            return ([], 0)
+
+    def get_first_movie_tiles_for_variable(
+        self,
+        variable_name: str,
+        extra_filter: Optional[Dict[str, Any]] = None,
+        limit: int = 4,
+        limit_frames: int = 240,
+        fps: int = 24,
+    ) -> List[Dict[str, Any]]:
+        if not self.ok or not variable_name:
+            return []
+
+        base_query: Dict[str, Any] = {
+            "variable_name": variable_name,
+            "variable_type": "image",
+            "visualization_name": {"$ne": ""},
+        }
+        query = and_filter(base_query, extra_filter)
+
+        proj = {"_id": 1, "producer": 1, "casename": 1, "file": 1, "visualization_name": 1}
+
+        try:
+            cursor = self.collection.find(query, proj).sort([("_id", 1)])
+
+            seen = set()
+            tiles: List[Dict[str, Any]] = []
+
+            for doc in cursor:
+                vis = str(doc.get("visualization_name", "") or "")
+                producer = str(doc.get("producer", "") or "")
+                casename = str(doc.get("casename", "") or "")
+                file = str(doc.get("file", "") or "")
+
+                if not vis:
+                    continue
+
+                key = (vis, producer, casename, file)
+                if key in seen:
+                    continue
+                seen.add(key)
+
+                frames, total = self.get_movie_frames_for_stream(
+                    variable_name,
+                    visualization_name=vis,
+                    producer=producer,
+                    casename=casename,
+                    file=file,
+                    extra_filter=extra_filter,
+                    limit_frames=limit_frames,
+                )
+
+                src = ""
+                status = "ok"
+                note = ""
+
+                if not frames:
+                    status = "no-frames"
+                    note = "no frames"
+                else:
+                    try:
+                        mp4 = frames_to_mp4_bytes(frames, fps=fps)
+                        src = mp4_bytes_to_data_uri(mp4)
+                        note = f"{len(frames)} of {total} frames" if total > len(frames) else f"{len(frames)} frames"
+                    except Exception as e:
+                        status = "build-failed"
+                        note = f"{type(e).__name__}: {e}"
+                        src = ""
+
+                tiles.append(
+                    {
+                        "variable_name": variable_name,
+                        "visualization_name": vis,
+                        "producer": producer,
+                        "casename": casename,
+                        "file": file,
+                        "src": src,
+                        "status": status,
+                        "note": note,
+                    }
+                )
+
+                if len(tiles) >= int(limit):
+                    break
+
+            return tiles
+
+        except Exception as e:
+            self.last_error = f"{type(e).__name__}: {e}"
+            self.ok = False
+            return []
