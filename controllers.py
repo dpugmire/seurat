@@ -1,11 +1,11 @@
 from typing import Dict
 
-from config import CAMPAIGN_PATH, MAX_MOVIE_FRAMES, MOVIE_FPS
+from config import MAX_MOVIE_FRAMES, MOVIE_FPS
 from query_parser import python_query_to_mongo
 from state_init import clear_right_panes, fmt
 
 
-def attach_controllers(server, db, collection, parse_campaign):
+def attach_controllers(server, db, collection, parse_campaign, campaign_path: str):
     state, ctrl = server.state, server.controller
 
     def refresh_variable_list():
@@ -185,13 +185,13 @@ def attach_controllers(server, db, collection, parse_campaign):
 
         try:
             state.dbOk = True
-            state.dbStatus = f"Loading {CAMPAIGN_PATH}..."
+            state.dbStatus = f"Loading {campaign_path}..."
 
             collection.drop()
-            parse_campaign(CAMPAIGN_PATH, collection)
+            parse_campaign(campaign_path, collection)
 
             refresh_variable_list()
-            state.dbStatus = f"Loaded {CAMPAIGN_PATH} • variables={len(state.variableNames)}"
+            state.dbStatus = f"Loaded {campaign_path} • variables={len(state.variableNames)}"
         except Exception as e:
             state.dbOk = False
             state.dbStatus = f"Load failed: {type(e).__name__}: {e}"

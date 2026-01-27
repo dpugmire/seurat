@@ -1,3 +1,5 @@
+import argparse
+
 from pymongo import MongoClient
 from trame.app import get_server
 
@@ -11,6 +13,10 @@ from ui import build_ui
 
 
 def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("campaign_path", help="Path to .aca campaign file")
+    args = ap.parse_args()
+
     client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=1500)
     collection = client[MONGO_DB][MONGO_COLLECTION]
 
@@ -26,6 +32,7 @@ def main():
         db=db,
         collection=collection,
         parse_campaign=parse_campaign,
+        campaign_path=args.campaign_path,
     )
 
     build_ui(server, refresh_variable_list)
