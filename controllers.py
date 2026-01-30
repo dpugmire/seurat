@@ -87,12 +87,30 @@ def attach_controllers(server, db, collection, parse_campaign, campaign_path: st
         if state.sourceSortField:
             sort_sources(state.sourceSortField, toggle=False)
 
+        def set_selected_source_from_row(row):
+            if not row:
+                state.selectedSourceKey = ""
+                state.selectedSourceFilter = {}
+                return
+            filt = {
+                "producer": row.get("producer", ""),
+                "casename": row.get("casename", ""),
+            }
+            if row.get("file"):
+                filt["file"] = row.get("file")
+            state.selectedSourceKey = row.get("_key", "")
+            state.selectedSourceFilter = filt
+
         # Clear selection if the selected source is no longer present.
         if state.selectedSourceKey:
             keys = {r.get("_key", "") for r in (state.sourceRows or [])}
             if state.selectedSourceKey not in keys:
                 state.selectedSourceKey = ""
                 state.selectedSourceFilter = {}
+
+        # Default to first row when nothing is selected.
+        if not state.selectedSourceKey and state.sourceRows:
+            set_selected_source_from_row(state.sourceRows[0])
 
         try:
             extra = qf
