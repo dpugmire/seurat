@@ -128,10 +128,10 @@ def build_ui(server, refresh_variable_list):
                                                     ):
                                                         with vuetify.VTable(density="compact"):
                                                             with html.Tbody():
-                                                                for key in ("producer", "casename", "file", "status", "note"):
+                                                                for key in ("producer", "casename", "file"):
                                                                     with html.Tr():
                                                                         html.Td(key, class_="text-caption font-weight-medium", style="width:160px;")
-                                                                        html.Td(("tile." + key, ), class_="text-caption")
+                                                                        html.Td(f"{{{{ tile.{key} }}}}", class_="text-caption")
                                 with vuetify.Template(v_else=True):
                                     html.Div("Select a variable to begin.", class_="text-caption", v_if="!selectedVar")
                                     html.Div("No movies in this QueryView.", class_="text-caption", v_else=True)
