@@ -39,6 +39,8 @@ def init_state(state, db) -> None:
     state.sourceRows = []
     state.sourceSortField = SOURCE_FIELDS[0]
     state.sourceSortAsc = True
+    state.selectedSourceKey = ""
+    state.selectedSourceFilter = {}
 
     state.movieTiles = []
     state.movieStatus = ""
@@ -60,6 +62,8 @@ def clear_details(state) -> None:
     state.sourceRows = []
     state.sourceSortField = SOURCE_FIELDS[0]
     state.sourceSortAsc = True
+    state.selectedSourceKey = ""
+    state.selectedSourceFilter = {}
 
 
 def clear_right_panes(state) -> None:

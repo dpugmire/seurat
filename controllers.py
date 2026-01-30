@@ -1,7 +1,7 @@
 from typing import Dict
 
 from config import MAX_MOVIE_FRAMES, MOVIE_FPS
-from query_parser import python_query_to_mongo
+from query_parser import and_filter, python_query_to_mongo
 from state_init import clear_right_panes, fmt
 
 
@@ -14,12 +14,13 @@ def attach_controllers(server, db, collection, parse_campaign, campaign_path: st
         state.dbStatus = "Connected" if db.ok else f"DB error: {db.last_error}"
 
     @ctrl.add("sort_sources")
-    def sort_sources(field: str, **_):
+    def sort_sources(field: str, toggle: bool = True, **_):
         if not field:
             return
 
         if state.sourceSortField == field:
-            state.sourceSortAsc = not bool(state.sourceSortAsc)
+            if toggle:
+                state.sourceSortAsc = not bool(state.sourceSortAsc)
         else:
             state.sourceSortField = field
             state.sourceSortAsc = True
@@ -76,18 +77,30 @@ def attach_controllers(server, db, collection, parse_campaign, campaign_path: st
                 "file": r.get("file", ""),
                 "min": fmt(r.get("min", None)),
                 "max": fmt(r.get("max", None)),
+                "_key": f"{r.get('producer', '')}|{r.get('casename', '')}|{r.get('file', '')}",
             }
             for r in rows
         ]
 
-        state.showSources = False
+        if state.showSources is None:
+            state.showSources = False
         if state.sourceSortField:
-            sort_sources(state.sourceSortField)
+            sort_sources(state.sourceSortField, toggle=False)
+
+        # Clear selection if the selected source is no longer present.
+        if state.selectedSourceKey:
+            keys = {r.get("_key", "") for r in (state.sourceRows or [])}
+            if state.selectedSourceKey not in keys:
+                state.selectedSourceKey = ""
+                state.selectedSourceFilter = {}
 
         try:
+            extra = qf
+            if state.selectedSourceFilter:
+                extra = and_filter(qf or {}, state.selectedSourceFilter)
             tiles = db.get_first_movie_tiles_for_variable(
                 var_name,
-                extra_filter=qf,
+                extra_filter=extra,
                 limit=4,
                 limit_frames=MAX_MOVIE_FRAMES,
                 fps=MOVIE_FPS,
@@ -107,6 +120,29 @@ def attach_controllers(server, db, collection, parse_campaign, campaign_path: st
     @ctrl.add("toggle_sources")
     def toggle_sources(**_):
         state.showSources = not bool(state.showSources)
+
+    @ctrl.add("pick_source")
+    def pick_source(key: str, **_):
+        k = str(key or "")
+        if not k:
+            return
+        if state.selectedSourceKey == k:
+            state.selectedSourceKey = ""
+            state.selectedSourceFilter = {}
+        else:
+            row = next((r for r in (state.sourceRows or []) if r.get("_key") == k), None)
+            if row:
+                filt = {
+                    "producer": row.get("producer", ""),
+                    "casename": row.get("casename", ""),
+                }
+                if row.get("file"):
+                    filt["file"] = row.get("file")
+                state.selectedSourceKey = k
+                state.selectedSourceFilter = filt
+
+        state.showSources = True
+        update_selected_var_panels(state.selectedVar)
 
     @ctrl.add("toggle_movie_details")
     def toggle_movie_details(key: str, **_):

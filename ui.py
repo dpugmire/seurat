@@ -212,7 +212,14 @@ def build_ui(server, refresh_variable_list):
                                                                             vuetify.VIcon("mdi-sort", size="x-small", class_="ml-1")
                                                         with html.Tbody():
                                                             with vuetify.Template(v_for="(r, i) in sourceRows", key="i"):
-                                                                with html.Tr():
+                                                                with html.Tr(
+                                                                    style=(
+                                                                        "selectedSourceKey === r._key ? "
+                                                                        "'background-color:#f5f5f5; cursor:pointer;' : "
+                                                                        "'cursor:pointer;'",
+                                                                    ),
+                                                                    click=(ctrl.pick_source, "[r._key]"),
+                                                                ):
                                                                     html.Td("{{ r.producer }}", style="white-space:nowrap;")
                                                                     html.Td("{{ r.casename }}", style="white-space:nowrap;")
                                                                     html.Td("{{ r.file }}", style="white-space:nowrap;")
