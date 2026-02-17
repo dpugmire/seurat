@@ -97,21 +97,34 @@ def build_ui(server, refresh_variable_list):
 
                                                 with vuetify.VCardText(class_="pt-0 pb-1"):
                                                     with vuetify.Template(v_if="tile.src"):
-                                                        html.Video(
-                                                            src=("tile.src",),
-                                                            controls=True,
-                                                            autoplay=False,
-                                                            loop=True,
-                                                            muted=True,
-                                                            style=(
-                                                                "display:block;"
-                                                                "width:100%;"
-                                                                "height:240px;"
-                                                                "object-fit:cover;"
-                                                                "border-radius:4px;"
-                                                                "background:transparent;"
-                                                            ),
-                                                        )
+                                                        with vuetify.Template(v_if="tile.media_type === 'image'"):
+                                                            html.Img(
+                                                                src=("tile.src",),
+                                                                style=(
+                                                                    "display:block;"
+                                                                    "width:100%;"
+                                                                    "height:240px;"
+                                                                    "object-fit:cover;"
+                                                                    "border-radius:4px;"
+                                                                    "background:transparent;"
+                                                                ),
+                                                            )
+                                                        with vuetify.Template(v_else=True):
+                                                            html.Video(
+                                                                src=("tile.src",),
+                                                                controls=True,
+                                                                autoplay=False,
+                                                                loop=True,
+                                                                muted=True,
+                                                                style=(
+                                                                    "display:block;"
+                                                                    "width:100%;"
+                                                                    "height:240px;"
+                                                                    "object-fit:cover;"
+                                                                    "border-radius:4px;"
+                                                                    "background:transparent;"
+                                                                ),
+                                                            )
                                                     with vuetify.Template(v_else=True):
                                                         html.Div(
                                                             "{{ tile.note ? tile.note : 'No movie src' }}",

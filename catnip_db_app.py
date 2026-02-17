@@ -503,12 +503,17 @@ class CampaignDb:
                 )
 
                 src = ""
+                media_type = "video"
                 status = "ok"
                 note = ""
 
                 if not frames:
                     status = "no-frames"
                     note = "no frames"
+                elif len(frames) == 1:
+                    src = png_bytes_to_data_uri(frames[0])
+                    media_type = "image"
+                    note = "1 frame (rendered as image)"
                 else:
                     try:
                         mp4 = frames_to_mp4_bytes(frames, fps=fps)
@@ -531,6 +536,7 @@ class CampaignDb:
                         "casename": casename,
                         "file": file,
                         "src": src,
+                        "media_type": media_type,
                         "status": status,
                         "note": note,
                     }
@@ -1049,21 +1055,34 @@ with SinglePageLayout(server) as layout:
                                                 # Movie preview (smaller)
                                                 with vuetify.VCardText(class_="pt-0 pb-1"):
                                                     with vuetify.Template(v_if="tile.src"):
-                                                        html.Video(
-                                                            src=("tile.src",),
-                                                            controls=True,
-                                                            autoplay=False,
-                                                            loop=True,
-                                                            muted=True,
-                                                            style=(
-                                                                "display:block;"
-                                                                "width: 100%;"
-                                                                "height: 240px;"          # <- smaller overall
-                                                                "object-fit: cover;"         # <- fills the box; crops if needed
-                                                                "border-radius: 4px;"
-                                                                "background: transparent;"
-                                                            ),
-                                                        )
+                                                        with vuetify.Template(v_if="tile.media_type === 'image'"):
+                                                            html.Img(
+                                                                src=("tile.src",),
+                                                                style=(
+                                                                    "display:block;"
+                                                                    "width: 100%;"
+                                                                    "height: 240px;"  # <- smaller overall
+                                                                    "object-fit: cover;"  # <- fills the box; crops if needed
+                                                                    "border-radius: 4px;"
+                                                                    "background: transparent;"
+                                                                ),
+                                                            )
+                                                        with vuetify.Template(v_else=True):
+                                                            html.Video(
+                                                                src=("tile.src",),
+                                                                controls=True,
+                                                                autoplay=False,
+                                                                loop=True,
+                                                                muted=True,
+                                                                style=(
+                                                                    "display:block;"
+                                                                    "width: 100%;"
+                                                                    "height: 240px;"  # <- smaller overall
+                                                                    "object-fit: cover;"  # <- fills the box; crops if needed
+                                                                    "border-radius: 4px;"
+                                                                    "background: transparent;"
+                                                                ),
+                                                            )
 
                                                     with vuetify.Template(v_else=True):
                                                         html.Div(

@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from pymongo.errors import PyMongoError
 
-from media_utils import frames_to_mp4_bytes, mp4_bytes_to_data_uri
+from media_utils import frames_to_mp4_bytes, mp4_bytes_to_data_uri, png_bytes_to_data_uri
 from query_parser import and_filter
 
 
@@ -230,12 +230,17 @@ class CampaignDb:
                 )
 
                 src = ""
+                media_type = "video"
                 status = "ok"
                 note = ""
 
                 if not frames:
                     status = "no-frames"
                     note = "no frames"
+                elif len(frames) == 1:
+                    src = png_bytes_to_data_uri(frames[0])
+                    media_type = "image"
+                    note = "1 frame (rendered as image)"
                 else:
                     try:
                         mp4 = frames_to_mp4_bytes(frames, fps=fps)
@@ -254,6 +259,7 @@ class CampaignDb:
                         "casename": casename,
                         "file": file,
                         "src": src,
+                        "media_type": media_type,
                         "status": status,
                         "note": note,
                     }
