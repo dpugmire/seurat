@@ -3,21 +3,16 @@ from trame.widgets import html
 from trame.widgets import vuetify3 as vuetify
 
 
-def build_ui(server, refresh_variable_list):
+def build_ui(server, refresh_variable_list, campaign_name: str = ""):
     state, ctrl = server.state, server.controller
 
     with SinglePageLayout(server) as layout:
-        layout.title.set_text("Catnip Campaign DB Viewer (Vue3)")
+        layout.title.set_text(
+            f"Campaign loaded: {campaign_name}" if campaign_name else "Campaign loaded"
+        )
 
         with layout.toolbar:
-            vuetify.VBtn(
-                "Refresh variables",
-                click=refresh_variable_list,
-                variant="outlined",
-                size="small",
-            )
-            vuetify.VSpacer()
-            html.Div("{{ dbStatus }}", class_="text-caption")
+            pass
 
         with layout.content:
             with vuetify.VContainer(fluid=True, class_="pa-2"):

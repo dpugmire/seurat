@@ -1,4 +1,5 @@
 import argparse
+from pathlib import Path
 
 from pymongo import MongoClient
 from trame.app import get_server
@@ -35,7 +36,11 @@ def main():
         campaign_path=args.campaign_path,
     )
 
-    build_ui(server, refresh_variable_list)
+    build_ui(
+        server,
+        refresh_variable_list,
+        campaign_name=Path(args.campaign_path).name,
+    )
 
     server.start()
 
