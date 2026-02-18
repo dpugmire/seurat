@@ -12,30 +12,23 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
         )
 
         with layout.toolbar:
-            pass
+            html.Span("Query:", class_="text-caption ml-4")
+            vuetify.VTextField(
+                v_model=("queryText",),
+                placeholder="e.g. var == 'omega' and producer == 'ns' and min > 1.0",
+                density="compact",
+                hide_details=True,
+                variant="outlined",
+                style="max-width: 420px;",
+                class_="mx-2",
+            )
+            vuetify.VBtn("Query", click=ctrl.run_query, variant="outlined", size="small")
+            vuetify.VBtn("Clear", click=ctrl.clear_query, variant="text", size="small", class_="ml-1")
+            with vuetify.Template(v_if="queryError"):
+                html.Span("{{ queryError }}", class_="text-caption ml-2", style="color:#b00020;")
 
         with layout.content:
             with vuetify.VContainer(fluid=True, class_="pa-2"):
-                with vuetify.VCard(variant="outlined", class_="mb-2"):
-                    with vuetify.VCardText(class_="py-2"):
-                        with html.Div(style="display:flex; align-items:center; gap:10px; width:100%;"):
-                            html.Span("Query:", class_="text-body-2")
-                            vuetify.VTextField(
-                                v_model=("queryText",),
-                                placeholder="e.g. var == 'omega' and producer == 'ns' and min > 1.0",
-                                density="compact",
-                                hide_details=True,
-                                style="max-width: 560px;",
-                            )
-                            vuetify.VBtn("Query", click=ctrl.run_query, variant="outlined", size="small")
-                            vuetify.VBtn("Clear Query", click=ctrl.clear_query, variant="text", size="small")
-                            vuetify.VSpacer()
-                            html.Span("{{ queryStatus }}", class_="text-caption")
-
-                    with vuetify.Template(v_if="queryError"):
-                        with vuetify.VCardText(class_="pt-0"):
-                            html.Div("{{ queryError }}", class_="text-caption", style="color:#b00020;")
-
                 with vuetify.VRow():
                     with vuetify.VCol(cols=2, style="display:flex; flex-direction:column; height:80vh;"):
                         with vuetify.VCard(variant="outlined", style="flex:1 1 auto; min-height:0;"):
