@@ -2,8 +2,6 @@ from trame.ui.vuetify3 import SinglePageLayout
 from trame.widgets import html
 from trame.widgets import vuetify3 as vuetify
 
-from config import SOURCE_FIELDS
-
 
 def build_ui(server, refresh_variable_list):
     state, ctrl = server.state, server.controller
@@ -73,7 +71,7 @@ def build_ui(server, refresh_variable_list):
                                 html.Div("Visualizations")
                                 vuetify.VSpacer()
                                 html.Div("{{ movieStatus }}", class_="text-caption")
-                            with vuetify.VCardText(style="height:42vh; overflow-y:auto;"):
+                            with vuetify.VCardText(style="height:68vh; overflow-y:auto;"):
                                 with vuetify.Template(v_if="movieTiles.length"):
                                     with vuetify.VRow(dense=True):
                                         with vuetify.Template(v_for="(tile, i) in movieTiles", key="i"):
@@ -103,7 +101,7 @@ def build_ui(server, refresh_variable_list):
                                                                 style=(
                                                                     "display:block;"
                                                                     "width:100%;"
-                                                                    "height:240px;"
+                                                                    "height:160px;"
                                                                     "object-fit:cover;"
                                                                     "border-radius:4px;"
                                                                     "background:transparent;"
@@ -119,7 +117,7 @@ def build_ui(server, refresh_variable_list):
                                                                 style=(
                                                                     "display:block;"
                                                                     "width:100%;"
-                                                                    "height:240px;"
+                                                                    "height:160px;"
                                                                     "object-fit:cover;"
                                                                     "border-radius:4px;"
                                                                     "background:transparent;"
@@ -152,95 +150,168 @@ def build_ui(server, refresh_variable_list):
                         html.Div(style="height: 8px")
 
                         with vuetify.VCard(variant="outlined"):
-                            with vuetify.VCardTitle():
-                                with html.Div(style="display:flex; align-items:center; gap:12px; width:100%;"):
-                                    html.Div("{{ detailsSelectedVar ? ('Details: ' + detailsSelectedVar) : 'Details' }}")
-
-                                    with vuetify.Template(v_if="detailsSelectedVar"):
+                            with vuetify.VCardText(class_="py-2"):
+                                with vuetify.Template(v_if="detailsSelectedVar"):
+                                    with html.Div(style="display:flex; align-items:center; gap:12px; width:100%;"):
+                                        html.Div("{{ 'Details: ' + detailsSelectedVar }}", class_="text-body-2")
                                         vuetify.VBtn(
                                             "{{ 'SOURCES(' + detailsNumSources + ')' }}",
-                                            variant="text",
+                                            variant="tonal",
                                             size="small",
                                             click=ctrl.toggle_sources,
                                         )
-                                        vuetify.VIcon(
-                                            ("showSources ? 'mdi-chevron-up' : 'mdi-chevron-down'",),
+                                        with vuetify.Template(v_if="selectedSourceKeys.length !== sourceRows.length"):
+                                            vuetify.VBtn(
+                                                "Show all",
+                                                variant="text",
+                                                size="small",
+                                                click=ctrl.clear_source_filter,
+                                            )
+                                        vuetify.VSpacer()
+                                        html.Div("{{ 'QueryView: ' + queryViewLabel }}", class_="text-caption")
+
+                                    with html.Div(style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;"):
+                                        vuetify.VChip(
+                                            "{{ 'Global min/max: ' + detailsGlobalMin + ' / ' + detailsGlobalMax }}",
                                             size="small",
+                                            variant="outlined",
                                         )
+                                        vuetify.VChip(
+                                            "{{ 'Median min/max: ' + detailsMedianMin + ' / ' + detailsMedianMax }}",
+                                            size="small",
+                                            variant="outlined",
+                                        )
+                                        vuetify.VChip(
+                                            "{{ 'Mean min/max: ' + detailsMeanMin + ' / ' + detailsMeanMax }}",
+                                            size="small",
+                                            variant="outlined",
+                                        )
+                                        vuetify.VChip(
+                                            "{{ 'Visible sources: ' + selectedSourceLabel }}",
+                                            size="small",
+                                            variant="outlined",
+                                        )
+                                with vuetify.Template(v_else=True):
+                                    html.Div("Select a variable", class_="text-caption")
 
-                                    vuetify.VSpacer()
-                                    html.Div("{{ 'QueryView: ' + queryViewLabel }}", class_="text-caption")
+                        with vuetify.VDialog(v_model=("showSourcesModal",), max_width="1200"):
+                            with vuetify.VCard():
+                                with vuetify.VCardTitle():
+                                    with html.Div(style="display:flex; align-items:center; gap:8px; width:100%;"):
+                                        html.Div("{{ detailsSelectedVar ? ('Sources: ' + detailsSelectedVar) : 'Sources' }}")
+                                        vuetify.VSpacer()
+                                        with vuetify.Template(v_if="selectedSourceKeys.length !== sourceRows.length"):
+                                            vuetify.VBtn(
+                                                "Show all",
+                                                variant="text",
+                                                size="small",
+                                                click=ctrl.clear_source_filter,
+                                            )
+                                        vuetify.VBtn("Close", variant="text", size="small", click=ctrl.toggle_sources)
 
-                            with vuetify.VCardText(style="height:36vh; overflow-y:auto;"):
-                                with vuetify.Template(v_if="detailsSelectedVar"):
-                                    with vuetify.VRow(dense=True):
-                                        with vuetify.VCol(cols=5):
+                                with vuetify.VCardText():
+                                    with vuetify.Template(v_if="detailsSelectedVar"):
+                                        html.Div("{{ 'Visible sources: ' + selectedSourceLabel }}", class_="text-caption mb-2")
+                                        with html.Div(
+                                            style=(
+                                                "max-height:60vh;"
+                                                "overflow-y:auto;"
+                                                "overflow-x:scroll;"
+                                                "white-space:nowrap;"
+                                                "scrollbar-gutter:stable;"
+                                            )
+                                        ):
                                             with vuetify.VTable(density="compact"):
                                                 with html.Thead():
                                                     with html.Tr():
-                                                        html.Th("")
-                                                        html.Th("Min")
-                                                        html.Th("Max")
-                                                with html.Tbody():
-                                                    with html.Tr():
-                                                        html.Td("Global")
-                                                        html.Td("{{ detailsGlobalMin }}")
-                                                        html.Td("{{ detailsGlobalMax }}")
-                                                    with html.Tr():
-                                                        html.Td("Median")
-                                                        html.Td("{{ detailsMedianMin }}")
-                                                        html.Td("{{ detailsMedianMax }}")
-                                                    with html.Tr():
-                                                        html.Td("Mean")
-                                                        html.Td("{{ detailsMeanMin }}")
-                                                        html.Td("{{ detailsMeanMax }}")
+                                                        with html.Th(
+                                                            style="cursor:pointer; user-select:none; white-space:nowrap; width:72px;",
+                                                            click=(ctrl.sort_sources, "['show']"),
+                                                        ):
+                                                            html.Span("Show")
+                                                            with vuetify.Template(v_if="sourceSortField === 'show'"):
+                                                                vuetify.VIcon(
+                                                                    ("sourceSortAsc ? 'mdi-arrow-up' : 'mdi-arrow-down'",),
+                                                                    size="x-small",
+                                                                    class_="ml-1",
+                                                                )
+                                                            with vuetify.Template(v_else=True):
+                                                                vuetify.VIcon("mdi-sort", size="x-small", class_="ml-1")
+                                                        with html.Th(
+                                                            style="cursor:pointer; user-select:none; white-space:nowrap;",
+                                                            click=(ctrl.sort_sources, "['producer']"),
+                                                        ):
+                                                            html.Span("producer")
+                                                            with vuetify.Template(v_if="sourceSortField === 'producer'"):
+                                                                vuetify.VIcon(
+                                                                    ("sourceSortAsc ? 'mdi-arrow-up' : 'mdi-arrow-down'",),
+                                                                    size="x-small",
+                                                                    class_="ml-1",
+                                                                )
+                                                            with vuetify.Template(v_else=True):
+                                                                vuetify.VIcon("mdi-sort", size="x-small", class_="ml-1")
 
-                                        with vuetify.VCol(cols=7):
-                                            with vuetify.Template(v_if="showSources"):
-                                                with html.Div(
-                                                    style=(
-                                                        "max-height:30vh;"
-                                                        "overflow-y:auto;"
-                                                        "overflow-x:scroll;"
-                                                        "white-space:nowrap;"
-                                                        "scrollbar-gutter:stable;"
-                                                    )
-                                                ):
-                                                    with vuetify.VTable(density="compact"):
-                                                        with html.Thead():
-                                                            with html.Tr():
-                                                                for f in SOURCE_FIELDS:
-                                                                    with html.Th(
-                                                                        style="cursor:pointer; user-select:none; white-space:nowrap;",
-                                                                        click=(ctrl.sort_sources, f"['{f}']"),
-                                                                    ):
-                                                                        html.Span(f)
-                                                                        with vuetify.Template(v_if=(f"sourceSortField === '{f}'",)):
-                                                                            vuetify.VIcon(
-                                                                                ("sourceSortAsc ? 'mdi-arrow-up' : 'mdi-arrow-down'",),
-                                                                                size="x-small",
-                                                                                class_="ml-1",
-                                                                            )
-                                                                        with vuetify.Template(v_else=True):
-                                                                            vuetify.VIcon("mdi-sort", size="x-small", class_="ml-1")
-                                                        with html.Tbody():
-                                                            with vuetify.Template(v_for="(r, i) in sourceRows", key="i"):
-                                                                with html.Tr(
-                                                                    style=(
-                                                                        "selectedSourceKey === r._key ? "
-                                                                        "'background-color:#f5f5f5; cursor:pointer;' : "
-                                                                        "'cursor:pointer;'",
-                                                                    ),
-                                                                    click=(ctrl.pick_source, "[r._key]"),
-                                                                ):
-                                                                    html.Td("{{ r.producer }}", style="white-space:nowrap;")
-                                                                    html.Td("{{ r.casename }}", style="white-space:nowrap;")
-                                                                    html.Td("{{ r.file }}", style="white-space:nowrap;")
-                                                                    html.Td("{{ r.min }}", style="white-space:nowrap;")
-                                                                    html.Td("{{ r.max }}", style="white-space:nowrap;")
-                                            with vuetify.Template(v_else=True):
-                                                html.Div("Sources table.", class_="text-caption")
-                                with vuetify.Template(v_else=True):
-                                    html.Div("Select a variable", class_="text-caption")
+                                                        with html.Th(
+                                                            style="cursor:pointer; user-select:none; white-space:nowrap;",
+                                                            click=(ctrl.sort_sources, "['casename']"),
+                                                        ):
+                                                            html.Span("casename")
+                                                            with vuetify.Template(v_if="sourceSortField === 'casename'"):
+                                                                vuetify.VIcon(
+                                                                    ("sourceSortAsc ? 'mdi-arrow-up' : 'mdi-arrow-down'",),
+                                                                    size="x-small",
+                                                                    class_="ml-1",
+                                                                )
+                                                            with vuetify.Template(v_else=True):
+                                                                vuetify.VIcon("mdi-sort", size="x-small", class_="ml-1")
+
+                                                        with html.Th(
+                                                            style="cursor:pointer; user-select:none; white-space:nowrap;",
+                                                            click=(ctrl.sort_sources, "['min']"),
+                                                        ):
+                                                            html.Span("min")
+                                                            with vuetify.Template(v_if="sourceSortField === 'min'"):
+                                                                vuetify.VIcon(
+                                                                    ("sourceSortAsc ? 'mdi-arrow-up' : 'mdi-arrow-down'",),
+                                                                    size="x-small",
+                                                                    class_="ml-1",
+                                                                )
+                                                            with vuetify.Template(v_else=True):
+                                                                vuetify.VIcon("mdi-sort", size="x-small", class_="ml-1")
+
+                                                        with html.Th(
+                                                            style="cursor:pointer; user-select:none; white-space:nowrap;",
+                                                            click=(ctrl.sort_sources, "['max']"),
+                                                        ):
+                                                            html.Span("max")
+                                                            with vuetify.Template(v_if="sourceSortField === 'max'"):
+                                                                vuetify.VIcon(
+                                                                    ("sourceSortAsc ? 'mdi-arrow-up' : 'mdi-arrow-down'",),
+                                                                    size="x-small",
+                                                                    class_="ml-1",
+                                                                )
+                                                            with vuetify.Template(v_else=True):
+                                                                vuetify.VIcon("mdi-sort", size="x-small", class_="ml-1")
+                                                with html.Tbody():
+                                                    with vuetify.Template(v_for="(r, i) in sourceRows", key="i"):
+                                                        with html.Tr(
+                                                            style=(
+                                                                "selectedSourceKeys.includes(r._key) ? "
+                                                                "'background-color:#f5f5f5; cursor:pointer;' : "
+                                                                "'cursor:pointer;'",
+                                                            ),
+                                                        ):
+                                                            with html.Td(style="text-align:center; white-space:nowrap;"):
+                                                                html.Input(
+                                                                    type="checkbox",
+                                                                    checked=("selectedSourceKeys.includes(r._key)",),
+                                                                    click=(ctrl.toggle_source_visibility, "[r._key]"),
+                                                                )
+                                                            html.Td("{{ r.producer }}", style="white-space:nowrap;")
+                                                            html.Td("{{ r.casename }}", style="white-space:nowrap;")
+                                                            html.Td("{{ r.min }}", style="white-space:nowrap;")
+                                                            html.Td("{{ r.max }}", style="white-space:nowrap;")
+                                    with vuetify.Template(v_else=True):
+                                        html.Div("Select a variable first.", class_="text-caption")
 
     return layout

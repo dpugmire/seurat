@@ -35,12 +35,12 @@ def init_state(state, db) -> None:
     state.detailsMedianMin = ""
     state.detailsMedianMax = ""
 
-    state.showSources = False
+    state.showSourcesModal = False
     state.sourceRows = []
     state.sourceSortField = SOURCE_FIELDS[0]
     state.sourceSortAsc = True
-    state.selectedSourceKey = ""
-    state.selectedSourceFilter = {}
+    state.selectedSourceKeys = []
+    state.selectedSourceLabel = "All sources"
 
     state.movieTiles = []
     state.movieStatus = ""
@@ -58,12 +58,12 @@ def clear_details(state) -> None:
     state.detailsMedianMin = ""
     state.detailsMedianMax = ""
 
-    state.showSources = False
+    state.showSourcesModal = False
     state.sourceRows = []
     state.sourceSortField = SOURCE_FIELDS[0]
     state.sourceSortAsc = True
-    state.selectedSourceKey = ""
-    state.selectedSourceFilter = {}
+    state.selectedSourceKeys = []
+    state.selectedSourceLabel = "All sources"
 
 
 def clear_right_panes(state) -> None:

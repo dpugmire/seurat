@@ -1,4 +1,4 @@
-from typing import Dict
+from typing import Dict, List
 
 from config import MAX_MOVIE_FRAMES, MOVIE_FPS
 from query_parser import and_filter, python_query_to_mongo
@@ -12,6 +12,49 @@ def attach_controllers(server, db, collection, parse_campaign, campaign_path: st
         state.variableNames = db.distinct_variable_names(extra_filter=state.queryFilter or None)
         state.dbOk = db.ok
         state.dbStatus = "Connected" if db.ok else f"DB error: {db.last_error}"
+
+    def source_row_keys() -> List[str]:
+        return [str(r.get("_key", "")) for r in (state.sourceRows or []) if str(r.get("_key", ""))]
+
+    def update_selected_source_label():
+        total = len(state.sourceRows or [])
+        selected = len(state.selectedSourceKeys or [])
+        if total <= 0:
+            state.selectedSourceLabel = "No sources"
+        elif selected <= 0:
+            state.selectedSourceLabel = "No sources selected"
+        elif selected >= total:
+            state.selectedSourceLabel = "All sources"
+        else:
+            state.selectedSourceLabel = f"{selected} of {total} selected"
+
+    def show_all_sources():
+        state.selectedSourceKeys = source_row_keys()
+        update_selected_source_label()
+
+    def source_filter_from_selection():
+        all_keys = source_row_keys()
+        selected = set(state.selectedSourceKeys or [])
+        if not all_keys or not selected or len(selected) >= len(all_keys):
+            return None
+
+        clauses = []
+        for row in (state.sourceRows or []):
+            key = str(row.get("_key", ""))
+            if key not in selected:
+                continue
+            clause = {
+                "producer": row.get("producer", ""),
+                "casename": row.get("casename", ""),
+            }
+            file_name = row.get("file", "")
+            if file_name:
+                clause["file"] = file_name
+            clauses.append(clause)
+
+        if not clauses:
+            return None
+        return clauses[0] if len(clauses) == 1 else {"$or": clauses}
 
     @ctrl.add("sort_sources")
     def sort_sources(field: str, toggle: bool = True, **_):
@@ -27,8 +70,14 @@ def attach_controllers(server, db, collection, parse_campaign, campaign_path: st
 
         asc = bool(state.sourceSortAsc)
         rows = list(state.sourceRows or [])
+        selected_keys = set(state.selectedSourceKeys or [])
 
         def keyfn(row: Dict[str, str]):
+            if field == "show":
+                key = str(row.get("_key", ""))
+                # Ascending puts checked sources first.
+                return (0 if key in selected_keys else 1, key)
+
             v = row.get(field, "")
             if v is None:
                 return ("__str__", "")
@@ -49,6 +98,7 @@ def attach_controllers(server, db, collection, parse_campaign, campaign_path: st
             clear_right_panes(state)
             return
 
+        previous_var = state.detailsSelectedVar
         qf = state.queryFilter or None
         summary = db.variable_min_max_summary(var_name, extra_filter=qf)
 
@@ -82,44 +132,32 @@ def attach_controllers(server, db, collection, parse_campaign, campaign_path: st
             for r in rows
         ]
 
-        if state.showSources is None:
-            state.showSources = False
         if state.sourceSortField:
             sort_sources(state.sourceSortField, toggle=False)
 
-        def set_selected_source_from_row(row):
-            if not row:
-                state.selectedSourceKey = ""
-                state.selectedSourceFilter = {}
-                return
-            filt = {
-                "producer": row.get("producer", ""),
-                "casename": row.get("casename", ""),
-            }
-            if row.get("file"):
-                filt["file"] = row.get("file")
-            state.selectedSourceKey = row.get("_key", "")
-            state.selectedSourceFilter = filt
-
-        # Clear selection if the selected source is no longer present.
-        if state.selectedSourceKey:
-            keys = {r.get("_key", "") for r in (state.sourceRows or [])}
-            if state.selectedSourceKey not in keys:
-                state.selectedSourceKey = ""
-                state.selectedSourceFilter = {}
-
-        # Default to first row when nothing is selected.
-        if not state.selectedSourceKey and state.sourceRows:
-            set_selected_source_from_row(state.sourceRows[0])
+        all_keys = source_row_keys()
+        if previous_var != var_name:
+            state.selectedSourceKeys = [all_keys[0]] if all_keys else []
+        else:
+            selected = set(state.selectedSourceKeys or [])
+            state.selectedSourceKeys = [k for k in all_keys if k in selected]
+        update_selected_source_label()
 
         try:
+            if all_keys and not state.selectedSourceKeys:
+                state.movieTiles = []
+                state.movieDetailsOpen = {}
+                state.movieStatus = "No sources selected"
+                return
+
             extra = qf
-            if state.selectedSourceFilter:
-                extra = and_filter(qf or {}, state.selectedSourceFilter)
+            source_filter = source_filter_from_selection()
+            if source_filter:
+                extra = and_filter(qf or {}, source_filter)
             tiles = db.get_first_movie_tiles_for_variable(
                 var_name,
                 extra_filter=extra,
-                limit=4,
+                limit=9,
                 limit_frames=MAX_MOVIE_FRAMES,
                 fps=MOVIE_FPS,
             )
@@ -137,29 +175,28 @@ def attach_controllers(server, db, collection, parse_campaign, campaign_path: st
 
     @ctrl.add("toggle_sources")
     def toggle_sources(**_):
-        state.showSources = not bool(state.showSources)
+        state.showSourcesModal = not bool(state.showSourcesModal)
 
-    @ctrl.add("pick_source")
-    def pick_source(key: str, **_):
+    @ctrl.add("clear_source_filter")
+    def clear_source_filter(**_):
+        show_all_sources()
+        update_selected_var_panels(state.selectedVar)
+
+    @ctrl.add("toggle_source_visibility")
+    def toggle_source_visibility(key: str, **_):
         k = str(key or "")
         if not k:
             return
-        if state.selectedSourceKey == k:
-            state.selectedSourceKey = ""
-            state.selectedSourceFilter = {}
-        else:
-            row = next((r for r in (state.sourceRows or []) if r.get("_key") == k), None)
-            if row:
-                filt = {
-                    "producer": row.get("producer", ""),
-                    "casename": row.get("casename", ""),
-                }
-                if row.get("file"):
-                    filt["file"] = row.get("file")
-                state.selectedSourceKey = k
-                state.selectedSourceFilter = filt
 
-        state.showSources = True
+        selected = set(state.selectedSourceKeys or [])
+        if k in selected:
+            selected.remove(k)
+        else:
+            selected.add(k)
+        state.selectedSourceKeys = [key for key in source_row_keys() if key in selected]
+        update_selected_source_label()
+
+        state.showSourcesModal = True
         update_selected_var_panels(state.selectedVar)
 
     @ctrl.add("toggle_movie_details")
