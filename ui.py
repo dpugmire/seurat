@@ -18,21 +18,36 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
         document.addEventListener("dragstart", function(e) {
           const target = e && e.target;
           if (!target || !target.closest) return;
-          const el = target.closest(".catnip-draggable-var");
-          if (!el || !e.dataTransfer) return;
-          const item = el.getAttribute("data-item") || "";
-          if (!item) return;
-          e.dataTransfer.setData("text/plain", item);
-          e.dataTransfer.setData("application/x-catnip-var", item);
-          e.dataTransfer.effectAllowed = "copy";
-          el.style.opacity = "0.45";
+          if (!e.dataTransfer) return;
+
+          const varEl = target.closest(".catnip-draggable-var");
+          if (varEl) {
+            const item = varEl.getAttribute("data-item") || "";
+            if (!item) return;
+            e.dataTransfer.setData("text/plain", item);
+            e.dataTransfer.setData("application/x-catnip-var", item);
+            e.dataTransfer.effectAllowed = "copy";
+            varEl.style.opacity = "0.45";
+            return;
+          }
+
+          const cellEl = target.closest(".catnip-dropcell");
+          if (!cellEl) return;
+          const filled = cellEl.getAttribute("data-cell-filled");
+          const fromIdx = cellEl.getAttribute("data-cell-index");
+          if (filled !== "1" || fromIdx === null) return;
+          e.dataTransfer.setData("application/x-catnip-grid-cell", fromIdx);
+          e.dataTransfer.effectAllowed = "move";
+          cellEl.style.opacity = "0.55";
         });
 
         document.addEventListener("dragend", function(e) {
           const target = e && e.target;
           if (!target || !target.closest) return;
-          const el = target.closest(".catnip-draggable-var");
-          if (el) el.style.opacity = "1";
+          const varEl = target.closest(".catnip-draggable-var");
+          if (varEl) varEl.style.opacity = "1";
+          const cellEl = target.closest(".catnip-dropcell");
+          if (cellEl) cellEl.style.opacity = "1";
         });
 
         document.addEventListener("dragover", function(e) {
@@ -41,7 +56,10 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
           const el = target.closest(".catnip-dropcell");
           if (!el) return;
           e.preventDefault();
-          if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+          if (e.dataTransfer) {
+            const types = Array.from(e.dataTransfer.types || []);
+            e.dataTransfer.dropEffect = types.includes("application/x-catnip-grid-cell") ? "move" : "copy";
+          }
           el.classList.add("catnip-drop-hover");
         });
 
@@ -62,10 +80,17 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
           if (!el) return;
           e.preventDefault();
           el.classList.remove("catnip-drop-hover");
+          const fromCell = e.dataTransfer ? (e.dataTransfer.getData("application/x-catnip-grid-cell") || "") : "";
+          const idx = el.getAttribute("data-cell-index");
+          if (fromCell !== "" && idx !== null) {
+            if (window.trame && window.trame.trigger) {
+              window.trame.trigger("move_grid_cell_trigger", [fromCell, idx]);
+            }
+            return;
+          }
           const item = e.dataTransfer
             ? (e.dataTransfer.getData("text/plain") || e.dataTransfer.getData("application/x-catnip-var") || "")
             : "";
-          const idx = el.getAttribute("data-cell-index");
           if (!item || idx === null) return;
           if (window.trame && window.trame.trigger) {
             window.trame.trigger("assign_var_to_grid_cell_trigger", [item, idx]);
@@ -151,7 +176,11 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                 "[i, (($event && $event.target && $event.target.closest && $event.target.closest('.catnip-cell-close')) ? 1 : 0)]",
                                             ),
                                             classes="catnip-dropcell",
-                                            raw_attrs=[':data-cell-index="i"'],
+                                            raw_attrs=[
+                                                ':data-cell-index="i"',
+                                                ':data-cell-filled="((tile && tile.variable_name) ? 1 : 0)"',
+                                                ':draggable="!!(tile && tile.variable_name)"',
+                                            ],
                                             style=(
                                                 "('padding:6px; overflow:hidden; cursor:pointer; position:relative;'"
                                                 " + ((i % 3 !== 2) ? 'border-right:1px solid #cfcfcf;' : '')"

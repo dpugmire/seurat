@@ -428,6 +428,33 @@ def attach_controllers(server, db, collection, parse_campaign, campaign_path: st
         cells[idx] = empty_grid_cell()
         state.gridCells = cells
 
+    @ctrl.add("move_grid_cell")
+    def move_grid_cell(from_index: int, to_index: int, **_):
+        try:
+            src = int(from_index)
+            dst = int(to_index)
+        except Exception:
+            return
+        if src < 0 or src >= GRID_CELL_COUNT or dst < 0 or dst >= GRID_CELL_COUNT:
+            return
+        if src == dst:
+            return
+
+        cells = normalize_grid_cells(state.gridCells)
+        source = dict(cells[src] or {})
+        if not str(source.get("variable_name", "") or "").strip():
+            return
+
+        # Move + overwrite: destination takes source tile, source is cleared.
+        cells[dst] = source
+        cells[src] = empty_grid_cell()
+        state.gridCells = cells
+        state.activeGridCell = dst
+
+    @ctrl.trigger("move_grid_cell_trigger")
+    def move_grid_cell_trigger(from_index, to_index, **_):
+        move_grid_cell(from_index, to_index)
+
     @ctrl.add("assign_var_to_grid_cell")
     def assign_var_to_grid_cell(cell_index: int, var_name: str, sync_selection: bool = True, **_):
         try:
