@@ -45,6 +45,7 @@ def init_state(state, db) -> None:
     state.movieTiles = []
     state.movieStatus = ""
     state.movieDetailsOpen = {}
+    state.tileVisualizationBySource = {}
 
 
 def clear_details(state) -> None:
@@ -70,3 +71,5 @@ def clear_right_panes(state) -> None:
     clear_details(state)
     state.movieTiles = []
     state.movieStatus = ""
+    state.movieDetailsOpen = {}
+    state.tileVisualizationBySource = {}

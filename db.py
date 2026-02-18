@@ -46,6 +46,29 @@ class CampaignDb:
             self.ok = False
             return []
 
+    def distinct_visualization_names_for_variable(
+        self,
+        variable_name: str,
+        extra_filter: Optional[Dict[str, Any]] = None,
+    ) -> List[str]:
+        if not self.ok or not variable_name:
+            return []
+        try:
+            base_query: Dict[str, Any] = {
+                "variable_name": variable_name,
+                "variable_type": "image",
+                "visualization_name": {"$ne": ""},
+            }
+            query = and_filter(base_query, extra_filter)
+            names = self.collection.distinct("visualization_name", query)
+            names = [n for n in names if isinstance(n, str) and n]
+            names.sort()
+            return names
+        except PyMongoError as e:
+            self.last_error = f"{type(e).__name__}: {e}"
+            self.ok = False
+            return []
+
     def variable_min_max_summary(
         self,
         variable_name: str,

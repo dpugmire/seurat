@@ -36,22 +36,12 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                         with vuetify.VCardText(class_="pt-0"):
                             html.Div("{{ queryError }}", class_="text-caption", style="color:#b00020;")
 
-                vuetify.VAlert(
-                    "{{ dbStatus }}",
-                    type=("dbOk ? 'success' : 'error'",),
-                    variant="outlined",
-                    density="compact",
-                    class_="mb-2",
-                )
-
                 with vuetify.VRow():
-                    with vuetify.VCol(cols=2):
-                        with vuetify.VCard(variant="outlined"):
+                    with vuetify.VCol(cols=2, style="display:flex; flex-direction:column; height:80vh;"):
+                        with vuetify.VCard(variant="outlined", style="flex:1 1 auto; min-height:0;"):
                             with vuetify.VCardTitle():
                                 html.Div("Variables")
-                                vuetify.VSpacer()
-                                html.Div("{{ 'View: ' + queryViewLabel }}", class_="text-caption")
-                            with vuetify.VCardText(style="height:80vh; overflow-y:auto;"):
+                            with vuetify.VCardText(style="height:100%; overflow-y:auto;"):
                                 with vuetify.VList(density="compact"):
                                     with vuetify.Template(v_for="v in variableNames", key="v"):
                                         vuetify.VListItem(
@@ -60,23 +50,36 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                             click=(ctrl.pick_var, "[v]"),
                                         )
 
-                    with vuetify.VCol(cols=10):
-                        with vuetify.VCard(variant="outlined"):
-                            with vuetify.VCardTitle():
-                                html.Div("Visualizations")
-                                vuetify.VSpacer()
-                                html.Div("{{ movieStatus }}", class_="text-caption")
-                            with vuetify.VCardText(style="height:68vh; overflow-y:auto;"):
+                    with vuetify.VCol(cols=10, style="display:flex; flex-direction:column; height:80vh;"):
+                        with vuetify.VCard(variant="outlined", style="flex:1 1 auto; min-height:0;"):
+                            with vuetify.VCardText(style="height:100%; overflow-y:auto;"):
                                 with vuetify.Template(v_if="movieTiles.length"):
                                     with vuetify.VRow(dense=True):
-                                        with vuetify.Template(v_for="(tile, i) in movieTiles", key="i"):
+                                        with vuetify.Template(v_for="(tile, i) in movieTiles", key="(tile._source_key || '') + '-' + (tile.selected_visualization || '') + '-' + i"):
                                             with vuetify.VCol(cols="12", sm="6", md="4", class_="pa-1"):
                                                 with vuetify.VCardTitle(class_="pa-1"):
                                                     with html.Div(style="display:flex; align-items:center; gap:8px; width:100%;"):
                                                         html.Div(
-                                                            "{{ tile.visualization_name || 'visualization' }}",
-                                                            style="flex:1; min-width:0; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;",
+                                                            "{{ selectedVar || 'variable' }}",
+                                                            style="flex:1; min-width:0; font-size:0.95rem; font-weight:400; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;",
                                                         )
+                                                        with vuetify.Template(v_if="tile.visualization_options && tile.visualization_options.length"):
+                                                            vuetify.VSelect(
+                                                                model_value=("tile.selected_visualization",),
+                                                                items=("tile.visualization_options", []),
+                                                                density="compact",
+                                                                hide_details=True,
+                                                                variant="outlined",
+                                                                style="max-width:160px; font-size:0.85rem;",
+                                                                change=(
+                                                                    ctrl.pick_tile_visualization,
+                                                                    "[(tile._source_key || ''), $event]",
+                                                                ),
+                                                                update_modelValue=(
+                                                                    ctrl.pick_tile_visualization,
+                                                                    "[(tile._source_key || ''), $event]",
+                                                                ),
+                                                            )
                                                         vuetify.VBtn(
                                                             "DETAILS",
                                                             size="x-small",
@@ -140,11 +143,11 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                                         html.Td(f"{{{{ tile.{key} }}}}", class_="text-caption")
                                 with vuetify.Template(v_else=True):
                                     html.Div("Select a variable to begin.", class_="text-caption", v_if="!selectedVar")
-                                    html.Div("No movies in this QueryView.", class_="text-caption", v_else=True)
+                                    html.Div("No movies for selected sources.", class_="text-caption", v_else=True)
 
-                        html.Div(style="height: 8px")
+                        html.Div(style="height: 8px; flex:0 0 auto;")
 
-                        with vuetify.VCard(variant="outlined"):
+                        with vuetify.VCard(variant="outlined", style="flex:0 0 auto;"):
                             with vuetify.VCardText(class_="py-2"):
                                 with vuetify.Template(v_if="detailsSelectedVar"):
                                     with html.Div(style="display:flex; align-items:center; gap:12px; width:100%;"):
@@ -162,30 +165,22 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                 size="small",
                                                 click=ctrl.clear_source_filter,
                                             )
+                                        with html.Div(
+                                            class_="text-caption",
+                                            style="display:flex; align-items:center; gap:12px; white-space:nowrap;",
+                                        ):
+                                            html.Span("Min/Max")
+                                            with html.Span():
+                                                html.Strong("Global ")
+                                                html.Span("{{ detailsGlobalMin + ' / ' + detailsGlobalMax }}")
+                                            with html.Span():
+                                                html.Strong("Median ")
+                                                html.Span("{{ detailsMedianMin + ' / ' + detailsMedianMax }}")
+                                            with html.Span():
+                                                html.Strong("Mean ")
+                                                html.Span("{{ detailsMeanMin + ' / ' + detailsMeanMax }}")
                                         vuetify.VSpacer()
                                         html.Div("{{ 'QueryView: ' + queryViewLabel }}", class_="text-caption")
-
-                                    with html.Div(style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;"):
-                                        vuetify.VChip(
-                                            "{{ 'Global min/max: ' + detailsGlobalMin + ' / ' + detailsGlobalMax }}",
-                                            size="small",
-                                            variant="outlined",
-                                        )
-                                        vuetify.VChip(
-                                            "{{ 'Median min/max: ' + detailsMedianMin + ' / ' + detailsMedianMax }}",
-                                            size="small",
-                                            variant="outlined",
-                                        )
-                                        vuetify.VChip(
-                                            "{{ 'Mean min/max: ' + detailsMeanMin + ' / ' + detailsMeanMax }}",
-                                            size="small",
-                                            variant="outlined",
-                                        )
-                                        vuetify.VChip(
-                                            "{{ 'Visible sources: ' + selectedSourceLabel }}",
-                                            size="small",
-                                            variant="outlined",
-                                        )
                                 with vuetify.Template(v_else=True):
                                     html.Div("Select a variable", class_="text-caption")
 

@@ -32,29 +32,15 @@ def attach_controllers(server, db, collection, parse_campaign, campaign_path: st
         state.selectedSourceKeys = source_row_keys()
         update_selected_source_label()
 
-    def source_filter_from_selection():
-        all_keys = source_row_keys()
-        selected = set(state.selectedSourceKeys or [])
-        if not all_keys or not selected or len(selected) >= len(all_keys):
-            return None
-
-        clauses = []
-        for row in (state.sourceRows or []):
-            key = str(row.get("_key", ""))
-            if key not in selected:
-                continue
-            clause = {
-                "producer": row.get("producer", ""),
-                "casename": row.get("casename", ""),
-            }
-            file_name = row.get("file", "")
-            if file_name:
-                clause["file"] = file_name
-            clauses.append(clause)
-
-        if not clauses:
-            return None
-        return clauses[0] if len(clauses) == 1 else {"$or": clauses}
+    def source_filter_from_row(row: Dict[str, str]) -> Dict[str, str]:
+        filt: Dict[str, str] = {
+            "producer": row.get("producer", ""),
+            "casename": row.get("casename", ""),
+        }
+        file_name = row.get("file", "")
+        if file_name:
+            filt["file"] = file_name
+        return filt
 
     @ctrl.add("sort_sources")
     def sort_sources(field: str, toggle: bool = True, **_):
@@ -99,6 +85,11 @@ def attach_controllers(server, db, collection, parse_campaign, campaign_path: st
             return
 
         previous_var = state.detailsSelectedVar
+        previous_tile_map = (
+            dict(state.tileVisualizationBySource or {})
+            if previous_var == var_name
+            else {}
+        )
         qf = state.queryFilter or None
         summary = db.variable_min_max_summary(var_name, extra_filter=qf)
 
@@ -147,26 +138,74 @@ def attach_controllers(server, db, collection, parse_campaign, campaign_path: st
             if all_keys and not state.selectedSourceKeys:
                 state.movieTiles = []
                 state.movieDetailsOpen = {}
+                state.tileVisualizationBySource = {}
                 state.movieStatus = "No sources selected"
                 return
 
-            extra = qf
-            source_filter = source_filter_from_selection()
-            if source_filter:
-                extra = and_filter(qf or {}, source_filter)
-            tiles = db.get_first_movie_tiles_for_variable(
-                var_name,
-                extra_filter=extra,
-                limit=9,
-                limit_frames=MAX_MOVIE_FRAMES,
-                fps=MOVIE_FPS,
-            )
+            selected_set = set(state.selectedSourceKeys or [])
+            selected_rows = [r for r in (state.sourceRows or []) if str(r.get("_key", "")) in selected_set]
+
+            tiles: List[Dict[str, str]] = []
+            new_tile_map: Dict[str, str] = {}
+
+            for row in selected_rows:
+                source_key = str(row.get("_key", ""))
+                source_filter = source_filter_from_row(row)
+                source_query = and_filter(qf, source_filter) if qf else source_filter
+
+                vis_names = db.distinct_visualization_names_for_variable(
+                    var_name,
+                    extra_filter=source_query,
+                )
+                selected_vis = str(previous_tile_map.get(source_key, "") or "")
+                if selected_vis not in vis_names:
+                    selected_vis = vis_names[0] if vis_names else ""
+                if selected_vis:
+                    new_tile_map[source_key] = selected_vis
+
+                tile: Dict[str, str] = {
+                    "variable_name": var_name,
+                    "visualization_name": selected_vis,
+                    "producer": row.get("producer", ""),
+                    "casename": row.get("casename", ""),
+                    "file": row.get("file", ""),
+                    "src": "",
+                    "media_type": "video",
+                    "status": "no-visualizations",
+                    "note": "No visualization types for this source",
+                }
+
+                if selected_vis:
+                    movie_query = and_filter(source_query, {"visualization_name": selected_vis})
+                    one = db.get_first_movie_tiles_for_variable(
+                        var_name,
+                        extra_filter=movie_query,
+                        limit=1,
+                        limit_frames=MAX_MOVIE_FRAMES,
+                        fps=MOVIE_FPS,
+                    )
+                    if one:
+                        tile = one[0]
+                    else:
+                        tile["status"] = "no-frames"
+                        tile["note"] = f'No movie for "{selected_vis}"'
+
+                tile["_source_key"] = source_key
+                tile["visualization_options"] = vis_names
+                tile["selected_visualization"] = selected_vis
+                tiles.append(tile)
+
+            state.tileVisualizationBySource = new_tile_map
             state.movieTiles = tiles
             state.movieDetailsOpen = {}
             state.movieStatus = ""
+            if state.movieTiles:
+                with_media = sum(1 for t in state.movieTiles if t.get("src"))
+                state.movieStatus = f"{with_media}/{len(state.movieTiles)} sources with media"
         except Exception as e:
             state.movieTiles = []
             state.movieDetailsOpen = {}
+            state.tileVisualizationBySource = {}
             state.movieStatus = f"Movie query/build failed: {type(e).__name__}: {e}"
 
     @ctrl.add("pick_var")
@@ -204,6 +243,24 @@ def attach_controllers(server, db, collection, parse_campaign, campaign_path: st
         k = str(key or "")
         current = bool((state.movieDetailsOpen or {}).get(k, False))
         state.movieDetailsOpen = {**(state.movieDetailsOpen or {}), k: (not current)}
+
+    @ctrl.add("pick_tile_visualization")
+    def pick_tile_visualization(source_key: str, value=None, **_):
+        key = str(source_key or "")
+        if not key:
+            return
+
+        picked = value
+        if isinstance(picked, dict):
+            picked = picked.get("value", "")
+        picked = str(picked or "")
+
+        by_source = dict(state.tileVisualizationBySource or {})
+        by_source[key] = picked
+        state.tileVisualizationBySource = by_source
+
+        if state.selectedVar:
+            update_selected_var_panels(state.selectedVar)
 
     @ctrl.add("run_query")
     def run_query(**_):
