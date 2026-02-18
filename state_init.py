@@ -65,6 +65,12 @@ def init_state(state, db) -> None:
         for _ in range(9)
     ]
     state.activeGridCell = -1
+    state.contextMenuVisible = False
+    state.contextMenuX = 0
+    state.contextMenuY = 0
+    state.contextMenuKind = ""
+    state.contextMenuItem = ""
+    state.contextMenuCellIndex = -1
 
 
 def clear_details(state) -> None:
@@ -92,3 +98,4 @@ def clear_right_panes(state) -> None:
     state.movieStatus = ""
     state.movieDetailsOpen = {}
     state.tileVisualizationBySource = {}
+    state.contextMenuVisible = False

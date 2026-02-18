@@ -96,6 +96,46 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
             window.trame.trigger("assign_var_to_grid_cell_trigger", [item, idx]);
           }
         });
+
+        document.addEventListener("contextmenu", function(e) {
+          const target = e && e.target;
+          if (!target || !target.closest) return;
+
+          if (target.closest("#catnip-context-menu")) return;
+
+          const itemEl = target.closest(".catnip-draggable-var");
+          if (itemEl) {
+            e.preventDefault();
+            const item = itemEl.getAttribute("data-item") || "";
+            if (item && window.trame && window.trame.trigger) {
+              window.trame.trigger("show_item_context_menu", [item, (e.clientX || 0), (e.clientY || 0)]);
+            }
+            return;
+          }
+
+          const cellEl = target.closest(".catnip-dropcell");
+          if (cellEl) {
+            e.preventDefault();
+            const idx = cellEl.getAttribute("data-cell-index");
+            if (idx !== null && window.trame && window.trame.trigger) {
+              window.trame.trigger("show_cell_context_menu", [idx, (e.clientX || 0), (e.clientY || 0)]);
+            }
+            return;
+          }
+
+          if (window.trame && window.trame.trigger) {
+            window.trame.trigger("hide_context_menu_trigger", []);
+          }
+        });
+
+        document.addEventListener("click", function(e) {
+          const target = e && e.target;
+          if (!target || !target.closest || !target.closest("#catnip-context-menu")) {
+            if (window.trame && window.trame.trigger) {
+              window.trame.trigger("hide_context_menu_trigger", []);
+            }
+          }
+        });
       } catch (err) {
         console.error("catnip drag/drop init failed", err);
       }
@@ -133,6 +173,38 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                 .catnip-drop-hover {
                   background: #e3f2fd !important;
                   box-shadow: inset 0 0 0 2px #1976d2 !important;
+                }
+                #catnip-context-menu {
+                  background: #fff;
+                  border: 1px solid #c9c9c9;
+                  border-radius: 4px;
+                  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.2);
+                  min-width: 170px;
+                  padding: 4px 0;
+                }
+                #catnip-context-menu .menu-item {
+                  padding: 7px 12px;
+                  cursor: pointer;
+                  font-size: 13px;
+                  line-height: 1.2;
+                  user-select: none;
+                }
+                #catnip-context-menu .menu-item:hover {
+                  background: #e3f2fd;
+                }
+                #catnip-context-menu .menu-item.danger:hover {
+                  background: #ffebee;
+                  color: #c62828;
+                }
+                #catnip-context-menu .menu-label {
+                  padding: 6px 12px 4px;
+                  font-size: 11px;
+                  color: #666;
+                  border-bottom: 1px solid #ececec;
+                  margin-bottom: 4px;
+                  white-space: nowrap;
+                  overflow: hidden;
+                  text-overflow: ellipsis;
                 }
                 """
             )
@@ -466,5 +538,22 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                             html.Td("{{ r.max }}", style="white-space:nowrap;")
                                         with vuetify.Template(v_if="!detailsSelectedVar"):
                                             html.Div("Select a variable first.", class_="text-caption")
+
+            with html.Div(
+                id="catnip-context-menu",
+                v_show=("contextMenuVisible",),
+                raw_attrs=[
+                    ':style="{ position: \'fixed\', zIndex: 9999, left: (contextMenuX || 0) + \'px\', top: (contextMenuY || 0) + \'px\' }"'
+                ],
+            ):
+                html.Div("{{ contextMenuItem || 'Menu' }}", classes="menu-label")
+
+                with html.Div(v_if="contextMenuKind === 'item'"):
+                    html.Div("Add To Grid", classes="menu-item", click=ctrl.context_menu_item_add)
+                    html.Div("Select Variable", classes="menu-item", click=ctrl.context_menu_item_select)
+
+                with html.Div(v_if="contextMenuKind === 'cell'"):
+                    html.Div("Select Cell", classes="menu-item", click=ctrl.context_menu_cell_select)
+                    html.Div("Clear Cell", classes="menu-item danger", click=ctrl.context_menu_cell_clear)
 
     return layout

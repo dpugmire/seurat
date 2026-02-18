@@ -526,6 +526,101 @@ def attach_controllers(server, db, collection, parse_campaign, campaign_path: st
         state.activeGridCell = idx
         state.selectedVar = var
 
+    @ctrl.add("hide_context_menu")
+    def hide_context_menu(**_):
+        state.contextMenuVisible = False
+        state.contextMenuKind = ""
+        state.contextMenuItem = ""
+        state.contextMenuCellIndex = -1
+
+    @ctrl.trigger("hide_context_menu_trigger")
+    def hide_context_menu_trigger(**_):
+        hide_context_menu()
+
+    @ctrl.trigger("show_item_context_menu")
+    def show_item_context_menu(item_name, x, y, **_):
+        item = str(item_name or "").strip()
+        if not item:
+            return
+        try:
+            px = int(float(x))
+        except Exception:
+            px = 0
+        try:
+            py = int(float(y))
+        except Exception:
+            py = 0
+
+        state.contextMenuKind = "item"
+        state.contextMenuItem = item
+        state.contextMenuCellIndex = -1
+        state.contextMenuX = px
+        state.contextMenuY = py
+        state.contextMenuVisible = True
+
+    @ctrl.trigger("show_cell_context_menu")
+    def show_cell_context_menu(cell_index, x, y, **_):
+        try:
+            idx = int(cell_index)
+        except Exception:
+            return
+        if idx < 0 or idx >= GRID_CELL_COUNT:
+            return
+        try:
+            px = int(float(x))
+        except Exception:
+            px = 0
+        try:
+            py = int(float(y))
+        except Exception:
+            py = 0
+
+        cells = normalize_grid_cells(state.gridCells)
+        cell = dict(cells[idx] or {})
+        label = str(cell.get("variable_name", "") or "").strip() or f"Cell {idx + 1}"
+
+        state.contextMenuKind = "cell"
+        state.contextMenuItem = label
+        state.contextMenuCellIndex = idx
+        state.contextMenuX = px
+        state.contextMenuY = py
+        state.contextMenuVisible = True
+
+    @ctrl.add("context_menu_item_add")
+    def context_menu_item_add(**_):
+        item = str(state.contextMenuItem or "").strip()
+        if item:
+            add_var_to_grid(item)
+        hide_context_menu()
+
+    @ctrl.add("context_menu_item_select")
+    def context_menu_item_select(**_):
+        item = str(state.contextMenuItem or "").strip()
+        if item:
+            state.selectedVar = item
+            state.draggedVar = item
+        hide_context_menu()
+
+    @ctrl.add("context_menu_cell_clear")
+    def context_menu_cell_clear(**_):
+        try:
+            idx = int(state.contextMenuCellIndex)
+        except Exception:
+            idx = -1
+        if 0 <= idx < GRID_CELL_COUNT:
+            clear_grid_cell(idx)
+        hide_context_menu()
+
+    @ctrl.add("context_menu_cell_select")
+    def context_menu_cell_select(**_):
+        try:
+            idx = int(state.contextMenuCellIndex)
+        except Exception:
+            idx = -1
+        if 0 <= idx < GRID_CELL_COUNT:
+            set_active_grid_cell(idx, 0)
+        hide_context_menu()
+
     @ctrl.add("toggle_sources")
     def toggle_sources(**_):
         state.showSourcesModal = not bool(state.showSourcesModal)
