@@ -1,4 +1,4 @@
-from typing import Dict, List
+from typing import Any, Dict, List
 
 from config import MAX_MOVIE_FRAMES, MOVIE_FPS
 from query_parser import and_filter, python_query_to_mongo
@@ -7,6 +7,7 @@ from state_init import clear_right_panes, fmt
 
 def attach_controllers(server, db, collection, parse_campaign, campaign_path: str):
     state, ctrl = server.state, server.controller
+    GRID_CELL_COUNT = 9
 
     def refresh_variable_list():
         state.variableNames = db.distinct_variable_names(extra_filter=state.queryFilter or None)
@@ -41,6 +42,106 @@ def attach_controllers(server, db, collection, parse_campaign, campaign_path: st
         if file_name:
             filt["file"] = file_name
         return filt
+
+    def empty_grid_cell() -> Dict[str, Any]:
+        return {
+            "variable_name": "",
+            "visualization_name": "",
+            "selected_visualization": "",
+            "visualization_options": [],
+            "producer": "",
+            "casename": "",
+            "file": "",
+            "src": "",
+            "media_type": "",
+            "status": "empty",
+            "note": "",
+        }
+
+    def normalize_grid_cells(raw_cells) -> List[Dict[str, Any]]:
+        items = list(raw_cells or [])[:GRID_CELL_COUNT]
+        cells: List[Dict[str, Any]] = []
+        for item in items:
+            base = empty_grid_cell()
+            if isinstance(item, dict):
+                base.update(item)
+            cells.append(base)
+        while len(cells) < GRID_CELL_COUNT:
+            cells.append(empty_grid_cell())
+        return cells
+
+    def build_grid_cell_for_variable(var_name: str, preferred_vis: str = "") -> Dict[str, Any]:
+        cell = empty_grid_cell()
+        var = str(var_name or "").strip()
+        if not var:
+            return cell
+
+        qf = state.queryFilter or None
+        vis_names = db.distinct_visualization_names_for_variable(var, extra_filter=qf)
+
+        selected_vis = str(preferred_vis or "")
+        if selected_vis not in vis_names:
+            selected_vis = vis_names[0] if vis_names else ""
+
+        cell.update(
+            {
+                "variable_name": var,
+                "visualization_name": selected_vis,
+                "selected_visualization": selected_vis,
+                "visualization_options": vis_names,
+                "status": "no-visualizations",
+                "note": "No visualization types for this variable",
+            }
+        )
+
+        if selected_vis:
+            movie_query = and_filter(qf, {"visualization_name": selected_vis}) if qf else {"visualization_name": selected_vis}
+            one = db.get_first_movie_tiles_for_variable(
+                var,
+                extra_filter=movie_query,
+                limit=1,
+                limit_frames=MAX_MOVIE_FRAMES,
+                fps=MOVIE_FPS,
+            )
+            if one:
+                cell.update(one[0] or {})
+            else:
+                cell["status"] = "no-frames"
+                cell["note"] = f'No movie for "{selected_vis}"'
+
+        cell["variable_name"] = var
+        cell["visualization_name"] = selected_vis
+        cell["selected_visualization"] = selected_vis
+        cell["visualization_options"] = vis_names
+        return cell
+
+    def refresh_grid_cells():
+        cells = normalize_grid_cells(state.gridCells)
+        updated: List[Dict[str, Any]] = []
+
+        for c in cells:
+            var = str(c.get("variable_name", "") or "").strip()
+            if not var:
+                updated.append(empty_grid_cell())
+                continue
+
+            preferred_vis = str(c.get("selected_visualization", "") or "")
+            try:
+                updated.append(build_grid_cell_for_variable(var, preferred_vis=preferred_vis))
+            except Exception as e:
+                err_cell = empty_grid_cell()
+                err_cell["variable_name"] = var
+                err_cell["status"] = "error"
+                err_cell["note"] = f"{type(e).__name__}: {e}"
+                updated.append(err_cell)
+
+        state.gridCells = updated
+
+        try:
+            idx = int(state.activeGridCell)
+        except Exception:
+            idx = -1
+        state.activeGridCell = idx if 0 <= idx < GRID_CELL_COUNT else -1
 
     @ctrl.add("sort_sources")
     def sort_sources(field: str, toggle: bool = True, **_):
@@ -210,7 +311,193 @@ def attach_controllers(server, db, collection, parse_campaign, campaign_path: st
 
     @ctrl.add("pick_var")
     def pick_var(var_name: str, **_):
-        state.selectedVar = var_name
+        picked = str(var_name or "")
+        if str(state.selectedVar or "") == picked:
+            state.selectedVar = ""
+            state.draggedVar = ""
+        else:
+            state.selectedVar = picked
+            state.draggedVar = picked
+
+    @ctrl.add("select_var")
+    def select_var(var_name: str, button=0, **_):
+        try:
+            if int(button) == 2:
+                return
+        except Exception:
+            pass
+
+        picked = str(var_name or "")
+        if not picked:
+            return
+        state.selectedVar = picked
+        state.draggedVar = picked
+
+    @ctrl.add("set_dragged_var")
+    def set_dragged_var(var_name: str, **_):
+        state.draggedVar = str(var_name or "")
+
+    @ctrl.add("add_var_to_grid")
+    def add_var_to_grid(var_name: str, **_):
+        var = str(var_name or "").strip()
+        if not var:
+            return
+
+        cells = normalize_grid_cells(state.gridCells)
+
+        try:
+            active = int(state.activeGridCell)
+        except Exception:
+            active = -1
+
+        target = -1
+        if 0 <= active < GRID_CELL_COUNT:
+            if not str(cells[active].get("variable_name", "") or "").strip():
+                target = active
+
+        if target < 0:
+            for i, c in enumerate(cells):
+                if not str(c.get("variable_name", "") or "").strip():
+                    target = i
+                    break
+
+        if target < 0:
+            target = active if 0 <= active < GRID_CELL_COUNT else 0
+
+        try:
+            cells[target] = build_grid_cell_for_variable(var)
+        except Exception as e:
+            err_cell = empty_grid_cell()
+            err_cell["variable_name"] = var
+            err_cell["status"] = "error"
+            err_cell["note"] = f"{type(e).__name__}: {e}"
+            cells[target] = err_cell
+
+        state.gridCells = cells
+        state.activeGridCell = target
+        state.selectedVar = var
+        state.draggedVar = var
+
+    @ctrl.add("set_active_grid_cell")
+    def set_active_grid_cell(cell_index: int, ignore=0, **_):
+        try:
+            if int(ignore):
+                return
+        except Exception:
+            pass
+
+        try:
+            idx = int(cell_index)
+        except Exception:
+            return
+        if idx < 0 or idx >= GRID_CELL_COUNT:
+            return
+
+        state.activeGridCell = idx
+        cells = normalize_grid_cells(state.gridCells)
+        var = str(cells[idx].get("variable_name", "") or "")
+        if var:
+            state.selectedVar = var
+            state.draggedVar = var
+            return
+
+        selected = str(state.selectedVar or "").strip()
+        if not selected:
+            return
+
+        try:
+            cells[idx] = build_grid_cell_for_variable(selected)
+        except Exception as e:
+            err_cell = empty_grid_cell()
+            err_cell["variable_name"] = selected
+            err_cell["status"] = "error"
+            err_cell["note"] = f"{type(e).__name__}: {e}"
+            cells[idx] = err_cell
+        state.gridCells = cells
+
+    @ctrl.add("clear_grid_cell")
+    def clear_grid_cell(cell_index: int, **_):
+        try:
+            idx = int(cell_index)
+        except Exception:
+            return
+        if idx < 0 or idx >= GRID_CELL_COUNT:
+            return
+
+        cells = normalize_grid_cells(state.gridCells)
+        cells[idx] = empty_grid_cell()
+        state.gridCells = cells
+
+    @ctrl.add("assign_var_to_grid_cell")
+    def assign_var_to_grid_cell(cell_index: int, var_name: str, sync_selection: bool = True, **_):
+        try:
+            idx = int(cell_index)
+        except Exception:
+            return
+        if idx < 0 or idx >= GRID_CELL_COUNT:
+            return
+
+        var = str(var_name or "").strip()
+        if not var:
+            var = str(state.draggedVar or "").strip()
+        if not var:
+            var = str(state.selectedVar or "").strip()
+        if not var:
+            return
+
+        cells = normalize_grid_cells(state.gridCells)
+        try:
+            cells[idx] = build_grid_cell_for_variable(var)
+        except Exception as e:
+            err_cell = empty_grid_cell()
+            err_cell["variable_name"] = var
+            err_cell["status"] = "error"
+            err_cell["note"] = f"{type(e).__name__}: {e}"
+            cells[idx] = err_cell
+        state.gridCells = cells
+        state.activeGridCell = idx
+        if sync_selection:
+            state.selectedVar = var
+            state.draggedVar = var
+
+    @ctrl.trigger("assign_var_to_grid_cell_trigger")
+    def assign_var_to_grid_cell_trigger(var_name, cell_index, **_):
+        assign_var_to_grid_cell(cell_index, var_name, sync_selection=False)
+        # After drag/drop, clear variable highlight in the left panel.
+        state.selectedVar = ""
+        state.draggedVar = ""
+
+    @ctrl.add("pick_grid_cell_visualization")
+    def pick_grid_cell_visualization(cell_index: int, value=None, **_):
+        try:
+            idx = int(cell_index)
+        except Exception:
+            return
+        if idx < 0 or idx >= GRID_CELL_COUNT:
+            return
+
+        cells = normalize_grid_cells(state.gridCells)
+        var = str(cells[idx].get("variable_name", "") or "").strip()
+        if not var:
+            return
+
+        picked = value
+        if isinstance(picked, dict):
+            picked = picked.get("value", "")
+        picked = str(picked or "")
+
+        try:
+            cells[idx] = build_grid_cell_for_variable(var, preferred_vis=picked)
+        except Exception as e:
+            err_cell = empty_grid_cell()
+            err_cell["variable_name"] = var
+            err_cell["status"] = "error"
+            err_cell["note"] = f"{type(e).__name__}: {e}"
+            cells[idx] = err_cell
+
+        state.gridCells = cells
+        state.activeGridCell = idx
+        state.selectedVar = var
 
     @ctrl.add("toggle_sources")
     def toggle_sources(**_):
@@ -278,6 +565,7 @@ def attach_controllers(server, db, collection, parse_campaign, campaign_path: st
                 clear_right_panes(state)
             else:
                 update_selected_var_panels(state.selectedVar)
+            refresh_grid_cells()
             return
 
         try:
@@ -300,6 +588,7 @@ def attach_controllers(server, db, collection, parse_campaign, campaign_path: st
             clear_right_panes(state)
         else:
             update_selected_var_panels(state.selectedVar)
+        refresh_grid_cells()
 
     @ctrl.add("clear_query")
     def clear_query(**_):
@@ -315,6 +604,7 @@ def attach_controllers(server, db, collection, parse_campaign, campaign_path: st
             clear_right_panes(state)
         else:
             update_selected_var_panels(state.selectedVar)
+        refresh_grid_cells()
 
     @state.change("selectedVar")
     def on_selected_var(selectedVar, **_):

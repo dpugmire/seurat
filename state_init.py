@@ -24,6 +24,7 @@ def init_state(state, db) -> None:
     state.queryError = ""
     state.queryFilter = {}
     state.queryViewLabel = "ALL"
+    state.draggedVar = ""
 
     state.detailsSelectedVar = ""
     state.detailsNumSources = 0
@@ -46,6 +47,24 @@ def init_state(state, db) -> None:
     state.movieStatus = ""
     state.movieDetailsOpen = {}
     state.tileVisualizationBySource = {}
+
+    state.gridCells = [
+        {
+            "variable_name": "",
+            "visualization_name": "",
+            "selected_visualization": "",
+            "visualization_options": [],
+            "producer": "",
+            "casename": "",
+            "file": "",
+            "src": "",
+            "media_type": "",
+            "status": "empty",
+            "note": "",
+        }
+        for _ in range(9)
+    ]
+    state.activeGridCell = -1
 
 
 def clear_details(state) -> None:

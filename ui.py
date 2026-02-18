@@ -1,10 +1,81 @@
 from trame.ui.vuetify3 import SinglePageLayout
-from trame.widgets import html
+from trame.widgets import client, html
 from trame.widgets import vuetify3 as vuetify
 
 
 def build_ui(server, refresh_variable_list, campaign_name: str = ""):
     state, ctrl = server.state, server.controller
+    drag_drop_js = """
+    (function initCatnipDragDrop() {
+      try {
+        if (window.__catnipDnDInit) return;
+        if (typeof window.trame === "undefined") {
+          setTimeout(initCatnipDragDrop, 200);
+          return;
+        }
+        window.__catnipDnDInit = true;
+
+        document.addEventListener("dragstart", function(e) {
+          const target = e && e.target;
+          if (!target || !target.closest) return;
+          const el = target.closest(".catnip-draggable-var");
+          if (!el || !e.dataTransfer) return;
+          const item = el.getAttribute("data-item") || "";
+          if (!item) return;
+          e.dataTransfer.setData("text/plain", item);
+          e.dataTransfer.setData("application/x-catnip-var", item);
+          e.dataTransfer.effectAllowed = "copy";
+          el.style.opacity = "0.45";
+        });
+
+        document.addEventListener("dragend", function(e) {
+          const target = e && e.target;
+          if (!target || !target.closest) return;
+          const el = target.closest(".catnip-draggable-var");
+          if (el) el.style.opacity = "1";
+        });
+
+        document.addEventListener("dragover", function(e) {
+          const target = e && e.target;
+          if (!target || !target.closest) return;
+          const el = target.closest(".catnip-dropcell");
+          if (!el) return;
+          e.preventDefault();
+          if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+          el.classList.add("catnip-drop-hover");
+        });
+
+        document.addEventListener("dragleave", function(e) {
+          const target = e && e.target;
+          if (!target || !target.closest) return;
+          const el = target.closest(".catnip-dropcell");
+          if (!el) return;
+          if (!el.contains(e.relatedTarget)) {
+            el.classList.remove("catnip-drop-hover");
+          }
+        });
+
+        document.addEventListener("drop", function(e) {
+          const target = e && e.target;
+          if (!target || !target.closest) return;
+          const el = target.closest(".catnip-dropcell");
+          if (!el) return;
+          e.preventDefault();
+          el.classList.remove("catnip-drop-hover");
+          const item = e.dataTransfer
+            ? (e.dataTransfer.getData("text/plain") || e.dataTransfer.getData("application/x-catnip-var") || "")
+            : "";
+          const idx = el.getAttribute("data-cell-index");
+          if (!item || idx === null) return;
+          if (window.trame && window.trame.trigger) {
+            window.trame.trigger("assign_var_to_grid_cell_trigger", [item, idx]);
+          }
+        });
+      } catch (err) {
+        console.error("catnip drag/drop init failed", err);
+      }
+    })();
+    """
 
     with SinglePageLayout(server) as layout:
         layout.title.set_text(
@@ -28,6 +99,18 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                 html.Span("{{ queryError }}", class_="text-caption ml-2", style="color:#b00020;")
 
         with layout.content:
+            client.Script(drag_drop_js)
+            client.Style(
+                """
+                .catnip-draggable-var { cursor: grab; user-select: none; }
+                .catnip-draggable-var:active { cursor: grabbing; }
+                .catnip-dropcell { transition: background 0.15s, box-shadow 0.15s; }
+                .catnip-drop-hover {
+                  background: #e3f2fd !important;
+                  box-shadow: inset 0 0 0 2px #1976d2 !important;
+                }
+                """
+            )
             with vuetify.VContainer(fluid=True, class_="pa-2"):
                 with vuetify.VRow():
                     with vuetify.VCol(cols=2, style="display:flex; flex-direction:column; height:80vh;"):
@@ -37,54 +120,102 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                             with vuetify.VCardText(style="height:100%; overflow-y:auto;"):
                                 with vuetify.VList(density="compact"):
                                     with vuetify.Template(v_for="v in variableNames", key="v"):
-                                        vuetify.VListItem(
-                                            title=("v",),
-                                            active=("v === selectedVar",),
+                                        with html.Div(
                                             click=(ctrl.pick_var, "[v]"),
-                                        )
+                                            draggable="true",
+                                            classes="catnip-draggable-var",
+                                            raw_attrs=[':data-item="v"'],
+                                            style=(
+                                                "('padding:8px 10px; border-radius:4px; cursor:grab; user-select:none;'"
+                                                " + ((v === selectedVar) ? 'background:#e8e8e8;' : ''))",
+                                            ),
+                                        ):
+                                            html.Span("{{ v }}")
 
                     with vuetify.VCol(cols=10, style="display:flex; flex-direction:column; height:80vh;"):
                         with vuetify.VCard(variant="outlined", style="flex:1 1 auto; min-height:0;"):
                             with vuetify.VCardText(style="height:100%; overflow-y:auto;"):
-                                with vuetify.Template(v_if="movieTiles.length"):
-                                    with vuetify.VRow(dense=True):
-                                        with vuetify.Template(v_for="(tile, i) in movieTiles", key="(tile._source_key || '') + '-' + (tile.selected_visualization || '') + '-' + i"):
-                                            with vuetify.VCol(cols="12", sm="6", md="4", class_="pa-1"):
-                                                with vuetify.VCardTitle(class_="pa-1"):
-                                                    with html.Div(style="display:flex; align-items:center; gap:8px; width:100%;"):
-                                                        html.Div(
-                                                            "{{ selectedVar || 'variable' }}",
-                                                            style="flex:1; min-width:0; font-size:0.95rem; font-weight:400; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;",
-                                                        )
-                                                        with vuetify.Template(v_if="tile.visualization_options && tile.visualization_options.length"):
-                                                            vuetify.VSelect(
-                                                                model_value=("tile.selected_visualization",),
-                                                                items=("tile.visualization_options", []),
-                                                                density="compact",
-                                                                hide_details=True,
-                                                                variant="outlined",
-                                                                style="max-width:160px; font-size:0.85rem;",
-                                                                change=(
-                                                                    ctrl.pick_tile_visualization,
-                                                                    "[(tile._source_key || ''), $event]",
-                                                                ),
-                                                                update_modelValue=(
-                                                                    ctrl.pick_tile_visualization,
-                                                                    "[(tile._source_key || ''), $event]",
-                                                                ),
-                                                            )
-                                                        vuetify.VBtn(
-                                                            "DETAILS",
-                                                            size="x-small",
-                                                            variant="tonal",
-                                                            class_="ml-1",
-                                                            click=(
-                                                                ctrl.toggle_movie_details,
-                                                                "[ (tile.visualization_name || '') + '|' + (tile.producer || '') + '|' + (tile.casename || '') + '|' + (tile.file || '') ]",
+                                with html.Div(
+                                    style=(
+                                        "display:grid;"
+                                        "grid-template-columns:repeat(3, minmax(0, 1fr));"
+                                        "grid-template-rows:repeat(3, minmax(220px, 1fr));"
+                                        "border:1px solid #cfcfcf;"
+                                        "min-height:100%;"
+                                    )
+                                ):
+                                    with vuetify.Template(v_for="(tile, i) in gridCells", key="i"):
+                                        with html.Div(
+                                            click=(
+                                                ctrl.set_active_grid_cell,
+                                                "[i, (($event && $event.target && $event.target.closest && $event.target.closest('.catnip-cell-close')) ? 1 : 0)]",
+                                            ),
+                                            classes="catnip-dropcell",
+                                            raw_attrs=[':data-cell-index="i"'],
+                                            style=(
+                                                "('padding:6px; overflow:hidden; cursor:pointer; position:relative;'"
+                                                " + ((i % 3 !== 2) ? 'border-right:1px solid #cfcfcf;' : '')"
+                                                " + ((i < 6) ? 'border-bottom:1px solid #cfcfcf;' : '')"
+                                                " + ((activeGridCell === i) ? 'background:#eef5ff; box-shadow: inset 0 0 0 2px #1e88e5;' : ''))",
+                                            ),
+                                        ):
+                                            with vuetify.Template(v_if="tile && tile.variable_name"):
+                                                html.Button(
+                                                    "x",
+                                                    classes="catnip-cell-close",
+                                                    click=(ctrl.clear_grid_cell, "[i]"),
+                                                    style=(
+                                                        "position:absolute;"
+                                                        "top:4px;"
+                                                        "right:4px;"
+                                                        "width:16px;"
+                                                        "height:16px;"
+                                                        "line-height:14px;"
+                                                        "padding:0;"
+                                                        "font-size:10px;"
+                                                        "border:1px solid #888;"
+                                                        "border-radius:2px;"
+                                                        "background:#fff;"
+                                                        "color:#333;"
+                                                        "cursor:pointer;"
+                                                        "z-index:3;"
+                                                    ),
+                                                    title="Remove",
+                                                )
+                                                with html.Div(style="display:flex; align-items:center; gap:8px; width:100%; padding:4px 4px 2px 4px;"):
+                                                    html.Div(
+                                                        "{{ tile.variable_name || 'variable' }}",
+                                                        style="flex:1; min-width:0; font-size:0.95rem; font-weight:400; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;",
+                                                    )
+                                                    with vuetify.Template(v_if="tile.visualization_options && tile.visualization_options.length"):
+                                                        vuetify.VSelect(
+                                                            model_value=("tile.selected_visualization",),
+                                                            items=("tile.visualization_options", []),
+                                                            density="compact",
+                                                            hide_details=True,
+                                                            variant="outlined",
+                                                            style="max-width:160px; font-size:0.85rem;",
+                                                            change=(
+                                                                ctrl.pick_grid_cell_visualization,
+                                                                "[i, $event]",
+                                                            ),
+                                                            update_modelValue=(
+                                                                ctrl.pick_grid_cell_visualization,
+                                                                "[i, $event]",
                                                             ),
                                                         )
+                                                    vuetify.VBtn(
+                                                        "DETAILS",
+                                                        size="x-small",
+                                                        variant="tonal",
+                                                        class_="ml-1",
+                                                        click=(
+                                                            ctrl.toggle_movie_details,
+                                                            "[ (tile.visualization_name || '') + '|' + (tile.producer || '') + '|' + (tile.casename || '') + '|' + (tile.file || '') ]",
+                                                        ),
+                                                    )
 
-                                                with vuetify.VCardText(class_="pt-0 pb-1"):
+                                                with html.Div(style="padding:0 4px 4px 4px;"):
                                                     with vuetify.Template(v_if="tile.src"):
                                                         with vuetify.Template(v_if="tile.media_type === 'image'"):
                                                             html.Img(
@@ -98,7 +229,7 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                                     "background:transparent;"
                                                                 ),
                                                             )
-                                                        with vuetify.Template(v_else=True):
+                                                        with vuetify.Template(v_if="tile.media_type !== 'image'"):
                                                             html.Video(
                                                                 src=("tile.src",),
                                                                 controls=True,
@@ -114,7 +245,7 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                                     "background:transparent;"
                                                                 ),
                                                             )
-                                                    with vuetify.Template(v_else=True):
+                                                    with vuetify.Template(v_if="!tile.src"):
                                                         html.Div(
                                                             "{{ tile.note ? tile.note : 'No movie src' }}",
                                                             class_="text-caption",
@@ -125,7 +256,7 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                     with vuetify.VCardText(
                                                         class_="pt-0",
                                                         v_show=(
-                                                            "movieDetailsOpen[(tile.visualization_name || '') + '|' + (tile.producer || '') + '|' + (tile.casename || '') + '|' + (tile.file || '')]"
+                                                            "(movieDetailsOpen || {})[(tile.visualization_name || '') + '|' + (tile.producer || '') + '|' + (tile.casename || '') + '|' + (tile.file || '')]"
                                                         ),
                                                     ):
                                                         with vuetify.VTable(density="compact"):
@@ -134,9 +265,19 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                                     with html.Tr():
                                                                         html.Td(key, class_="text-caption font-weight-medium", style="width:160px;")
                                                                         html.Td(f"{{{{ tile.{key} }}}}", class_="text-caption")
-                                with vuetify.Template(v_else=True):
-                                    html.Div("Select a variable to begin.", class_="text-caption", v_if="!selectedVar")
-                                    html.Div("No movies for selected sources.", class_="text-caption", v_else=True)
+                                            with vuetify.Template(v_if="!(tile && tile.variable_name)"):
+                                                html.Div(
+                                                    "Drop variable here",
+                                                    class_="text-caption",
+                                                    style=(
+                                                        "height:100%;"
+                                                        "min-height:180px;"
+                                                        "display:flex;"
+                                                        "align-items:center;"
+                                                        "justify-content:center;"
+                                                        "color:#777;"
+                                                    ),
+                                                )
 
                         html.Div(style="height: 8px; flex:0 0 auto;")
 
@@ -151,7 +292,7 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                             size="small",
                                             click=ctrl.toggle_sources,
                                         )
-                                        with vuetify.Template(v_if="selectedSourceKeys.length !== sourceRows.length"):
+                                        with vuetify.Template(v_if="(selectedSourceKeys || []).length !== (sourceRows || []).length"):
                                             vuetify.VBtn(
                                                 "Show all",
                                                 variant="text",
@@ -174,7 +315,7 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                 html.Span("{{ detailsMeanMin + ' / ' + detailsMeanMax }}")
                                         vuetify.VSpacer()
                                         html.Div("{{ 'QueryView: ' + queryViewLabel }}", class_="text-caption")
-                                with vuetify.Template(v_else=True):
+                                with vuetify.Template(v_if="!detailsSelectedVar"):
                                     html.Div("Select a variable", class_="text-caption")
 
                         with vuetify.VDialog(v_model=("showSourcesModal",), max_width="1200"):
@@ -183,7 +324,7 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                     with html.Div(style="display:flex; align-items:center; gap:8px; width:100%;"):
                                         html.Div("{{ detailsSelectedVar ? ('Sources: ' + detailsSelectedVar) : 'Sources' }}")
                                         vuetify.VSpacer()
-                                        with vuetify.Template(v_if="selectedSourceKeys.length !== sourceRows.length"):
+                                        with vuetify.Template(v_if="(selectedSourceKeys || []).length !== (sourceRows || []).length"):
                                             vuetify.VBtn(
                                                 "Show all",
                                                 variant="text",
@@ -218,7 +359,7 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                                     size="x-small",
                                                                     class_="ml-1",
                                                                 )
-                                                            with vuetify.Template(v_else=True):
+                                                            with vuetify.Template(v_if="sourceSortField !== 'show'"):
                                                                 vuetify.VIcon("mdi-sort", size="x-small", class_="ml-1")
                                                         with html.Th(
                                                             style="cursor:pointer; user-select:none; white-space:nowrap;",
@@ -231,7 +372,7 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                                     size="x-small",
                                                                     class_="ml-1",
                                                                 )
-                                                            with vuetify.Template(v_else=True):
+                                                            with vuetify.Template(v_if="sourceSortField !== 'producer'"):
                                                                 vuetify.VIcon("mdi-sort", size="x-small", class_="ml-1")
 
                                                         with html.Th(
@@ -245,7 +386,7 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                                     size="x-small",
                                                                     class_="ml-1",
                                                                 )
-                                                            with vuetify.Template(v_else=True):
+                                                            with vuetify.Template(v_if="sourceSortField !== 'casename'"):
                                                                 vuetify.VIcon("mdi-sort", size="x-small", class_="ml-1")
 
                                                         with html.Th(
@@ -259,7 +400,7 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                                     size="x-small",
                                                                     class_="ml-1",
                                                                 )
-                                                            with vuetify.Template(v_else=True):
+                                                            with vuetify.Template(v_if="sourceSortField !== 'min'"):
                                                                 vuetify.VIcon("mdi-sort", size="x-small", class_="ml-1")
 
                                                         with html.Th(
@@ -273,13 +414,13 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                                     size="x-small",
                                                                     class_="ml-1",
                                                                 )
-                                                            with vuetify.Template(v_else=True):
+                                                            with vuetify.Template(v_if="sourceSortField !== 'max'"):
                                                                 vuetify.VIcon("mdi-sort", size="x-small", class_="ml-1")
                                                 with html.Tbody():
                                                     with vuetify.Template(v_for="(r, i) in sourceRows", key="i"):
                                                         with html.Tr(
                                                             style=(
-                                                                "selectedSourceKeys.includes(r._key) ? "
+                                                                "((selectedSourceKeys || []).includes(r._key)) ? "
                                                                 "'background-color:#f5f5f5; cursor:pointer;' : "
                                                                 "'cursor:pointer;'",
                                                             ),
@@ -287,14 +428,14 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                             with html.Td(style="text-align:center; white-space:nowrap;"):
                                                                 html.Input(
                                                                     type="checkbox",
-                                                                    checked=("selectedSourceKeys.includes(r._key)",),
+                                                                    checked=("((selectedSourceKeys || []).includes(r._key))",),
                                                                     click=(ctrl.toggle_source_visibility, "[r._key]"),
                                                                 )
                                                             html.Td("{{ r.producer }}", style="white-space:nowrap;")
                                                             html.Td("{{ r.casename }}", style="white-space:nowrap;")
                                                             html.Td("{{ r.min }}", style="white-space:nowrap;")
                                                             html.Td("{{ r.max }}", style="white-space:nowrap;")
-                                    with vuetify.Template(v_else=True):
-                                        html.Div("Select a variable first.", class_="text-caption")
+                                        with vuetify.Template(v_if="!detailsSelectedVar"):
+                                            html.Div("Select a variable first.", class_="text-caption")
 
     return layout
