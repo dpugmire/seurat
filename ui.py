@@ -324,10 +324,10 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                                 style=(
                                                                     "display:block;"
                                                                     "width:100%;"
-                                                                    "height:160px;"
-                                                                    "object-fit:cover;"
+                                                                    "aspect-ratio:1 / 1;"
+                                                                    "object-fit:contain;"
                                                                     "border-radius:4px;"
-                                                                    "background:transparent;"
+                                                                    "background:#111;"
                                                                 ),
                                                             )
                                                         with vuetify.Template(v_if="tile.media_type !== 'image'"):
@@ -340,10 +340,10 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                                 style=(
                                                                     "display:block;"
                                                                     "width:100%;"
-                                                                    "height:160px;"
-                                                                    "object-fit:cover;"
+                                                                    "aspect-ratio:1 / 1;"
+                                                                    "object-fit:contain;"
                                                                     "border-radius:4px;"
-                                                                    "background:transparent;"
+                                                                    "background:#111;"
                                                                 ),
                                                             )
                                                     with vuetify.Template(v_if="!tile.src"):

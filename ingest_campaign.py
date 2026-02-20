@@ -59,20 +59,50 @@ def extract_file_var_img(input: str) -> tuple[str, str, str, str, str]:
     parts = input.split("/")
     if len(parts) < 4:
         raise ValueError(f"Invalid image variable format: {input}")
-    producer = parts[0]
-    casename = parts[1]
-    varname = parts[3]
-    filename = parts[2]
+
+    producer, casename, filename, varname, _ = _parse_image_path_components(parts)
     varpath = input
     return (varname, filename, varpath, producer, casename)
 
 
 def get_visualization_name(input: str) -> str:
     parts = input.split("/")
-    if "images" in parts:
-        idx = parts.index("images")
-        return parts[idx + 1]
-    return ""
+    _, _, _, _, visualization_name = _parse_image_path_components(parts)
+    return visualization_name
+
+
+def _parse_image_path_components(parts: list[str]) -> tuple[str, str, str, str, str]:
+    """
+    Parse campaign image logical paths by anchoring on the .bp segment.
+
+    Expected robust layout:
+      <producer>/<optional-casename>/.../<file.bp>/<var>/images/<vis>/<image>.png[/<size>]
+    """
+    producer = parts[0] if parts else ""
+    casename = parts[1] if len(parts) > 1 else ""
+    filename = parts[2] if len(parts) > 2 else ""
+    varname = parts[3] if len(parts) > 3 else ""
+    visualization_name = ""
+
+    bp_idx = next((i for i, p in enumerate(parts) if p.lower().endswith(".bp")), -1)
+    if bp_idx >= 0:
+        filename = parts[bp_idx]
+        if bp_idx - 1 >= 0:
+            casename = parts[bp_idx - 1]
+        if bp_idx + 1 < len(parts):
+            varname = parts[bp_idx + 1]
+
+        if "images" in parts[bp_idx + 1 :]:
+            rel_idx = parts[bp_idx + 1 :].index("images")
+            images_idx = bp_idx + 1 + rel_idx
+            if images_idx + 1 < len(parts):
+                visualization_name = parts[images_idx + 1]
+        elif bp_idx + 2 < len(parts):
+            candidate = parts[bp_idx + 2]
+            if not candidate.lower().endswith(".png") and not re.fullmatch(r"\d+x\d+", candidate):
+                visualization_name = candidate
+
+    return producer, casename, filename, varname, visualization_name
 
 
 def png_size(png_bytes: bytes) -> tuple[int, int]:
