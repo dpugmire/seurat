@@ -71,6 +71,8 @@ def init_state(state, db) -> None:
     state.contextMenuKind = ""
     state.contextMenuItem = ""
     state.contextMenuCellIndex = -1
+    state.contextMenuCellVisualizationOptions = []
+    state.contextMenuCellSelectedVisualization = ""
 
 
 def clear_details(state) -> None:
@@ -99,3 +101,5 @@ def clear_right_panes(state) -> None:
     state.movieDetailsOpen = {}
     state.tileVisualizationBySource = {}
     state.contextMenuVisible = False
+    state.contextMenuCellVisualizationOptions = []
+    state.contextMenuCellSelectedVisualization = ""

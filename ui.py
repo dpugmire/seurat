@@ -23,14 +23,46 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
           return DEFAULT_FPS;
         }
 
+        function getVcrSliderFrameValue() {
+          const slider = document.getElementById("catnip-vcr-step-slider");
+          const raw = Number(slider && slider.value);
+          if (Number.isFinite(raw) && raw >= 0) {
+            return Math.round(raw);
+          }
+          return 0;
+        }
+
         function updateVcrTimeLabelFromSeconds(rawSeconds, videos) {
           const label = document.getElementById("catnip-vcr-time-value");
-          if (!label) return;
           const seconds = Number(rawSeconds);
           const safeSeconds = Number.isFinite(seconds) && seconds >= 0 ? seconds : 0;
           const fps = inferFpsForVideos(videos);
           const frameCounter = safeSeconds * fps;
-          label.textContent = "Time = " + frameCounter.toFixed(6);
+          if (label) {
+            label.textContent = "Time = " + frameCounter.toFixed(6);
+          }
+
+          const slider = document.getElementById("catnip-vcr-step-slider");
+          if (!slider) return;
+
+          let minDuration = Infinity;
+          for (const v of (videos || [])) {
+            const d = Number(v && v.duration);
+            if (Number.isFinite(d) && d > 0) {
+              minDuration = Math.min(minDuration, d);
+            }
+          }
+          let maxFrames = 1;
+          if (Number.isFinite(minDuration)) {
+            maxFrames = Math.max(1, Math.round(Math.max(0, minDuration - 0.04) * fps));
+          }
+          slider.min = "0";
+          slider.max = String(maxFrames);
+          slider.step = "1";
+
+          const frameValue = Math.round(frameCounter);
+          const clamped = Math.max(0, Math.min(frameValue, maxFrames));
+          slider.value = String(clamped);
         }
 
         // Always expose a VCR handler, even when drag/drop was initialized
@@ -97,9 +129,11 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
           }
 
           function inferFrameStepSeconds(vs) {
-            return 1.0 / inferFpsForVideos(vs);
+            const fps = inferFpsForVideos(vs);
+            return 1.0 / fps;
           }
 
+          const fps = inferFpsForVideos(videos);
           const frameStep = inferFrameStepSeconds(videos);
           const current = Number(videos[0] && videos[0].currentTime);
           const base = Number.isFinite(current) ? current : 0;
@@ -129,6 +163,10 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
             setAllTime(endTime !== null ? endTime : base);
             return;
           }
+          if (a === "slider") {
+            setAllTime(getVcrSliderFrameValue() / fps);
+            return;
+          }
           if (a === "frameback") {
             setAllTime(base - frameStep);
             return;
@@ -145,6 +183,26 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
             setAllTime(base + frameStep);
           }
         };
+
+        if (!window.__catnipVcrSliderInit) {
+          window.__catnipVcrSliderInit = true;
+          document.addEventListener("input", function(e) {
+            const target = e && e.target;
+            if (target && target.id === "catnip-vcr-step-slider") {
+              if (window.catnipGridVcr) {
+                window.catnipGridVcr("slider");
+              }
+            }
+          }, true);
+          document.addEventListener("change", function(e) {
+            const target = e && e.target;
+            if (target && target.id === "catnip-vcr-step-slider") {
+              if (window.catnipGridVcr) {
+                window.catnipGridVcr("slider");
+              }
+            }
+          }, true);
+        }
 
         if (window.__catnipDnDInit) return;
         window.__catnipDnDInit = true;
@@ -199,7 +257,8 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
         }
 
         function inferFrameStepSeconds(videos) {
-          return 1.0 / inferFpsForVideos(videos);
+          const fps = inferFpsForVideos(videos);
+          return 1.0 / fps;
         }
 
         function setAllVideoTimes(videos, rawTime) {
@@ -328,6 +387,25 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
           seekAllVideosBy(frameStep * Number(frameCount || 0));
         }
 
+        function seekAllVideosToSlider() {
+          const videos = getGridVideos();
+          if (!videos.length) {
+            updateVcrTimeLabelFromSeconds(0, []);
+            return;
+          }
+          const fps = inferFpsForVideos(videos);
+          const targetSeconds = getVcrSliderFrameValue() / fps;
+          const t = setAllVideoTimes(videos, targetSeconds);
+          gridVcrState.syncTime = t;
+          updateVcrTimeLabelFromSeconds(t, videos);
+          if (gridVcrState.playing) {
+            playAllVideos(videos);
+            startSyncTimer();
+          } else {
+            pauseAllVideos(videos);
+          }
+        }
+
         function setAllToStart() {
           const videos = getGridVideos();
           if (!videos.length) {
@@ -420,6 +498,10 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
           }
           if (a === "frame") {
             stepAllVideosByFrames(1);
+            return;
+          }
+          if (a === "slider") {
+            seekAllVideosToSlider();
             return;
           }
           if (a === "back") {
@@ -643,12 +725,18 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                   box-shadow: inset 0 0 0 2px #1976d2 !important;
                 }
                 .catnip-vcr-bar {
+                  display: grid;
+                  grid-template-columns: 1fr auto 1fr;
+                  align-items: center;
+                  width: 100%;
+                  min-height: 28px;
+                  margin: 0 0 8px 0;
+                }
+                .catnip-vcr-controls {
                   display: flex;
                   align-items: center;
-                  justify-content: center;
                   gap: 6px;
-                  width: max-content;
-                  margin: 0 auto 8px auto;
+                  justify-self: start;
                 }
                 .catnip-vcr-btn,
                 .catnip-vcr-bar button[data-vcr-action] {
@@ -666,6 +754,17 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                 .catnip-vcr-btn:hover,
                 .catnip-vcr-bar button[data-vcr-action]:hover {
                   background: #f2f2f2;
+                }
+                .catnip-vcr-time {
+                  justify-self: center;
+                  min-width: 170px;
+                  text-align: center;
+                }
+                .catnip-vcr-slider {
+                  justify-self: start;
+                  margin-left: 44px;
+                  width: 220px;
+                  cursor: pointer;
                 }
                 #catnip-context-menu {
                   background: #fff;
@@ -688,6 +787,13 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                 #catnip-context-menu .menu-item.danger:hover {
                   background: #ffebee;
                   color: #c62828;
+                }
+                #catnip-context-menu .menu-section {
+                  padding: 6px 12px 4px;
+                  font-size: 11px;
+                  color: #666;
+                  border-top: 1px solid #ececec;
+                  margin-top: 4px;
                 }
                 #catnip-context-menu .menu-label {
                   padding: 6px 12px 4px;
@@ -726,81 +832,94 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                         with vuetify.VCard(variant="outlined", style="flex:1 1 auto; min-height:0;"):
                             with vuetify.VCardText(style="height:100%; overflow:auto;"):
                                 with html.Div(classes="catnip-vcr-bar"):
-                                    html.Button(
-                                        "|<",
-                                        classes="catnip-vcr-btn",
-                                        raw_attrs=[
-                                            'type="button"',
-                                            'data-vcr-action="start"',
-                                            "onclick=\"window.catnipGridVcr && window.catnipGridVcr('start'); return false;\"",
-                                        ],
-                                        title="Jump to start",
-                                    )
-                                    html.Button(
-                                        "<<",
-                                        classes="catnip-vcr-btn",
-                                        raw_attrs=[
-                                            'type="button"',
-                                            'data-vcr-action="back"',
-                                            "onclick=\"window.catnipGridVcr && window.catnipGridVcr('back'); return false;\"",
-                                        ],
-                                        title="Back 1 frame",
-                                    )
-                                    html.Button(
-                                        "▶",
-                                        classes="catnip-vcr-btn",
-                                        raw_attrs=[
-                                            'type="button"',
-                                            'data-vcr-action="play"',
-                                            "onclick=\"window.catnipGridVcr && window.catnipGridVcr('play'); return false;\"",
-                                        ],
-                                        title="Play all",
-                                    )
-                                    html.Button(
-                                        "⏸",
-                                        classes="catnip-vcr-btn",
-                                        raw_attrs=[
-                                            'type="button"',
-                                            'data-vcr-action="pause"',
-                                            "onclick=\"window.catnipGridVcr && window.catnipGridVcr('pause'); return false;\"",
-                                        ],
-                                        title="Pause all",
-                                    )
-                                    html.Button(
-                                        "⏹",
-                                        classes="catnip-vcr-btn",
-                                        raw_attrs=[
-                                            'type="button"',
-                                            'data-vcr-action="stop"',
-                                            "onclick=\"window.catnipGridVcr && window.catnipGridVcr('stop'); return false;\"",
-                                        ],
-                                        title="Stop and reset",
-                                    )
-                                    html.Button(
-                                        ">>",
-                                        classes="catnip-vcr-btn",
-                                        raw_attrs=[
-                                            'type="button"',
-                                            'data-vcr-action="forward"',
-                                            "onclick=\"window.catnipGridVcr && window.catnipGridVcr('forward'); return false;\"",
-                                        ],
-                                        title="Forward 1 frame",
-                                    )
-                                    html.Button(
-                                        ">|",
-                                        classes="catnip-vcr-btn",
-                                        raw_attrs=[
-                                            'type="button"',
-                                            'data-vcr-action="end"',
-                                            "onclick=\"window.catnipGridVcr && window.catnipGridVcr('end'); return false;\"",
-                                        ],
-                                        title="Jump to end",
-                                    )
+                                    with html.Div(classes="catnip-vcr-controls"):
+                                        html.Button(
+                                            "|<",
+                                            classes="catnip-vcr-btn",
+                                            raw_attrs=[
+                                                'type="button"',
+                                                'data-vcr-action="start"',
+                                                "onclick=\"window.catnipGridVcr && window.catnipGridVcr('start'); return false;\"",
+                                            ],
+                                            title="Jump to start",
+                                        )
+                                        html.Button(
+                                            "<<",
+                                            classes="catnip-vcr-btn",
+                                            raw_attrs=[
+                                                'type="button"',
+                                                'data-vcr-action="back"',
+                                                "onclick=\"window.catnipGridVcr && window.catnipGridVcr('back'); return false;\"",
+                                            ],
+                                            title="Back step",
+                                        )
+                                        html.Button(
+                                            "▶",
+                                            classes="catnip-vcr-btn",
+                                            raw_attrs=[
+                                                'type="button"',
+                                                'data-vcr-action="play"',
+                                                "onclick=\"window.catnipGridVcr && window.catnipGridVcr('play'); return false;\"",
+                                            ],
+                                            title="Play all",
+                                        )
+                                        html.Button(
+                                            "⏸",
+                                            classes="catnip-vcr-btn",
+                                            raw_attrs=[
+                                                'type="button"',
+                                                'data-vcr-action="pause"',
+                                                "onclick=\"window.catnipGridVcr && window.catnipGridVcr('pause'); return false;\"",
+                                            ],
+                                            title="Pause all",
+                                        )
+                                        html.Button(
+                                            "⏹",
+                                            classes="catnip-vcr-btn",
+                                            raw_attrs=[
+                                                'type="button"',
+                                                'data-vcr-action="stop"',
+                                                "onclick=\"window.catnipGridVcr && window.catnipGridVcr('stop'); return false;\"",
+                                            ],
+                                            title="Stop and reset",
+                                        )
+                                        html.Button(
+                                            ">>",
+                                            classes="catnip-vcr-btn",
+                                            raw_attrs=[
+                                                'type="button"',
+                                                'data-vcr-action="forward"',
+                                                "onclick=\"window.catnipGridVcr && window.catnipGridVcr('forward'); return false;\"",
+                                            ],
+                                            title="Forward step",
+                                        )
+                                        html.Button(
+                                            ">|",
+                                            classes="catnip-vcr-btn",
+                                            raw_attrs=[
+                                                'type="button"',
+                                                'data-vcr-action="end"',
+                                                "onclick=\"window.catnipGridVcr && window.catnipGridVcr('end'); return false;\"",
+                                            ],
+                                            title="Jump to end",
+                                        )
                                     html.Span(
                                         "Time = 0.000000",
                                         id="catnip-vcr-time-value",
-                                        class_="text-caption",
-                                        style="margin-left:12px; min-width:150px; text-align:left;",
+                                        class_="text-caption catnip-vcr-time",
+                                    )
+                                    html.Input(
+                                        type="range",
+                                        id="catnip-vcr-step-slider",
+                                        classes="catnip-vcr-slider",
+                                        raw_attrs=[
+                                            'min="0"',
+                                            'max="20"',
+                                            'step="1"',
+                                            'value="0"',
+                                            'aria-label="Timestep"',
+                                            'title="Timestep (frame index)"',
+                                        ],
                                     )
                                 with html.Div(
                                     style=(
@@ -1102,5 +1221,13 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                 with html.Div(v_if="contextMenuKind === 'cell'"):
                     html.Div("Select Cell", classes="menu-item", click=ctrl.context_menu_cell_select)
                     html.Div("Clear Cell", classes="menu-item danger", click=ctrl.context_menu_cell_clear)
+                    with vuetify.Template(v_if="(contextMenuCellVisualizationOptions || []).length"):
+                        html.Div("Visualization Type", classes="menu-section")
+                        with vuetify.Template(v_for="vis in contextMenuCellVisualizationOptions", key="vis"):
+                            html.Div(
+                                "{{ ((vis === contextMenuCellSelectedVisualization) ? '✓ ' : '') + vis }}",
+                                classes="menu-item",
+                                click=(ctrl.context_menu_cell_pick_visualization, "[vis]"),
+                            )
 
     return layout

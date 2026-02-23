@@ -532,6 +532,8 @@ def attach_controllers(server, db, collection, parse_campaign, campaign_path: st
         state.contextMenuKind = ""
         state.contextMenuItem = ""
         state.contextMenuCellIndex = -1
+        state.contextMenuCellVisualizationOptions = []
+        state.contextMenuCellSelectedVisualization = ""
 
     @ctrl.trigger("hide_context_menu_trigger")
     def hide_context_menu_trigger(**_):
@@ -554,6 +556,8 @@ def attach_controllers(server, db, collection, parse_campaign, campaign_path: st
         state.contextMenuKind = "item"
         state.contextMenuItem = item
         state.contextMenuCellIndex = -1
+        state.contextMenuCellVisualizationOptions = []
+        state.contextMenuCellSelectedVisualization = ""
         state.contextMenuX = px
         state.contextMenuY = py
         state.contextMenuVisible = True
@@ -578,10 +582,20 @@ def attach_controllers(server, db, collection, parse_campaign, campaign_path: st
         cells = normalize_grid_cells(state.gridCells)
         cell = dict(cells[idx] or {})
         label = str(cell.get("variable_name", "") or "").strip() or f"Cell {idx + 1}"
+        vis_opts = []
+        for raw_vis in (cell.get("visualization_options", []) or []):
+            vis = str(raw_vis or "").strip()
+            if vis and vis not in vis_opts:
+                vis_opts.append(vis)
+        selected_vis = str(cell.get("selected_visualization", "") or cell.get("visualization_name", "") or "").strip()
+        if selected_vis and selected_vis not in vis_opts:
+            vis_opts.append(selected_vis)
 
         state.contextMenuKind = "cell"
         state.contextMenuItem = label
         state.contextMenuCellIndex = idx
+        state.contextMenuCellVisualizationOptions = vis_opts
+        state.contextMenuCellSelectedVisualization = selected_vis
         state.contextMenuX = px
         state.contextMenuY = py
         state.contextMenuVisible = True
@@ -619,6 +633,24 @@ def attach_controllers(server, db, collection, parse_campaign, campaign_path: st
             idx = -1
         if 0 <= idx < GRID_CELL_COUNT:
             set_active_grid_cell(idx, 0)
+        hide_context_menu()
+
+    @ctrl.add("context_menu_cell_pick_visualization")
+    def context_menu_cell_pick_visualization(value: str = "", **_):
+        try:
+            idx = int(state.contextMenuCellIndex)
+        except Exception:
+            idx = -1
+        if idx < 0 or idx >= GRID_CELL_COUNT:
+            hide_context_menu()
+            return
+
+        picked = str(value or "").strip()
+        if not picked:
+            hide_context_menu()
+            return
+
+        pick_grid_cell_visualization(idx, picked)
         hide_context_menu()
 
     @ctrl.add("toggle_sources")
