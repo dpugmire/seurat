@@ -231,14 +231,17 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
 
                     with vuetify.VCol(cols=10, style="display:flex; flex-direction:column; height:80vh;"):
                         with vuetify.VCard(variant="outlined", style="flex:1 1 auto; min-height:0;"):
-                            with vuetify.VCardText(style="height:100%; overflow-y:auto;"):
+                            with vuetify.VCardText(style="height:100%; overflow:auto;"):
                                 with html.Div(
                                     style=(
                                         "display:grid;"
-                                        "grid-template-columns:repeat(3, minmax(0, 1fr));"
-                                        "grid-template-rows:repeat(3, minmax(220px, 1fr));"
+                                        "grid-template-columns:repeat(3, 300px);"
+                                        "grid-template-rows:repeat(3, 332px);"
+                                        "width:max-content;"
+                                        "margin:0 auto;"
+                                        "justify-content:center;"
+                                        "align-content:start;"
                                         "border:1px solid #cfcfcf;"
-                                        "min-height:100%;"
                                     )
                                 ):
                                     with vuetify.Template(v_for="(tile, i) in gridCells", key="i"):
@@ -254,79 +257,59 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                 ':draggable="!!(tile && tile.variable_name)"',
                                             ],
                                             style=(
-                                                "('padding:6px; overflow:hidden; cursor:pointer; position:relative;'"
+                                                "('width:300px; height:332px; overflow:hidden; cursor:pointer; display:flex; flex-direction:column;'"
                                                 " + ((i % 3 !== 2) ? 'border-right:1px solid #cfcfcf;' : '')"
                                                 " + ((i < 6) ? 'border-bottom:1px solid #cfcfcf;' : '')"
                                                 " + ((activeGridCell === i) ? 'background:#eef5ff; box-shadow: inset 0 0 0 2px #1e88e5;' : ''))",
                                             ),
                                         ):
                                             with vuetify.Template(v_if="tile && tile.variable_name"):
-                                                html.Button(
-                                                    "x",
-                                                    classes="catnip-cell-close",
-                                                    click=(ctrl.clear_grid_cell, "[i]"),
+                                                with html.Div(
                                                     style=(
-                                                        "position:absolute;"
-                                                        "top:4px;"
-                                                        "right:4px;"
-                                                        "width:16px;"
-                                                        "height:16px;"
-                                                        "line-height:14px;"
-                                                        "padding:0;"
-                                                        "font-size:10px;"
-                                                        "border:1px solid #888;"
-                                                        "border-radius:2px;"
-                                                        "background:#fff;"
-                                                        "color:#333;"
-                                                        "cursor:pointer;"
-                                                        "z-index:3;"
+                                                        "display:flex;"
+                                                        "align-items:center;"
+                                                        "gap:8px;"
+                                                        "width:100%;"
+                                                        "height:32px;"
+                                                        "padding:4px 6px;"
+                                                        "background:#7bd0ef;"
+                                                        "border-bottom:1px solid #3ca7c9;"
                                                     ),
-                                                    title="Remove",
-                                                )
-                                                with html.Div(style="display:flex; align-items:center; gap:8px; width:100%; padding:4px 4px 2px 4px;"):
+                                                ):
                                                     html.Div(
                                                         "{{ tile.variable_name || 'variable' }}",
-                                                        style="flex:1; min-width:0; font-size:0.95rem; font-weight:400; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;",
+                                                        style="flex:1; min-width:0; font-size:0.9rem; font-weight:400; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;",
                                                     )
-                                                    with vuetify.Template(v_if="tile.visualization_options && tile.visualization_options.length"):
-                                                        vuetify.VSelect(
-                                                            model_value=("tile.selected_visualization",),
-                                                            items=("tile.visualization_options", []),
-                                                            density="compact",
-                                                            hide_details=True,
-                                                            variant="outlined",
-                                                            style="max-width:160px; font-size:0.85rem;",
-                                                            change=(
-                                                                ctrl.pick_grid_cell_visualization,
-                                                                "[i, $event]",
-                                                            ),
-                                                            update_modelValue=(
-                                                                ctrl.pick_grid_cell_visualization,
-                                                                "[i, $event]",
-                                                            ),
-                                                        )
-                                                    vuetify.VBtn(
-                                                        "DETAILS",
-                                                        size="x-small",
-                                                        variant="tonal",
-                                                        class_="ml-1",
-                                                        click=(
-                                                            ctrl.toggle_movie_details,
-                                                            "[ (tile.visualization_name || '') + '|' + (tile.producer || '') + '|' + (tile.casename || '') + '|' + (tile.file || '') ]",
+                                                    html.Button(
+                                                        "x",
+                                                        classes="catnip-cell-close",
+                                                        click=(ctrl.clear_grid_cell, "[i]"),
+                                                        style=(
+                                                            "margin-left:auto;"
+                                                            "width:18px;"
+                                                            "height:18px;"
+                                                            "line-height:16px;"
+                                                            "padding:0;"
+                                                            "font-size:11px;"
+                                                            "border:1px solid #2c7c97;"
+                                                            "border-radius:2px;"
+                                                            "background:#fff;"
+                                                            "color:#222;"
+                                                            "cursor:pointer;"
                                                         ),
+                                                        title="Remove",
                                                     )
 
-                                                with html.Div(style="padding:0 4px 4px 4px;"):
+                                                with html.Div(style="width:300px; height:300px; background:#111;"):
                                                     with vuetify.Template(v_if="tile.src"):
                                                         with vuetify.Template(v_if="tile.media_type === 'image'"):
                                                             html.Img(
                                                                 src=("tile.src",),
                                                                 style=(
                                                                     "display:block;"
-                                                                    "width:100%;"
-                                                                    "aspect-ratio:1 / 1;"
+                                                                    "width:300px;"
+                                                                    "height:300px;"
                                                                     "object-fit:contain;"
-                                                                    "border-radius:4px;"
                                                                     "background:#111;"
                                                                 ),
                                                             )
@@ -339,10 +322,9 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                                 muted=True,
                                                                 style=(
                                                                     "display:block;"
-                                                                    "width:100%;"
-                                                                    "aspect-ratio:1 / 1;"
+                                                                    "width:300px;"
+                                                                    "height:300px;"
                                                                     "object-fit:contain;"
-                                                                    "border-radius:4px;"
                                                                     "background:#111;"
                                                                 ),
                                                             )
@@ -350,29 +332,22 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                         html.Div(
                                                             "{{ tile.note ? tile.note : 'No movie src' }}",
                                                             class_="text-caption",
-                                                            style="color:#b00020;",
+                                                            style=(
+                                                                "height:300px;"
+                                                                "display:flex;"
+                                                                "align-items:center;"
+                                                                "justify-content:center;"
+                                                                "text-align:center;"
+                                                                "padding:8px;"
+                                                                "color:#ddd;"
+                                                            ),
                                                         )
-
-                                                with vuetify.VExpandTransition():
-                                                    with vuetify.VCardText(
-                                                        class_="pt-0",
-                                                        v_show=(
-                                                            "(movieDetailsOpen || {})[(tile.visualization_name || '') + '|' + (tile.producer || '') + '|' + (tile.casename || '') + '|' + (tile.file || '')]"
-                                                        ),
-                                                    ):
-                                                        with vuetify.VTable(density="compact"):
-                                                            with html.Tbody():
-                                                                for key in ("producer", "casename", "file"):
-                                                                    with html.Tr():
-                                                                        html.Td(key, class_="text-caption font-weight-medium", style="width:160px;")
-                                                                        html.Td(f"{{{{ tile.{key} }}}}", class_="text-caption")
                                             with vuetify.Template(v_if="!(tile && tile.variable_name)"):
                                                 html.Div(
                                                     "Drop variable here",
                                                     class_="text-caption",
                                                     style=(
                                                         "height:100%;"
-                                                        "min-height:180px;"
                                                         "display:flex;"
                                                         "align-items:center;"
                                                         "justify-content:center;"
