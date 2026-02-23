@@ -8,12 +8,446 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
     drag_drop_js = """
     (function initCatnipDragDrop() {
       try {
-        if (window.__catnipDnDInit) return;
         if (typeof window.trame === "undefined") {
           setTimeout(initCatnipDragDrop, 200);
           return;
         }
+        function inferFpsForVideos(videos) {
+          const DEFAULT_FPS = 2.0;
+          for (const v of (videos || [])) {
+            const fpsAttr = Number(v && v.getAttribute && v.getAttribute("data-fps"));
+            if (Number.isFinite(fpsAttr) && fpsAttr > 0) {
+              return fpsAttr;
+            }
+          }
+          return DEFAULT_FPS;
+        }
+
+        function updateVcrTimeLabelFromSeconds(rawSeconds, videos) {
+          const label = document.getElementById("catnip-vcr-time-value");
+          if (!label) return;
+          const seconds = Number(rawSeconds);
+          const safeSeconds = Number.isFinite(seconds) && seconds >= 0 ? seconds : 0;
+          const fps = inferFpsForVideos(videos);
+          const frameCounter = safeSeconds * fps;
+          label.textContent = "Time = " + frameCounter.toFixed(6);
+        }
+
+        // Always expose a VCR handler, even when drag/drop was initialized
+        // in an older page session.
+        window.catnipGridVcr = function(action) {
+          const videos = Array.from(document.querySelectorAll('video[data-grid-video="1"]'));
+          if (!videos.length) {
+            updateVcrTimeLabelFromSeconds(0, []);
+            return;
+          }
+
+          function getCommonEndTime(vs) {
+            let minDuration = Infinity;
+            for (const v of vs) {
+              const d = Number(v && v.duration);
+              if (Number.isFinite(d) && d > 0) {
+                minDuration = Math.min(minDuration, d);
+              }
+            }
+            if (!Number.isFinite(minDuration)) return null;
+            return Math.max(0, minDuration - 0.04);
+          }
+
+          function clampTime(raw) {
+            let t = Number(raw);
+            if (!Number.isFinite(t) || t < 0) t = 0;
+            const commonEnd = getCommonEndTime(videos);
+            if (commonEnd !== null) t = Math.min(t, commonEnd);
+            return t;
+          }
+
+          function setAllTime(raw) {
+            const t = clampTime(raw);
+            for (const v of videos) {
+              try {
+                v.currentTime = t;
+              } catch (_err) {
+                // ignore seek errors
+              }
+            }
+            updateVcrTimeLabelFromSeconds(t, videos);
+            return t;
+          }
+
+          function pauseAll() {
+            for (const v of videos) {
+              try {
+                v.pause();
+              } catch (_err) {
+                // ignore pause errors
+              }
+            }
+          }
+
+          function playAll() {
+            for (const v of videos) {
+              try {
+                const p = v.play();
+                if (p && typeof p.catch === "function") p.catch(function() {});
+              } catch (_err) {
+                // ignore autoplay errors
+              }
+            }
+          }
+
+          function inferFrameStepSeconds(vs) {
+            return 1.0 / inferFpsForVideos(vs);
+          }
+
+          const frameStep = inferFrameStepSeconds(videos);
+          const current = Number(videos[0] && videos[0].currentTime);
+          const base = Number.isFinite(current) ? current : 0;
+          updateVcrTimeLabelFromSeconds(base, videos);
+          const a = String(action || "").trim().toLowerCase();
+
+          if (a === "play") {
+            setAllTime(base);
+            playAll();
+            return;
+          }
+          if (a === "pause") {
+            pauseAll();
+            return;
+          }
+          if (a === "stop") {
+            pauseAll();
+            setAllTime(0);
+            return;
+          }
+          if (a === "start") {
+            setAllTime(0);
+            return;
+          }
+          if (a === "end") {
+            const endTime = getCommonEndTime(videos);
+            setAllTime(endTime !== null ? endTime : base);
+            return;
+          }
+          if (a === "frameback") {
+            setAllTime(base - frameStep);
+            return;
+          }
+          if (a === "frame") {
+            setAllTime(base + frameStep);
+            return;
+          }
+          if (a === "back") {
+            setAllTime(base - frameStep);
+            return;
+          }
+          if (a === "forward") {
+            setAllTime(base + frameStep);
+          }
+        };
+
+        if (window.__catnipDnDInit) return;
         window.__catnipDnDInit = true;
+        const gridVcrState = {
+          playing: false,
+          syncTime: 0,
+          syncTimer: null,
+        };
+
+        function getGridVideos() {
+          return Array.from(document.querySelectorAll('video[data-grid-video="1"]'));
+        }
+
+        function isGridVideo(target) {
+          return !!(target && target.matches && target.matches('video[data-grid-video="1"]'));
+        }
+
+        function getCommonEndTime(videos) {
+          let minDuration = Infinity;
+          for (const v of videos) {
+            const d = Number(v && v.duration);
+            if (Number.isFinite(d) && d > 0) {
+              minDuration = Math.min(minDuration, d);
+            }
+          }
+          if (!Number.isFinite(minDuration)) {
+            return null;
+          }
+          return Math.max(0, minDuration - 0.04);
+        }
+
+        function clampTimeForVideos(rawTime, videos) {
+          let t = Number(rawTime);
+          if (!Number.isFinite(t) || t < 0) {
+            t = 0;
+          }
+          const commonEnd = getCommonEndTime(videos);
+          if (commonEnd !== null) {
+            t = Math.min(t, commonEnd);
+          }
+          return t;
+        }
+
+        function getReferenceTime(videos) {
+          for (const v of videos) {
+            const t = Number(v && v.currentTime);
+            if (Number.isFinite(t) && t >= 0) {
+              return t;
+            }
+          }
+          return 0;
+        }
+
+        function inferFrameStepSeconds(videos) {
+          return 1.0 / inferFpsForVideos(videos);
+        }
+
+        function setAllVideoTimes(videos, rawTime) {
+          const t = clampTimeForVideos(rawTime, videos);
+          for (const v of videos) {
+            try {
+              v.currentTime = t;
+            } catch (_err) {
+              // Ignore seek errors for unloaded videos.
+            }
+          }
+          return t;
+        }
+
+        function pauseAllVideos(videos) {
+          for (const v of videos) {
+            try {
+              v.pause();
+            } catch (_err) {
+              // Ignore pause errors.
+            }
+          }
+        }
+
+        function playAllVideos(videos) {
+          for (const v of videos) {
+            try {
+              const p = v.play();
+              if (p && typeof p.catch === "function") {
+                p.catch(function() {});
+              }
+            } catch (_err) {
+              // Ignore autoplay failures per stream.
+            }
+          }
+        }
+
+        function stopSyncTimer() {
+          if (gridVcrState.syncTimer) {
+            clearInterval(gridVcrState.syncTimer);
+            gridVcrState.syncTimer = null;
+          }
+        }
+
+        function syncGridVideosNow() {
+          if (!gridVcrState.playing) {
+            stopSyncTimer();
+            const videosNow = getGridVideos();
+            if (videosNow.length) {
+              updateVcrTimeLabelFromSeconds(getReferenceTime(videosNow), videosNow);
+            } else {
+              updateVcrTimeLabelFromSeconds(0, []);
+            }
+            return;
+          }
+
+          const videos = getGridVideos();
+          if (!videos.length) {
+            gridVcrState.playing = false;
+            stopSyncTimer();
+            updateVcrTimeLabelFromSeconds(0, []);
+            return;
+          }
+
+          const ref = videos[0];
+          const refTime = clampTimeForVideos(ref && ref.currentTime, videos);
+          const commonEnd = getCommonEndTime(videos);
+          if (commonEnd !== null && refTime >= (commonEnd - 0.02)) {
+            pauseAllVideos(videos);
+            const stopAt = setAllVideoTimes(videos, commonEnd);
+            gridVcrState.syncTime = stopAt;
+            gridVcrState.playing = false;
+            stopSyncTimer();
+            updateVcrTimeLabelFromSeconds(stopAt, videos);
+            return;
+          }
+
+          gridVcrState.syncTime = refTime;
+          updateVcrTimeLabelFromSeconds(refTime, videos);
+          for (let i = 1; i < videos.length; i += 1) {
+            const v = videos[i];
+            const t = Number(v && v.currentTime);
+            if (!Number.isFinite(t)) {
+              continue;
+            }
+            if (Math.abs(t - refTime) > 0.12) {
+              try {
+                v.currentTime = refTime;
+              } catch (_err) {
+                // Ignore seek errors for unloaded streams.
+              }
+            }
+          }
+        }
+
+        function startSyncTimer() {
+          stopSyncTimer();
+          gridVcrState.syncTimer = setInterval(syncGridVideosNow, 160);
+        }
+
+        function seekAllVideosBy(deltaSeconds) {
+          const videos = getGridVideos();
+          if (!videos.length) {
+            updateVcrTimeLabelFromSeconds(0, []);
+            return;
+          }
+          const base = clampTimeForVideos(
+            Number.isFinite(gridVcrState.syncTime) ? gridVcrState.syncTime : getReferenceTime(videos),
+            videos
+          );
+          const next = setAllVideoTimes(videos, base + deltaSeconds);
+          gridVcrState.syncTime = next;
+          updateVcrTimeLabelFromSeconds(next, videos);
+          if (gridVcrState.playing) {
+            playAllVideos(videos);
+            startSyncTimer();
+          } else {
+            pauseAllVideos(videos);
+          }
+        }
+
+        function stepAllVideosByFrames(frameCount) {
+          const videos = getGridVideos();
+          if (!videos.length) return;
+          const frameStep = inferFrameStepSeconds(videos);
+          seekAllVideosBy(frameStep * Number(frameCount || 0));
+        }
+
+        function setAllToStart() {
+          const videos = getGridVideos();
+          if (!videos.length) {
+            updateVcrTimeLabelFromSeconds(0, []);
+            return;
+          }
+          const t = setAllVideoTimes(videos, 0);
+          gridVcrState.syncTime = t;
+          updateVcrTimeLabelFromSeconds(t, videos);
+          if (gridVcrState.playing) {
+            playAllVideos(videos);
+            startSyncTimer();
+          } else {
+            pauseAllVideos(videos);
+          }
+        }
+
+        function setAllToEnd() {
+          const videos = getGridVideos();
+          if (!videos.length) {
+            updateVcrTimeLabelFromSeconds(0, []);
+            return;
+          }
+          const commonEnd = getCommonEndTime(videos);
+          const target = commonEnd !== null ? commonEnd : getReferenceTime(videos);
+          const t = setAllVideoTimes(videos, target);
+          gridVcrState.syncTime = t;
+          updateVcrTimeLabelFromSeconds(t, videos);
+          if (gridVcrState.playing) {
+            playAllVideos(videos);
+            startSyncTimer();
+          } else {
+            pauseAllVideos(videos);
+          }
+        }
+
+        function playAllFromSyncTime() {
+          const videos = getGridVideos();
+          if (!videos.length) {
+            updateVcrTimeLabelFromSeconds(0, []);
+            return;
+          }
+          const base = setAllVideoTimes(
+            videos,
+            Number.isFinite(gridVcrState.syncTime) ? gridVcrState.syncTime : getReferenceTime(videos)
+          );
+          gridVcrState.syncTime = base;
+          updateVcrTimeLabelFromSeconds(base, videos);
+          gridVcrState.playing = true;
+          playAllVideos(videos);
+          startSyncTimer();
+        }
+
+        function pauseAllAtCurrentTime() {
+          const videos = getGridVideos();
+          if (!videos.length) {
+            updateVcrTimeLabelFromSeconds(0, []);
+            return;
+          }
+          gridVcrState.syncTime = clampTimeForVideos(getReferenceTime(videos), videos);
+          gridVcrState.playing = false;
+          stopSyncTimer();
+          pauseAllVideos(videos);
+          updateVcrTimeLabelFromSeconds(gridVcrState.syncTime, videos);
+        }
+
+        function stopAllVideos() {
+          const videos = getGridVideos();
+          if (!videos.length) {
+            updateVcrTimeLabelFromSeconds(0, []);
+            return;
+          }
+          gridVcrState.playing = false;
+          stopSyncTimer();
+          pauseAllVideos(videos);
+          gridVcrState.syncTime = setAllVideoTimes(videos, 0);
+          updateVcrTimeLabelFromSeconds(gridVcrState.syncTime, videos);
+        }
+
+        function runGridVcrAction(action) {
+          const a = String(action || "").trim().toLowerCase();
+          if (!a) return;
+          if (a === "start") {
+            setAllToStart();
+            return;
+          }
+          if (a === "frameback") {
+            stepAllVideosByFrames(-1);
+            return;
+          }
+          if (a === "frame") {
+            stepAllVideosByFrames(1);
+            return;
+          }
+          if (a === "back") {
+            stepAllVideosByFrames(-1);
+            return;
+          }
+          if (a === "play") {
+            playAllFromSyncTime();
+            return;
+          }
+          if (a === "pause") {
+            pauseAllAtCurrentTime();
+            return;
+          }
+          if (a === "stop") {
+            stopAllVideos();
+            return;
+          }
+          if (a === "forward") {
+            stepAllVideosByFrames(1);
+            return;
+          }
+          if (a === "end") {
+            setAllToEnd();
+          }
+        }
+
+        window.catnipGridVcr = runGridVcrAction;
 
         document.addEventListener("dragstart", function(e) {
           const target = e && e.target;
@@ -130,12 +564,46 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
 
         document.addEventListener("click", function(e) {
           const target = e && e.target;
+          const vcrBtn = target && target.closest ? target.closest("[data-vcr-action]") : null;
+          if (vcrBtn) {
+            e.preventDefault();
+            runGridVcrAction(vcrBtn.getAttribute("data-vcr-action") || "");
+          }
           if (!target || !target.closest || !target.closest("#catnip-context-menu")) {
             if (window.trame && window.trame.trigger) {
               window.trame.trigger("hide_context_menu_trigger", []);
             }
           }
         });
+
+        document.addEventListener("loadedmetadata", function(e) {
+          const target = e && e.target;
+          if (!isGridVideo(target)) return;
+          const videos = getGridVideos();
+          if (!videos.length) return;
+          const t = setAllVideoTimes(videos, gridVcrState.syncTime);
+          gridVcrState.syncTime = t;
+          updateVcrTimeLabelFromSeconds(t, videos);
+          if (gridVcrState.playing) {
+            playAllVideos(videos);
+            startSyncTimer();
+          }
+        }, true);
+
+        document.addEventListener("ended", function(e) {
+          const target = e && e.target;
+          if (!isGridVideo(target)) return;
+          if (!gridVcrState.playing) return;
+          const videos = getGridVideos();
+          if (!videos.length) return;
+          gridVcrState.playing = false;
+          stopSyncTimer();
+          pauseAllVideos(videos);
+          const endTime = getCommonEndTime(videos);
+          const t = setAllVideoTimes(videos, endTime !== null ? endTime : getReferenceTime(videos));
+          gridVcrState.syncTime = t;
+          updateVcrTimeLabelFromSeconds(t, videos);
+        }, true);
       } catch (err) {
         console.error("catnip drag/drop init failed", err);
       }
@@ -173,6 +641,31 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                 .catnip-drop-hover {
                   background: #e3f2fd !important;
                   box-shadow: inset 0 0 0 2px #1976d2 !important;
+                }
+                .catnip-vcr-bar {
+                  display: flex;
+                  align-items: center;
+                  justify-content: center;
+                  gap: 6px;
+                  width: max-content;
+                  margin: 0 auto 8px auto;
+                }
+                .catnip-vcr-btn,
+                .catnip-vcr-bar button[data-vcr-action] {
+                  min-width: 34px;
+                  height: 24px;
+                  border: 1px solid #9d9d9d;
+                  border-radius: 3px;
+                  background: #fff;
+                  color: #222;
+                  font-size: 12px;
+                  line-height: 1;
+                  cursor: pointer;
+                  padding: 0 8px;
+                }
+                .catnip-vcr-btn:hover,
+                .catnip-vcr-bar button[data-vcr-action]:hover {
+                  background: #f2f2f2;
                 }
                 #catnip-context-menu {
                   background: #fff;
@@ -232,6 +725,83 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                     with vuetify.VCol(cols=10, style="display:flex; flex-direction:column; height:80vh;"):
                         with vuetify.VCard(variant="outlined", style="flex:1 1 auto; min-height:0;"):
                             with vuetify.VCardText(style="height:100%; overflow:auto;"):
+                                with html.Div(classes="catnip-vcr-bar"):
+                                    html.Button(
+                                        "|<",
+                                        classes="catnip-vcr-btn",
+                                        raw_attrs=[
+                                            'type="button"',
+                                            'data-vcr-action="start"',
+                                            "onclick=\"window.catnipGridVcr && window.catnipGridVcr('start'); return false;\"",
+                                        ],
+                                        title="Jump to start",
+                                    )
+                                    html.Button(
+                                        "<<",
+                                        classes="catnip-vcr-btn",
+                                        raw_attrs=[
+                                            'type="button"',
+                                            'data-vcr-action="back"',
+                                            "onclick=\"window.catnipGridVcr && window.catnipGridVcr('back'); return false;\"",
+                                        ],
+                                        title="Back 1 frame",
+                                    )
+                                    html.Button(
+                                        "▶",
+                                        classes="catnip-vcr-btn",
+                                        raw_attrs=[
+                                            'type="button"',
+                                            'data-vcr-action="play"',
+                                            "onclick=\"window.catnipGridVcr && window.catnipGridVcr('play'); return false;\"",
+                                        ],
+                                        title="Play all",
+                                    )
+                                    html.Button(
+                                        "⏸",
+                                        classes="catnip-vcr-btn",
+                                        raw_attrs=[
+                                            'type="button"',
+                                            'data-vcr-action="pause"',
+                                            "onclick=\"window.catnipGridVcr && window.catnipGridVcr('pause'); return false;\"",
+                                        ],
+                                        title="Pause all",
+                                    )
+                                    html.Button(
+                                        "⏹",
+                                        classes="catnip-vcr-btn",
+                                        raw_attrs=[
+                                            'type="button"',
+                                            'data-vcr-action="stop"',
+                                            "onclick=\"window.catnipGridVcr && window.catnipGridVcr('stop'); return false;\"",
+                                        ],
+                                        title="Stop and reset",
+                                    )
+                                    html.Button(
+                                        ">>",
+                                        classes="catnip-vcr-btn",
+                                        raw_attrs=[
+                                            'type="button"',
+                                            'data-vcr-action="forward"',
+                                            "onclick=\"window.catnipGridVcr && window.catnipGridVcr('forward'); return false;\"",
+                                        ],
+                                        title="Forward 1 frame",
+                                    )
+                                    html.Button(
+                                        ">|",
+                                        classes="catnip-vcr-btn",
+                                        raw_attrs=[
+                                            'type="button"',
+                                            'data-vcr-action="end"',
+                                            "onclick=\"window.catnipGridVcr && window.catnipGridVcr('end'); return false;\"",
+                                        ],
+                                        title="Jump to end",
+                                    )
+                                    html.Span(
+                                        "Time = 0.000000",
+                                        id="catnip-vcr-time-value",
+                                        class_="text-caption",
+                                        style="margin-left:12px; min-width:150px; text-align:left;",
+                                    )
                                 with html.Div(
                                     style=(
                                         "display:grid;"
@@ -316,10 +886,12 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                         with vuetify.Template(v_if="tile.media_type !== 'image'"):
                                                             html.Video(
                                                                 src=("tile.src",),
-                                                                controls=True,
+                                                                class_="catnip-grid-video",
+                                                                controls=False,
                                                                 autoplay=False,
-                                                                loop=True,
+                                                                loop=False,
                                                                 muted=True,
+                                                                raw_attrs=['data-grid-video="1"', "playsinline", "webkit-playsinline"],
                                                                 style=(
                                                                     "display:block;"
                                                                     "width:300px;"
