@@ -35,16 +35,55 @@ class CampaignDb:
         if not self.ok:
             return []
         try:
-            base = {"variable_type": "variable"}
-            query = and_filter(base, extra_filter)
-            names = self.collection.distinct("variable_name", query)
-            names = [n for n in names if isinstance(n, str)]
-            names.sort()
+            # Stage 2 support: include image-only variables in the left variable list.
+            var_query = and_filter({"variable_type": "variable"}, extra_filter)
+            img_query = and_filter(
+                {"variable_type": "image", "visualization_name": {"$ne": ""}},
+                extra_filter,
+            )
+            var_names = self.collection.distinct("variable_name", var_query)
+            img_names = self.collection.distinct("variable_name", img_query)
+            names = sorted({n for n in (list(var_names) + list(img_names)) if isinstance(n, str) and n})
             return names
         except PyMongoError as e:
             self.last_error = f"{type(e).__name__}: {e}"
             self.ok = False
             return []
+
+    def _image_sources_for_variable(
+        self,
+        variable_name: str,
+        extra_filter: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        base_query: Dict[str, Any] = {
+            "variable_name": variable_name,
+            "variable_type": "image",
+            "visualization_name": {"$ne": ""},
+        }
+        query = and_filter(base_query, extra_filter)
+        proj = {"_id": 0, "producer": 1, "casename": 1, "file": 1}
+
+        cursor = self.collection.find(query, proj).sort([("producer", 1), ("casename", 1), ("file", 1)])
+        seen = set()
+        sources: List[Dict[str, Any]] = []
+        for doc in cursor:
+            producer = "" if doc.get("producer", None) is None else str(doc.get("producer"))
+            casename = "" if doc.get("casename", None) is None else str(doc.get("casename"))
+            file = "" if doc.get("file", None) is None else str(doc.get("file"))
+            key = (producer, casename, file)
+            if key in seen:
+                continue
+            seen.add(key)
+            sources.append(
+                {
+                    "producer": producer,
+                    "casename": casename,
+                    "file": file,
+                    "min": None,
+                    "max": None,
+                }
+            )
+        return sources
 
     def distinct_visualization_names_for_variable(
         self,
@@ -133,6 +172,23 @@ class CampaignDb:
                 )
 
             valid = len(mins)
+
+            # Stage 2 support: if this variable has no ADIOS variable docs, but does
+            # have image docs, return source rows with n/a min/max so the viewer can
+            # still browse visualizations.
+            if num_sources == 0:
+                image_sources = self._image_sources_for_variable(variable_name, extra_filter=extra_filter)
+                return {
+                    "variable": variable_name,
+                    "num_sources": len(image_sources),
+                    "global_min": None,
+                    "global_max": None,
+                    "mean_min": None,
+                    "mean_max": None,
+                    "median_min": None,
+                    "median_max": None,
+                    "sources": image_sources,
+                }
 
             return {
                 "variable": variable_name,
