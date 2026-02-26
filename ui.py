@@ -719,6 +719,48 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                 """
                 .catnip-draggable-var { cursor: grab; user-select: none; }
                 .catnip-draggable-var:active { cursor: grabbing; }
+                .catnip-var-list { padding: 4px 2px; }
+                .catnip-var-group {
+                  margin: 6px 6px 10px;
+                  padding: 6px 6px 8px;
+                  border: 1px solid #b8c4d1;
+                  border-radius: 6px;
+                  background: #f4f7fa;
+                  box-shadow: inset 0 0 0 1px #e2e8ef;
+                }
+                .catnip-var-group-title {
+                  padding: 4px 8px;
+                  font-size: 11px;
+                  font-weight: 800;
+                  letter-spacing: 0.05em;
+                  text-transform: uppercase;
+                  color: #425365;
+                  cursor: pointer;
+                  display: flex;
+                  align-items: center;
+                  gap: 8px;
+                }
+                .catnip-var-group-title:hover {
+                  color: #2f4357;
+                }
+                .catnip-var-group-chevron {
+                  width: 12px;
+                  text-align: center;
+                  font-family: monospace;
+                  font-size: 12px;
+                  line-height: 1;
+                }
+                .catnip-var-item {
+                  margin-left: 12px;
+                  margin-top: 2px;
+                  padding: 7px 10px;
+                  border-radius: 4px;
+                  cursor: grab;
+                  user-select: none;
+                }
+                .catnip-var-item:hover {
+                  background: #eaf0f6;
+                }
                 .catnip-dropcell { transition: background 0.15s, box-shadow 0.15s; }
                 .catnip-drop-hover {
                   background: #e3f2fd !important;
@@ -810,23 +852,51 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
             with vuetify.VContainer(fluid=True, class_="pa-2"):
                 with vuetify.VRow():
                     with vuetify.VCol(cols=2, style="display:flex; flex-direction:column; height:80vh;"):
-                        with vuetify.VCard(variant="outlined", style="flex:1 1 auto; min-height:0;"):
+                        with vuetify.VCard(
+                            variant="outlined",
+                            style="flex:1 1 auto; min-height:0; display:flex; flex-direction:column;",
+                        ):
                             with vuetify.VCardTitle():
                                 html.Div("Variables")
-                            with vuetify.VCardText(style="height:100%; overflow-y:auto;"):
-                                with vuetify.VList(density="compact"):
-                                    with vuetify.Template(v_for="v in variableNames", key="v"):
+                            with vuetify.VCardText(style="flex:1 1 auto; min-height:0; overflow-y:auto;"):
+                                with vuetify.VList(density="compact", class_="catnip-var-list"):
+                                    html.Div(
+                                        "No variables",
+                                        v_if="!(variableGroups || []).length",
+                                        class_="text-caption",
+                                        style="padding:8px 10px; color:#777;",
+                                    )
+                                    with vuetify.Template(v_for="group in variableGroups", key="group.name"):
                                         with html.Div(
-                                            click=(ctrl.pick_var, "[v]"),
-                                            draggable="true",
-                                            classes="catnip-draggable-var",
-                                            raw_attrs=[':data-item="v"'],
+                                            class_="catnip-var-group",
                                             style=(
-                                                "('padding:8px 10px; border-radius:4px; cursor:grab; user-select:none;'"
-                                                " + ((v === selectedVar) ? 'background:#e8e8e8;' : ''))",
+                                                "border:1px solid #b8c4d1;"
+                                                "background:#f4f7fa;"
+                                                "box-shadow: inset 0 0 0 1px #e2e8ef;"
                                             ),
                                         ):
-                                            html.Span("{{ v }}")
+                                            with html.Div(
+                                                class_="catnip-var-group-title",
+                                                click=(ctrl.toggle_variable_group, "[group.name]"),
+                                                style="font-weight:800;",
+                                            ):
+                                                html.Span(
+                                                    "{{ (variableGroupCollapsed && variableGroupCollapsed[group.name]) ? '+' : '-' }}",
+                                                    class_="catnip-var-group-chevron",
+                                                )
+                                                html.Span("{{ group.name }}")
+                                            with html.Div(v_if="!(variableGroupCollapsed && variableGroupCollapsed[group.name])"):
+                                                with vuetify.Template(v_for="v in group.variables", key="group.name + '::' + v"):
+                                                    with html.Div(
+                                                        click=(ctrl.pick_var, "[v]"),
+                                                        draggable="true",
+                                                        classes="catnip-draggable-var catnip-var-item",
+                                                        raw_attrs=[':data-item="v"'],
+                                                        style=(
+                                                            "((v === selectedVar) ? 'background:#dfe7ef; box-shadow: inset 0 0 0 1px #b9c8d7;' : '')",
+                                                        ),
+                                                    ):
+                                                        html.Span("{{ v }}")
 
                     with vuetify.VCol(cols=10, style="display:flex; flex-direction:column; height:80vh;"):
                         with vuetify.VCard(variant="outlined", style="flex:1 1 auto; min-height:0;"):

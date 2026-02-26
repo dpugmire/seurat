@@ -31,6 +31,74 @@ class CampaignDb:
             self.ok = False
             self.last_error = f"{type(e).__name__}: {e}"
 
+    @staticmethod
+    def _metadata_ndims(metadata: Any) -> Optional[int]:
+        if not isinstance(metadata, dict):
+            return None
+
+        single_value = metadata.get("SingleValue", None)
+        if isinstance(single_value, bool) and single_value:
+            return 0
+        if isinstance(single_value, str) and single_value.strip().lower() in {"true", "1", "yes"}:
+            return 0
+
+        raw_shape = metadata.get("Shape", metadata.get("shape", None))
+        if raw_shape is None:
+            return None
+
+        text = str(raw_shape).strip()
+        if not text:
+            return None
+
+        cleaned = text
+        for ch in "[]()":
+            cleaned = cleaned.replace(ch, "")
+
+        parts = [p.strip() for p in cleaned.split(",") if p.strip()]
+        if not parts and cleaned:
+            parts = [p.strip() for p in cleaned.split() if p.strip()]
+        if not parts:
+            return None
+
+        dims: List[int] = []
+        for p in parts:
+            try:
+                dims.append(int(float(p)))
+            except Exception:
+                continue
+
+        if dims:
+            if len(dims) == 1 and dims[0] <= 1:
+                return 0
+            return len(dims)
+
+        return len(parts)
+
+    def _classify_variable_group(
+        self,
+        variable_name: str,
+        extra_filter: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        vis_names = set(self.distinct_visualization_names_for_variable(variable_name, extra_filter=extra_filter))
+
+        if vis_names.intersection({"heatmap", "contour", "heatmap_contour", "streamlines"}):
+            return "2D"
+        if vis_names and vis_names.issubset({"timeseries"}):
+            return "Scalars"
+
+        query = and_filter({"variable_name": variable_name, "variable_type": "variable"}, extra_filter)
+        try:
+            one = self.collection.find_one(query, {"_id": 0, "metadata": 1})
+        except Exception:
+            one = None
+        ndims = self._metadata_ndims((one or {}).get("metadata", {}))
+        if ndims is not None:
+            return "2D" if ndims >= 2 else "Scalars"
+
+        if "timeseries" in vis_names:
+            return "Scalars"
+        return "2D"
+
     def distinct_variable_names(self, extra_filter: Optional[Dict[str, Any]] = None) -> List[str]:
         if not self.ok:
             return []
@@ -49,6 +117,23 @@ class CampaignDb:
             self.last_error = f"{type(e).__name__}: {e}"
             self.ok = False
             return []
+
+    def grouped_variable_names(self, extra_filter: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+        names = self.distinct_variable_names(extra_filter=extra_filter)
+        groups: Dict[str, List[str]] = {"Scalars": [], "2D": []}
+
+        for name in names:
+            group = self._classify_variable_group(name, extra_filter=extra_filter)
+            if group not in groups:
+                group = "2D"
+            groups[group].append(name)
+
+        ordered = []
+        if groups["Scalars"]:
+            ordered.append({"name": "Scalars", "variables": groups["Scalars"]})
+        if groups["2D"]:
+            ordered.append({"name": "2D", "variables": groups["2D"]})
+        return ordered
 
     def _image_sources_for_variable(
         self,

@@ -10,7 +10,16 @@ def attach_controllers(server, db, collection, parse_campaign, campaign_path: st
     GRID_CELL_COUNT = 9
 
     def refresh_variable_list():
-        state.variableNames = db.distinct_variable_names(extra_filter=state.queryFilter or None)
+        grouped = db.grouped_variable_names(extra_filter=state.queryFilter or None)
+        state.variableGroups = grouped
+        state.variableNames = [v for g in grouped for v in (g.get("variables") or [])]
+        existing_collapsed = dict(state.variableGroupCollapsed or {})
+        valid_group_names = {str(g.get("name", "")) for g in grouped}
+        state.variableGroupCollapsed = {
+            name: bool(existing_collapsed.get(name, False))
+            for name in valid_group_names
+            if name
+        }
         state.dbOk = db.ok
         state.dbStatus = "Connected" if db.ok else f"DB error: {db.last_error}"
 
@@ -70,6 +79,14 @@ def attach_controllers(server, db, collection, parse_campaign, campaign_path: st
             cells.append(empty_grid_cell())
         return cells
 
+    def choose_visualization_default(vis_names: List[str], preferred_vis: str = "") -> str:
+        preferred = str(preferred_vis or "").strip()
+        if preferred and preferred in vis_names:
+            return preferred
+        if "heatmap" in vis_names:
+            return "heatmap"
+        return vis_names[0] if vis_names else ""
+
     def build_grid_cell_for_variable(var_name: str, preferred_vis: str = "") -> Dict[str, Any]:
         cell = empty_grid_cell()
         var = str(var_name or "").strip()
@@ -79,9 +96,7 @@ def attach_controllers(server, db, collection, parse_campaign, campaign_path: st
         qf = state.queryFilter or None
         vis_names = db.distinct_visualization_names_for_variable(var, extra_filter=qf)
 
-        selected_vis = str(preferred_vis or "")
-        if selected_vis not in vis_names:
-            selected_vis = vis_names[0] if vis_names else ""
+        selected_vis = choose_visualization_default(vis_names, preferred_vis)
 
         cell.update(
             {
@@ -258,9 +273,7 @@ def attach_controllers(server, db, collection, parse_campaign, campaign_path: st
                     var_name,
                     extra_filter=source_query,
                 )
-                selected_vis = str(previous_tile_map.get(source_key, "") or "")
-                if selected_vis not in vis_names:
-                    selected_vis = vis_names[0] if vis_names else ""
+                selected_vis = choose_visualization_default(vis_names, previous_tile_map.get(source_key, ""))
                 if selected_vis:
                     new_tile_map[source_key] = selected_vis
 
@@ -336,6 +349,15 @@ def attach_controllers(server, db, collection, parse_campaign, campaign_path: st
     @ctrl.add("set_dragged_var")
     def set_dragged_var(var_name: str, **_):
         state.draggedVar = str(var_name or "")
+
+    @ctrl.add("toggle_variable_group")
+    def toggle_variable_group(group_name: str, **_):
+        name = str(group_name or "").strip()
+        if not name:
+            return
+        collapsed = dict(state.variableGroupCollapsed or {})
+        collapsed[name] = not bool(collapsed.get(name, False))
+        state.variableGroupCollapsed = collapsed
 
     @ctrl.add("add_var_to_grid")
     def add_var_to_grid(var_name: str, **_):

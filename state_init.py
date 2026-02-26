@@ -17,6 +17,8 @@ def init_state(state, db) -> None:
     state.dbStatus = "Connected" if db.ok else f"DB error: {db.last_error}"
 
     state.variableNames = []
+    state.variableGroups = []
+    state.variableGroupCollapsed = {}
     state.selectedVar = ""
 
     state.queryText = ""
