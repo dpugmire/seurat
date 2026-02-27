@@ -204,6 +204,7 @@ def _extract_min_max_from_varinfo(varinfo: Any) -> tuple[Optional[float], Option
 
 def parse_campaign(campaign_path: str, collection):
     print("reading: ", campaign_path)
+    var_stats = {}
 
     with FileReader(campaign_path) as fr:
         vars_dict = fr.available_variables()
@@ -226,6 +227,19 @@ def parse_campaign(campaign_path: str, collection):
                 var, file, varpath, producer, casename = extract_file_var_img(varname)
 
             metadata = varinfo
+
+            #print('Var: ', var, 'varpath: ', varpath)
+            ## check if it's a statistical variable (e.g. ends with "_stats") and if so, include min/max in the document for easier querying
+            if var_type == 'variable' and '_stats' in varpath :
+                data = []
+                n = var.rfind('_')
+                baseVar, statType = var[:n], var[n+1:]
+                print('Stat variable detected: ', var, 'varpath: ', varpath, baseVar, statType)
+                data = fr.read(varname)
+                if baseVar not in var_stats :
+                    var_stats[baseVar] = []
+                var_stats[baseVar].append((producer, statType, data[0]))
+                continue
 
             if var_type == "image":
                 img_data = fr.read(varpath)
@@ -282,6 +296,20 @@ def parse_campaign(campaign_path: str, collection):
                 }
 
             collection.insert_one(document)
+
+    print('Add statistics')
+    for v in var_stats.items() :
+        vname, stats = v
+        for stat in stats :
+            producer, statType, data = stat
+            document = {"campaign_path": campaign_path,
+                        "variable_name": vname,
+                        "variable_type": 'statistic',
+                        "producer": producer,
+                        "statistic_type": statType,
+                        "data": data.tolist()}
+            collection.insert_one(document)
+
 
     print(collection.distinct("campaign_path"))
     print(collection.count_documents({}))
