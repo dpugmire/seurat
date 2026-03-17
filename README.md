@@ -17,6 +17,7 @@ Requirements (at minimum):
 
 - MongoDB running locally (or set `MONGO_URI`).
 - Python deps: `pymongo`, `trame`, `adios2`, `numpy`, `Pillow`.
+- Optional for schema-driven image associations: `pyyaml`.
 - `ffmpeg` available on PATH for movie preview tiles.
 
 Example:
@@ -27,6 +28,26 @@ export MONGO_DB="catnip_campaigns"
 export MONGO_COLLECTION="campaign_entries"
 
 python app.py campaign.aca
+
+# Optional: pass image association schema text/YAML
+python app.py campaign.aca --image-association-schema image_variable_map.yaml
+```
+
+Schema notes (`image_variable_map.yaml`):
+
+- `rules` map image logical paths to `variable_name` + `visualization_name`.
+- Optional `physical_to_logical` maps file variable names to logical names.
+
+Example:
+
+```yaml
+schema_version: 1
+physical_to_logical:
+  exact:
+    hll_pressure: pressure
+  regex:
+    - pattern: "^hll_(.+)$"
+      replace: "\\1"
 ```
 
 The app will drop and re-ingest the collection each time it starts.

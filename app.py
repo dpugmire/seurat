@@ -16,7 +16,16 @@ from ui import build_ui
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("campaign_path", help="Path to .aca campaign file")
+    ap.add_argument(
+        "--image-association-schema",
+        default="",
+        help="Optional path to image association schema text/YAML file.",
+    )
     args = ap.parse_args()
+
+    schema_path = ""
+    if args.image_association_schema:
+        schema_path = str(Path(args.image_association_schema).expanduser())
 
     client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=1500)
     collection = client[MONGO_DB][MONGO_COLLECTION]
@@ -34,6 +43,7 @@ def main():
         collection=collection,
         parse_campaign=parse_campaign,
         campaign_path=args.campaign_path,
+        image_association_schema_path=schema_path,
     )
 
     build_ui(

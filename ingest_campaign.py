@@ -1,12 +1,13 @@
 import os, io, struct, re
 import argparse
+from pathlib import Path
 from pymongo import MongoClient
 from adios2 import FileReader
 
 import numpy as np
 from PIL import Image
 from bson.binary import Binary
-from typing import Optional, Any
+from typing import Optional, Any, Dict, List, Pattern
 
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
 MONGO_DB = os.getenv("MONGO_DB", "catnip_campaigns")
@@ -24,6 +25,346 @@ def clear_collection():
 
 def _to_simple_string(input: str) -> str:
     return input.translate(str.maketrans("", "", '"'))
+
+
+def _load_image_association_schema_text(schema_path: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    """
+    Load an optional image association schema text/YAML file.
+    Returns (resolved_path_str, text) or (None, None) when schema_path is not set.
+    """
+    if not schema_path:
+        return (None, None)
+
+    p = Path(schema_path).expanduser().resolve()
+    if not p.exists():
+        raise FileNotFoundError(f"Image association schema file not found: {p}")
+    if not p.is_file():
+        raise ValueError(f"Image association schema path is not a file: {p}")
+
+    text = p.read_text(encoding="utf-8")
+    if not text.strip():
+        raise ValueError(f"Image association schema file is empty: {p}")
+
+    return (str(p), text)
+
+
+_IMAGE_ASSOC_MODES = {"first_match_wins", "all_matches"}
+_IMAGE_ASSOC_UNMATCHED = {"warn", "error", "ignore"}
+_IMAGE_SIZE_SEGMENT_RE = re.compile(r"^\d+x\d+$")
+
+
+def _compile_path_template(path_template: str) -> Pattern[str]:
+    """
+    Compile a path_template supporting:
+      - glob tokens: *, **, ?
+      - named captures: {name} -> one path segment ([^/]+)
+    """
+    template = str(path_template or "").strip()
+    if not template:
+        raise ValueError("Empty path_template")
+
+    parts: List[str] = ["^"]
+    i = 0
+    seen_fields = set()
+
+    while i < len(template):
+        ch = template[i]
+        if ch == "{":
+            end = template.find("}", i + 1)
+            if end < 0:
+                raise ValueError(f"Unclosed '{{' in path_template: {path_template!r}")
+            field = template[i + 1 : end].strip()
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", field or ""):
+                raise ValueError(f"Invalid capture field '{field}' in path_template: {path_template!r}")
+            if field in seen_fields:
+                parts.append(f"(?P={field})")
+            else:
+                parts.append(f"(?P<{field}>[^/]+)")
+                seen_fields.add(field)
+            i = end + 1
+            continue
+
+        if ch == "*":
+            if (i + 1) < len(template) and template[i + 1] == "*":
+                parts.append(".*")
+                i += 2
+            else:
+                parts.append("[^/]*")
+                i += 1
+            continue
+
+        if ch == "?":
+            parts.append("[^/]")
+            i += 1
+            continue
+
+        parts.append(re.escape(ch))
+        i += 1
+
+    parts.append("$")
+    return re.compile("".join(parts))
+
+
+def _load_image_association_schema(schema_file: str, schema_text: str) -> Dict[str, Any]:
+    try:
+        import yaml  # type: ignore
+    except Exception as e:
+        raise RuntimeError(
+            "Image association schema requires PyYAML. "
+            "Install with: pip install pyyaml"
+        ) from e
+
+    try:
+        data = yaml.safe_load(schema_text)
+    except Exception as e:
+        raise ValueError(f"Invalid YAML in schema file {schema_file}: {e}") from e
+
+    if not isinstance(data, dict):
+        raise ValueError(f"Schema root must be a mapping: {schema_file}")
+
+    try:
+        schema_version = int(data.get("schema_version", 0))
+    except Exception as e:
+        raise ValueError(f"schema_version must be an integer in {schema_file}") from e
+    if schema_version != 1:
+        raise ValueError(f"Unsupported schema_version={schema_version} in {schema_file}; expected 1")
+
+    matching = data.get("matching", {}) or {}
+    if not isinstance(matching, dict):
+        raise ValueError(f"'matching' must be a mapping in {schema_file}")
+
+    mode = str(matching.get("mode", "first_match_wins") or "first_match_wins").strip()
+    if mode not in _IMAGE_ASSOC_MODES:
+        raise ValueError(f"Unsupported matching.mode={mode!r} in {schema_file}")
+
+    on_unmatched = str(matching.get("on_unmatched", "warn") or "warn").strip()
+    if on_unmatched not in _IMAGE_ASSOC_UNMATCHED:
+        raise ValueError(f"Unsupported matching.on_unmatched={on_unmatched!r} in {schema_file}")
+
+    raw_rules = data.get("rules", [])
+    if not isinstance(raw_rules, list):
+        raise ValueError(f"'rules' must be a list in {schema_file}")
+
+    rules: List[Dict[str, Any]] = []
+    for idx, raw in enumerate(raw_rules):
+        if not isinstance(raw, dict):
+            raise ValueError(f"Rule at index {idx} is not a mapping in {schema_file}")
+
+        rule_id = str(raw.get("id", f"rule_{idx + 1}") or f"rule_{idx + 1}").strip()
+        if not rule_id:
+            rule_id = f"rule_{idx + 1}"
+
+        try:
+            priority = int(raw.get("priority", 1000))
+        except Exception as e:
+            raise ValueError(f"Rule '{rule_id}' has non-integer priority in {schema_file}") from e
+
+        path_template = str(raw.get("path_template", "") or "").strip()
+        if not path_template:
+            raise ValueError(f"Rule '{rule_id}' missing path_template in {schema_file}")
+
+        associate = raw.get("associate", {}) or {}
+        if not isinstance(associate, dict):
+            raise ValueError(f"Rule '{rule_id}' has non-mapping 'associate' in {schema_file}")
+
+        variable_from = str(associate.get("variable_from", "") or "").strip()
+        visualization_from = str(associate.get("visualization_from", "") or "").strip()
+        fixed_variable = str(associate.get("variable", "") or "").strip()
+        fixed_visualization = str(associate.get("visualization", "") or "").strip()
+
+        if not (variable_from or fixed_variable):
+            raise ValueError(
+                f"Rule '{rule_id}' requires associate.variable_from or associate.variable in {schema_file}"
+            )
+        if not (visualization_from or fixed_visualization):
+            raise ValueError(
+                f"Rule '{rule_id}' requires associate.visualization_from or associate.visualization in {schema_file}"
+            )
+
+        compiled = _compile_path_template(path_template)
+        rules.append(
+            {
+                "id": rule_id,
+                "priority": priority,
+                "order": idx,
+                "path_template": path_template,
+                "pattern": compiled,
+                "variable_from": variable_from,
+                "visualization_from": visualization_from,
+                "fixed_variable": fixed_variable,
+                "fixed_visualization": fixed_visualization,
+            }
+        )
+
+    raw_name_map = data.get("physical_to_logical", {}) or {}
+    exact_name_map: Dict[str, str] = {}
+    regex_name_map: List[Dict[str, Any]] = []
+    if raw_name_map:
+        if not isinstance(raw_name_map, dict):
+            raise ValueError(f"'physical_to_logical' must be a mapping in {schema_file}")
+
+        # Shorthand form:
+        # physical_to_logical:
+        #   hll_pressure: pressure
+        has_structured_keys = "exact" in raw_name_map or "regex" in raw_name_map
+        if not has_structured_keys:
+            for physical_name, logical_name in raw_name_map.items():
+                p = str(physical_name or "").strip()
+                l = str(logical_name or "").strip()
+                if not p or not l:
+                    continue
+                exact_name_map[p] = l
+        else:
+            raw_exact = raw_name_map.get("exact", {}) or {}
+            if not isinstance(raw_exact, dict):
+                raise ValueError(f"'physical_to_logical.exact' must be a mapping in {schema_file}")
+            for physical_name, logical_name in raw_exact.items():
+                p = str(physical_name or "").strip()
+                l = str(logical_name or "").strip()
+                if not p or not l:
+                    continue
+                exact_name_map[p] = l
+
+            raw_regex = raw_name_map.get("regex", []) or []
+            if not isinstance(raw_regex, list):
+                raise ValueError(f"'physical_to_logical.regex' must be a list in {schema_file}")
+            for idx, item in enumerate(raw_regex):
+                if not isinstance(item, dict):
+                    raise ValueError(
+                        f"'physical_to_logical.regex[{idx}]' must be a mapping in {schema_file}"
+                    )
+                pattern_text = str(item.get("pattern", "") or "").strip()
+                replace_text = str(item.get("replace", "") or "")
+                if not pattern_text:
+                    raise ValueError(
+                        f"'physical_to_logical.regex[{idx}].pattern' is required in {schema_file}"
+                    )
+                try:
+                    compiled_pattern = re.compile(pattern_text)
+                except Exception as e:
+                    raise ValueError(
+                        f"Invalid regex pattern in physical_to_logical.regex[{idx}] "
+                        f"for {schema_file}: {e}"
+                    ) from e
+                regex_name_map.append(
+                    {
+                        "pattern": compiled_pattern,
+                        "replace": replace_text,
+                    }
+                )
+
+    rules.sort(key=lambda r: (int(r["priority"]), int(r["order"])))
+    return {
+        "schema_file": schema_file,
+        "schema_version": schema_version,
+        "mode": mode,
+        "on_unmatched": on_unmatched,
+        "rules": rules,
+        "physical_to_logical_exact": exact_name_map,
+        "physical_to_logical_regex": regex_name_map,
+    }
+
+
+def _map_physical_to_logical_name(physical_name: str, schema: Optional[Dict[str, Any]]) -> str:
+    name = str(physical_name or "")
+    if not schema:
+        return name
+
+    exact_map = schema.get("physical_to_logical_exact", {}) or {}
+    mapped = exact_map.get(name, None)
+    if isinstance(mapped, str) and mapped:
+        return mapped
+
+    regex_rules = schema.get("physical_to_logical_regex", []) or []
+    for rule in regex_rules:
+        pattern = rule.get("pattern", None)
+        replace = str(rule.get("replace", "") or "")
+        if pattern is None:
+            continue
+        if pattern.search(name):
+            out = pattern.sub(replace, name, count=1)
+            if out:
+                return out
+
+    return name
+
+
+def _image_path_candidates(varpath: str) -> List[str]:
+    """
+    Build candidate logical paths for matching.
+    Some campaigns append '/<width>x<height>' after image.<t>.png.
+    """
+    p = str(varpath or "").replace("\\", "/").strip("/")
+    if not p:
+        return []
+
+    candidates = [p]
+    parts = p.split("/")
+    if parts and _IMAGE_SIZE_SEGMENT_RE.fullmatch(parts[-1]):
+        trimmed = "/".join(parts[:-1]).strip("/")
+        if trimmed and trimmed not in candidates:
+            candidates.append(trimmed)
+    return candidates
+
+
+def _match_image_association(varpath: str, schema: Dict[str, Any]) -> Optional[Dict[str, str]]:
+    candidates = _image_path_candidates(varpath)
+    if not candidates:
+        return None
+
+    mode = str(schema.get("mode", "first_match_wins"))
+    matches: List[Dict[str, str]] = []
+
+    for rule in schema.get("rules", []):
+        pattern = rule.get("pattern")
+        if not pattern:
+            continue
+
+        for candidate in candidates:
+            m = pattern.match(candidate)
+            if not m:
+                continue
+
+            groups = m.groupdict()
+            variable_name = str(rule.get("fixed_variable", "") or "")
+            visualization_name = str(rule.get("fixed_visualization", "") or "")
+
+            variable_from = str(rule.get("variable_from", "") or "")
+            if variable_from:
+                variable_name = str(groups.get(variable_from, "") or "")
+
+            visualization_from = str(rule.get("visualization_from", "") or "")
+            if visualization_from:
+                visualization_name = str(groups.get(visualization_from, "") or "")
+
+            matched = {
+                "rule_id": str(rule.get("id", "") or ""),
+                "candidate": candidate,
+                "variable_name": variable_name,
+                "visualization_name": visualization_name,
+            }
+            matches.append(matched)
+            break
+
+        if matches and mode == "first_match_wins":
+            return matches[0]
+
+    if not matches:
+        return None
+
+    if len(matches) > 1:
+        first = matches[0]
+        for m in matches[1:]:
+            if (
+                m.get("variable_name", "") != first.get("variable_name", "")
+                or m.get("visualization_name", "") != first.get("visualization_name", "")
+            ):
+                print(
+                    "[warn] conflicting image association matches for "
+                    f"{varpath!r}; using first rule '{first.get('rule_id', '')}'"
+                )
+                break
+    return matches[0]
 
 
 def _to_float(value: Any) -> Optional[float]:
@@ -202,9 +543,32 @@ def _extract_min_max_from_varinfo(varinfo: Any) -> tuple[Optional[float], Option
     return (fmin, fmax)
 
 
-def parse_campaign(campaign_path: str, collection):
+def parse_campaign(
+    campaign_path: str,
+    collection,
+    image_association_schema_path: Optional[str] = None,
+):
     print("reading: ", campaign_path)
+    schema_file, _schema_text = _load_image_association_schema_text(image_association_schema_path)
+    image_assoc_schema = None
+    if schema_file:
+        print("image association schema:", schema_file)
+        image_assoc_schema = _load_image_association_schema(schema_file, _schema_text or "")
+        print(
+            "image association mode:",
+            image_assoc_schema.get("mode"),
+            "on_unmatched:",
+            image_assoc_schema.get("on_unmatched"),
+            "rules:",
+            len(image_assoc_schema.get("rules", [])),
+            "name_map_exact:",
+            len(image_assoc_schema.get("physical_to_logical_exact", {})),
+            "name_map_regex:",
+            len(image_assoc_schema.get("physical_to_logical_regex", [])),
+        )
     var_stats = {}
+    image_assoc_matched = 0
+    image_assoc_unmatched = 0
 
     with FileReader(campaign_path) as fr:
         vars_dict = fr.available_variables()
@@ -226,6 +590,8 @@ def parse_campaign(campaign_path: str, collection):
             else:
                 var, file, varpath, producer, casename = extract_file_var_img(varname)
 
+            physical_var = str(var or "")
+            var = _map_physical_to_logical_name(physical_var, image_assoc_schema)
             metadata = varinfo
 
             #print('Var: ', var, 'varpath: ', varpath)
@@ -247,6 +613,35 @@ def parse_campaign(campaign_path: str, collection):
                 img_width, img_height = png_size(png_bytes)
 
                 visualization_name = get_visualization_name(varname)
+                association_rule_id = ""
+                association_source = "legacy"
+
+                if image_assoc_schema is not None:
+                    assoc = _match_image_association(varpath, image_assoc_schema)
+                    if assoc:
+                        image_assoc_matched += 1
+                        mapped_var = str(assoc.get("variable_name", "") or "").strip()
+                        mapped_vis = str(assoc.get("visualization_name", "") or "").strip()
+
+                        if mapped_var:
+                            physical_var = mapped_var
+                            var = _map_physical_to_logical_name(mapped_var, image_assoc_schema)
+                        if mapped_vis:
+                            visualization_name = mapped_vis
+                        association_rule_id = str(assoc.get("rule_id", "") or "")
+                        association_source = "schema"
+                    else:
+                        image_assoc_unmatched += 1
+                        action = str(image_assoc_schema.get("on_unmatched", "warn"))
+                        msg = (
+                            f"image association schema did not match path: {varpath!r} "
+                            f"(fallback to legacy path parser)"
+                        )
+                        if action == "error":
+                            raise ValueError(msg)
+                        if action == "warn":
+                            print("[warn]", msg)
+                        association_source = "legacy-unmatched"
 
                 # frame_index from ".../image.000450.png/..."
                 frame_index = extract_frame_index_from_varpath(varpath)
@@ -262,6 +657,7 @@ def parse_campaign(campaign_path: str, collection):
                     "campaign_path": campaign_path,
                     "file": file,
                     "variable_name": var,
+                    "variable_name_physical": physical_var,
                     "visualization_name": visualization_name,
                     "variable_path": varpath,
                     "variable_type": var_type,
@@ -274,6 +670,8 @@ def parse_campaign(campaign_path: str, collection):
                     "image_bytes": Binary(png_bytes),
                     "image_width": img_width,
                     "image_height": img_height,
+                    "association_source": association_source,
+                    "association_rule_id": association_rule_id,
                 }
             else:
                 # NEW: normalize min/max into top-level numeric fields for querying
@@ -283,6 +681,7 @@ def parse_campaign(campaign_path: str, collection):
                     "campaign_path": campaign_path,
                     "file": file,
                     "variable_name": var,
+                    "variable_name_physical": physical_var,
                     "variable_path": varpath,
                     "variable_type": var_type,
                     "producer": producer,
@@ -300,16 +699,26 @@ def parse_campaign(campaign_path: str, collection):
     print('Add statistics')
     for v in var_stats.items() :
         vname, stats = v
+        logical_vname = _map_physical_to_logical_name(vname, image_assoc_schema)
         for stat in stats :
             producer, statType, data = stat
             document = {"campaign_path": campaign_path,
-                        "variable_name": vname,
+                        "variable_name": logical_vname,
+                        "variable_name_physical": vname,
                         "variable_type": 'statistic',
                         "producer": producer,
                         "statistic_type": statType,
                         "data": data.tolist()}
             collection.insert_one(document)
 
+    if image_assoc_schema is not None:
+        print(
+            "image association summary:",
+            f"matched={image_assoc_matched}",
+            f"unmatched={image_assoc_unmatched}",
+            f"mode={image_assoc_schema.get('mode')}",
+            f"on_unmatched={image_assoc_schema.get('on_unmatched')}",
+        )
 
     print(collection.distinct("campaign_path"))
     print(collection.count_documents({}))
@@ -319,13 +728,22 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("campaign", help="Path to .aca campaign file")
     ap.add_argument("--clear", action="store_true", help="Clear collection before ingest")
+    ap.add_argument(
+        "--image-association-schema",
+        default=None,
+        help="Optional path to image association schema text/YAML file.",
+    )
     args = ap.parse_args()
 
     if args.clear:
         clear_collection()
 
     collection = get_collection()
-    parse_campaign(args.campaign, collection)
+    parse_campaign(
+        args.campaign,
+        collection,
+        image_association_schema_path=args.image_association_schema,
+    )
 
     coll = get_collection()
     print("Inserted docs:", coll.count_documents({"campaign_path": args.campaign}))

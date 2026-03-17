@@ -5,7 +5,14 @@ from query_parser import and_filter, python_query_to_mongo
 from state_init import clear_right_panes, fmt
 
 
-def attach_controllers(server, db, collection, parse_campaign, campaign_path: str):
+def attach_controllers(
+    server,
+    db,
+    collection,
+    parse_campaign,
+    campaign_path: str,
+    image_association_schema_path: str = "",
+):
     state, ctrl = server.state, server.controller
     GRID_CELL_COUNT = 9
 
@@ -799,10 +806,15 @@ def attach_controllers(server, db, collection, parse_campaign, campaign_path: st
 
         try:
             state.dbOk = True
-            state.dbStatus = f"Loading {campaign_path}..."
+            schema_note = f" (schema: {image_association_schema_path})" if image_association_schema_path else ""
+            state.dbStatus = f"Loading {campaign_path}{schema_note}..."
 
             collection.drop()
-            parse_campaign(campaign_path, collection)
+            parse_campaign(
+                campaign_path,
+                collection,
+                image_association_schema_path=image_association_schema_path or None,
+            )
 
             refresh_variable_list()
             state.dbStatus = f"Loaded {campaign_path} • variables={len(state.variableNames)}"
