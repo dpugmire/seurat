@@ -1,0 +1,16 @@
+__pycache__/
+.mypy_cache/
+.pytest_cache/
+.venv/
+.DS_Store
+.vscode/
+
+# Campaign/runtime artifacts
+*.aca
+*.bp
+*.png
+*.mp4
+runs/
+
+# Editor backups
+*~

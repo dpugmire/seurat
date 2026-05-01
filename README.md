@@ -1,4 +1,4 @@
-# Catnip Campaign DB Viewer
+# Seurat
 
 This is a small Trame (Vue3) application for viewing ADIOS campaign data.
 On startup, it reads a `.aca` campaign file. It puts the data into a Mongo DB and provides a UI to browse variables, view min/max summaries, filter with a simple query language, and preview image sequences as short videos.
@@ -16,9 +16,15 @@ High-level structure:
 Requirements (at minimum):
 
 - MongoDB running locally (or set `MONGO_URI`).
-- Python deps: `pymongo`, `trame`, `adios2`, `numpy`, `Pillow`.
+- Python deps: `pymongo`, `trame`, `trame-vuetify`, `adios2`, `numpy`, `Pillow`.
 - Optional for schema-driven image associations: `pyyaml`.
 - `ffmpeg` available on PATH for movie preview tiles.
+
+Install the Python dependencies from this repo:
+
+```bash
+python -m pip install -e ".[schema]"
+```
 
 Example:
 

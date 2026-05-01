@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "seurat"
+version = "0.1.0"
+description = "Trame viewer for ADIOS campaign data"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "adios2",
+    "numpy",
+    "pillow",
+    "pymongo",
+    "trame",
+    "trame-vuetify",
+]
+
+[project.optional-dependencies]
+schema = [
+    "PyYAML",
+]
+
+[project.scripts]
+seurat = "app:main"
+
+[tool.setuptools]
+py-modules = [
+    "app",
+    "catnip_db_app",
+    "catnip_parse_db",
+    "catnip_tree_app",
+    "config",
+    "controllers",
+    "db",
+    "ingest_campaign",
+    "media_utils",
+    "query_parser",
+    "state_init",
+    "ui",
+]
