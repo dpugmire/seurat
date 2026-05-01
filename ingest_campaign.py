@@ -1,4 +1,4 @@
-import os, io, struct, re
+import os, io, struct, re, json, sqlite3
 import argparse
 from pathlib import Path
 from pymongo import MongoClient
@@ -51,6 +51,22 @@ def _load_image_association_schema_text(schema_path: Optional[str]) -> tuple[Opt
 _IMAGE_ASSOC_MODES = {"first_match_wins", "all_matches"}
 _IMAGE_ASSOC_UNMATCHED = {"warn", "error", "ignore"}
 _IMAGE_SIZE_SEGMENT_RE = re.compile(r"^\d+x\d+$")
+_VISUALIZATION_API_TABLES = {
+    "visualization_sequence",
+    "visualization_variable",
+    "visualization_item",
+    "dataset",
+}
+_DISPLAY_ROLE_PRIORITY = {
+    "color-by": 0,
+    "y-axis": 1,
+    "contour-by": 2,
+    "streamline-by": 3,
+    "variable": 4,
+    "primary": 5,
+    "x-axis": 90,
+}
+_NONDISPLAY_ROLES = {"x-axis"}
 
 
 def _compile_path_template(path_template: str) -> Pattern[str]:
@@ -367,6 +383,237 @@ def _match_image_association(varpath: str, schema: Dict[str, Any]) -> Optional[D
     return matches[0]
 
 
+def _json_object_or_empty(value: Any) -> Dict[str, Any]:
+    """
+    Decode JSON metadata stored by hpc-campaign visualization tables.
+
+    The current API stores dictionaries, but this helper is intentionally
+    forgiving so older or hand-written metadata does not break ingestion.
+    """
+    if value is None:
+        return {}
+
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="replace")
+
+    if not isinstance(value, str):
+        return {}
+
+    text = value.strip()
+    if not text:
+        return {}
+
+    try:
+        decoded = json.loads(text)
+    except Exception:
+        return {"raw": text}
+
+    if isinstance(decoded, dict):
+        return decoded
+    return {"value": decoded}
+
+
+def _visualization_short_name(sequence_name: str) -> str:
+    """
+    Convert a full sequence path to the user-facing visualization token.
+
+    New API sequences are typically named:
+      <dataset>/visualizations/<name>
+
+    The viewer should show and filter on <name>, not the entire dataset path.
+    """
+    name = str(sequence_name or "").strip("/")
+    marker = "/visualizations/"
+    if marker in name:
+        token = name.split(marker, 1)[1].strip("/")
+        if token:
+            return token
+
+    if "/" in name:
+        return name.rsplit("/", 1)[-1]
+    return name
+
+
+def _role_sort_key(role: str) -> tuple[int, str]:
+    role_norm = str(role or "").strip().lower()
+    return (_DISPLAY_ROLE_PRIORITY.get(role_norm, 50), role_norm)
+
+
+def _normalize_visualization_variables(variables: List[Dict[str, str]]) -> List[Dict[str, Any]]:
+    """
+    Dedupe visualization variables while preserving all roles per variable.
+
+    A heatmap_contour visualization may reference the same variable twice with
+    roles color-by and contour-by. The viewer only needs one document per
+    variable, but keeping all roles makes the association inspectable later.
+    """
+    grouped: Dict[tuple[str, str], Dict[str, Any]] = {}
+
+    for spec in variables:
+        name = str(spec.get("name", "") or "").strip()
+        if not name:
+            continue
+
+        source_dataset = str(spec.get("source_dataset", "") or "").strip()
+        role = str(spec.get("role", "") or "variable").strip()
+        role_norm = role.lower()
+        key = (name, source_dataset)
+
+        entry = grouped.setdefault(
+            key,
+            {
+                "name": name,
+                "source_dataset": source_dataset,
+                "roles": [],
+            },
+        )
+        if role_norm and role_norm not in entry["roles"]:
+            entry["roles"].append(role_norm)
+
+    normalized = list(grouped.values())
+    for entry in normalized:
+        entry["roles"].sort(key=_role_sort_key)
+
+    normalized.sort(
+        key=lambda entry: (
+            min((_role_sort_key(role)[0] for role in entry.get("roles", [])), default=50),
+            str(entry.get("name", "")),
+            str(entry.get("source_dataset", "")),
+        )
+    )
+    return normalized
+
+
+def _display_visualization_variables(variables: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Pick variables that should appear in the viewer's variable list.
+
+    Axis variables like time are metadata for a plot, not usually the data a
+    scientist wants to browse. If x-axis is the only role present, keep it as a
+    fallback so the image remains reachable.
+    """
+    display_variables = [
+        entry
+        for entry in variables
+        if set(entry.get("roles", [])) - _NONDISPLAY_ROLES
+    ]
+    return display_variables or variables
+
+
+def _load_visualization_api_index(campaign_path: str) -> Dict[str, Dict[str, Any]]:
+    """
+    Load hpc-campaign visualization API associations from the ACA SQLite tables.
+
+    FileReader exposes image payloads as ADIOS variables, but the semantic
+    source-variable association lives in SQLite tables:
+
+      visualization_sequence -> visualization_variable -> visualization_item
+
+    The returned dictionary is keyed by image dataset name. Image variables read
+    through ADIOS may append a trailing '/<width>x<height>', so callers should
+    use _image_path_candidates() when looking up entries.
+    """
+    path = Path(campaign_path).expanduser()
+    if not path.exists():
+        return {}
+
+    try:
+        con = sqlite3.connect(str(path))
+        con.row_factory = sqlite3.Row
+    except sqlite3.Error as e:
+        print(f"[warn] could not open ACA SQLite metadata for visualization API: {e}")
+        return {}
+
+    try:
+        available_tables = {
+            str(row["name"])
+            for row in con.execute("select name from sqlite_master where type = 'table'")
+        }
+        if not _VISUALIZATION_API_TABLES.issubset(available_tables):
+            return {}
+
+        rows = con.execute(
+            """
+            select
+                vs.visid as visid,
+                vs.name as sequence_name,
+                vs.vistype as visualization_kind,
+                vs.metadata as sequence_metadata,
+                vi.item_order as item_order,
+                vi.item_type as item_type,
+                vi.item_uuid as item_uuid,
+                vi.metadata as item_metadata,
+                image_dataset.name as image_name,
+                source_dataset.name as source_dataset,
+                vv.variable_name as variable_name,
+                vv.role as role
+            from visualization_sequence as vs
+            join visualization_item as vi on vi.visid = vs.visid
+            left join dataset as image_dataset on image_dataset.uuid = vi.item_uuid
+            left join visualization_variable as vv on vv.visid = vs.visid
+            left join dataset as source_dataset on source_dataset.rowid = vv.datasetid
+            where upper(vi.item_type) = 'IMAGE'
+            order by vs.visid, vi.item_order, vv.variable_name, vv.role
+            """
+        )
+
+        index: Dict[str, Dict[str, Any]] = {}
+        for row in rows:
+            image_name = str(row["image_name"] or "").strip("/")
+            if not image_name:
+                continue
+
+            sequence_name = str(row["sequence_name"] or "")
+            entry = index.setdefault(
+                image_name,
+                {
+                    "sequence_id": int(row["visid"]),
+                    "sequence_name": sequence_name,
+                    "visualization_name": _visualization_short_name(sequence_name),
+                    "visualization_kind": str(row["visualization_kind"] or ""),
+                    "sequence_metadata": _json_object_or_empty(row["sequence_metadata"]),
+                    "item_order": int(row["item_order"]),
+                    "item_type": str(row["item_type"] or ""),
+                    "item_uuid": str(row["item_uuid"] or ""),
+                    "item_metadata": _json_object_or_empty(row["item_metadata"]),
+                    "variables": [],
+                },
+            )
+
+            variable_name = str(row["variable_name"] or "").strip()
+            if variable_name:
+                entry["variables"].append(
+                    {
+                        "name": variable_name,
+                        "role": str(row["role"] or "variable"),
+                        "source_dataset": str(row["source_dataset"] or ""),
+                    }
+                )
+
+        for entry in index.values():
+            variables = _normalize_visualization_variables(entry.get("variables", []))
+            entry["variables"] = variables
+            entry["display_variables"] = _display_visualization_variables(variables)
+
+        return index
+    except sqlite3.Error as e:
+        print(f"[warn] could not read visualization API metadata: {e}")
+        return {}
+    finally:
+        con.close()
+
+
+def _lookup_visualization_api_image(
+    varpath: str,
+    visualization_api_index: Dict[str, Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    for candidate in _image_path_candidates(varpath):
+        entry = visualization_api_index.get(candidate)
+        if entry is not None:
+            return entry
+    return None
+
+
 def _to_float(value: Any) -> Optional[float]:
     """
     Best-effort conversion to float.
@@ -569,6 +816,10 @@ def parse_campaign(
     var_stats = {}
     image_assoc_matched = 0
     image_assoc_unmatched = 0
+    visualization_api_matched = 0
+    visualization_api_index = _load_visualization_api_index(campaign_path)
+    if visualization_api_index:
+        print("visualization API image associations:", len(visualization_api_index))
 
     with FileReader(campaign_path) as fr:
         vars_dict = fr.available_variables()
@@ -615,6 +866,42 @@ def parse_campaign(
                 visualization_name = get_visualization_name(varname)
                 association_rule_id = ""
                 association_source = "legacy"
+                visualization_api_entry = _lookup_visualization_api_image(varpath, visualization_api_index)
+                visualization_variables: List[Dict[str, Any]] = []
+                image_variable_records = [
+                    {
+                        "physical_var": physical_var,
+                        "logical_var": var,
+                        "roles": [],
+                        "source_dataset": "",
+                    }
+                ]
+
+                if visualization_api_entry is not None:
+                    visualization_api_matched += 1
+                    visualization_name = str(
+                        visualization_api_entry.get("visualization_name", "") or visualization_name
+                    )
+                    visualization_variables = list(visualization_api_entry.get("variables", []))
+                    display_variables = list(visualization_api_entry.get("display_variables", []))
+                    if display_variables:
+                        image_variable_records = []
+                        for api_var in display_variables:
+                            api_physical_var = str(api_var.get("name", "") or "").strip()
+                            if not api_physical_var:
+                                continue
+                            image_variable_records.append(
+                                {
+                                    "physical_var": api_physical_var,
+                                    "logical_var": _map_physical_to_logical_name(
+                                        api_physical_var,
+                                        image_assoc_schema,
+                                    ),
+                                    "roles": list(api_var.get("roles", [])),
+                                    "source_dataset": str(api_var.get("source_dataset", "") or ""),
+                                }
+                            )
+                    association_source = "visualization-api"
 
                 if image_assoc_schema is not None:
                     assoc = _match_image_association(varpath, image_assoc_schema)
@@ -626,11 +913,19 @@ def parse_campaign(
                         if mapped_var:
                             physical_var = mapped_var
                             var = _map_physical_to_logical_name(mapped_var, image_assoc_schema)
+                            image_variable_records = [
+                                {
+                                    "physical_var": physical_var,
+                                    "logical_var": var,
+                                    "roles": [],
+                                    "source_dataset": "",
+                                }
+                            ]
                         if mapped_vis:
                             visualization_name = mapped_vis
                         association_rule_id = str(assoc.get("rule_id", "") or "")
                         association_source = "schema"
-                    else:
+                    elif visualization_api_entry is None:
                         image_assoc_unmatched += 1
                         action = str(image_assoc_schema.get("on_unmatched", "warn"))
                         msg = (
@@ -643,6 +938,16 @@ def parse_campaign(
                             print("[warn]", msg)
                         association_source = "legacy-unmatched"
 
+                if not image_variable_records:
+                    image_variable_records = [
+                        {
+                            "physical_var": physical_var,
+                            "logical_var": var,
+                            "roles": [],
+                            "source_dataset": "",
+                        }
+                    ]
+
                 # frame_index from ".../image.000450.png/..."
                 frame_index = extract_frame_index_from_varpath(varpath)
                 if frame_index is None:
@@ -653,11 +958,9 @@ def parse_campaign(
                         digits = re.findall(r"(\d+)", candidate)
                         frame_index = int(digits[-1]) if digits else None
 
-                document = {
+                base_document = {
                     "campaign_path": campaign_path,
                     "file": file,
-                    "variable_name": var,
-                    "variable_name_physical": physical_var,
                     "visualization_name": visualization_name,
                     "variable_path": varpath,
                     "variable_type": var_type,
@@ -667,12 +970,52 @@ def parse_campaign(
                     "metadata": metadata,
                     "movie_cache": 1,
                     "frame_index": int(frame_index) if frame_index is not None else 0,
-                    "image_bytes": Binary(png_bytes),
                     "image_width": img_width,
                     "image_height": img_height,
                     "association_source": association_source,
                     "association_rule_id": association_rule_id,
                 }
+
+                if visualization_api_entry is not None:
+                    base_document.update(
+                        {
+                            "visualization_sequence_name": str(
+                                visualization_api_entry.get("sequence_name", "") or ""
+                            ),
+                            "visualization_kind": str(
+                                visualization_api_entry.get("visualization_kind", "") or ""
+                            ),
+                            "visualization_variables": visualization_variables,
+                            "visualization_item_order": int(
+                                visualization_api_entry.get("item_order", 0) or 0
+                            ),
+                            "visualization_item_uuid": str(
+                                visualization_api_entry.get("item_uuid", "") or ""
+                            ),
+                            "visualization_sequence_metadata": visualization_api_entry.get(
+                                "sequence_metadata",
+                                {},
+                            ),
+                            "visualization_item_metadata": visualization_api_entry.get(
+                                "item_metadata",
+                                {},
+                            ),
+                        }
+                    )
+
+                for record in image_variable_records:
+                    document = dict(base_document)
+                    document.update(
+                        {
+                            "variable_name": record["logical_var"],
+                            "variable_name_physical": record["physical_var"],
+                            "visualization_roles": record["roles"],
+                            "visualization_source_dataset": record["source_dataset"],
+                            "image_bytes": Binary(png_bytes),
+                        }
+                    )
+                    collection.insert_one(document)
+                continue
             else:
                 # NEW: normalize min/max into top-level numeric fields for querying
                 fmin, fmax = _extract_min_max_from_varinfo(varinfo)
@@ -718,6 +1061,12 @@ def parse_campaign(
             f"unmatched={image_assoc_unmatched}",
             f"mode={image_assoc_schema.get('mode')}",
             f"on_unmatched={image_assoc_schema.get('on_unmatched')}",
+        )
+    if visualization_api_index:
+        print(
+            "visualization API association summary:",
+            f"matched={visualization_api_matched}",
+            f"available={len(visualization_api_index)}",
         )
 
     print(collection.distinct("campaign_path"))

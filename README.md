@@ -33,6 +33,11 @@ python app.py campaign.aca
 python app.py campaign.aca --image-association-schema image_variable_map.yaml
 ```
 
+Visualization association notes:
+
+- Campaigns created with the new hpc-campaign visualization API are associated through the ACA `visualization_*` metadata tables.
+- Legacy image path parsing is still used as a fallback for older campaigns.
+
 Schema notes (`image_variable_map.yaml`):
 
 - `rules` map image logical paths to `variable_name` + `visualization_name`.
