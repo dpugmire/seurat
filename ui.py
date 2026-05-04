@@ -701,7 +701,7 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
             html.Span("Query:", class_="text-caption ml-4")
             vuetify.VTextField(
                 v_model=("queryText",),
-                placeholder="e.g. var == 'omega' and producer == 'ns' and min > 1.0",
+                placeholder="e.g. var == 'rho' and source_dataset == 'hll_128/output.bp'",
                 density="compact",
                 hide_details=True,
                 variant="outlined",
@@ -1200,30 +1200,16 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                                 vuetify.VIcon("mdi-sort", size="x-small", class_="ml-1")
                                                         with html.Th(
                                                             style="cursor:pointer; user-select:none; white-space:nowrap;",
-                                                            click=(ctrl.sort_sources, "['producer']"),
+                                                            click=(ctrl.sort_sources, "['source_dataset']"),
                                                         ):
-                                                            html.Span("producer")
-                                                            with vuetify.Template(v_if="sourceSortField === 'producer'"):
+                                                            html.Span("source dataset")
+                                                            with vuetify.Template(v_if="sourceSortField === 'source_dataset'"):
                                                                 vuetify.VIcon(
                                                                     ("sourceSortAsc ? 'mdi-arrow-up' : 'mdi-arrow-down'",),
                                                                     size="x-small",
                                                                     class_="ml-1",
                                                                 )
-                                                            with vuetify.Template(v_if="sourceSortField !== 'producer'"):
-                                                                vuetify.VIcon("mdi-sort", size="x-small", class_="ml-1")
-
-                                                        with html.Th(
-                                                            style="cursor:pointer; user-select:none; white-space:nowrap;",
-                                                            click=(ctrl.sort_sources, "['casename']"),
-                                                        ):
-                                                            html.Span("casename")
-                                                            with vuetify.Template(v_if="sourceSortField === 'casename'"):
-                                                                vuetify.VIcon(
-                                                                    ("sourceSortAsc ? 'mdi-arrow-up' : 'mdi-arrow-down'",),
-                                                                    size="x-small",
-                                                                    class_="ml-1",
-                                                                )
-                                                            with vuetify.Template(v_if="sourceSortField !== 'casename'"):
+                                                            with vuetify.Template(v_if="sourceSortField !== 'source_dataset'"):
                                                                 vuetify.VIcon("mdi-sort", size="x-small", class_="ml-1")
 
                                                         with html.Th(
@@ -1268,8 +1254,10 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                                     checked=("((selectedSourceKeys || []).includes(r._key))",),
                                                                     click=(ctrl.toggle_source_visibility, "[r._key]"),
                                                                 )
-                                                            html.Td("{{ r.producer }}", style="white-space:nowrap;")
-                                                            html.Td("{{ r.casename }}", style="white-space:nowrap;")
+                                                            html.Td(
+                                                                "{{ r.source_dataset || [r.producer, r.casename, r.file].filter(Boolean).join('/') }}",
+                                                                style="white-space:nowrap;",
+                                                            )
                                                             html.Td("{{ r.min }}", style="white-space:nowrap;")
                                                             html.Td("{{ r.max }}", style="white-space:nowrap;")
                                         with vuetify.Template(v_if="!detailsSelectedVar"):

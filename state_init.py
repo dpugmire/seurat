@@ -56,6 +56,7 @@ def init_state(state, db) -> None:
             "visualization_name": "",
             "selected_visualization": "",
             "visualization_options": [],
+            "source_dataset": "",
             "producer": "",
             "casename": "",
             "file": "",

@@ -50,6 +50,10 @@ def attach_controllers(
         update_selected_source_label()
 
     def source_filter_from_row(row: Dict[str, str]) -> Dict[str, str]:
+        source_dataset = str(row.get("source_dataset", "") or "")
+        if source_dataset:
+            return {"source_dataset": source_dataset}
+
         filt: Dict[str, str] = {
             "producer": row.get("producer", ""),
             "casename": row.get("casename", ""),
@@ -65,6 +69,7 @@ def attach_controllers(
             "visualization_name": "",
             "selected_visualization": "",
             "visualization_options": [],
+            "source_dataset": "",
             "producer": "",
             "casename": "",
             "file": "",
@@ -236,12 +241,16 @@ def attach_controllers(
         rows = summary.get("sources", []) or []
         state.sourceRows = [
             {
+                "source_dataset": r.get("source_dataset", ""),
                 "producer": r.get("producer", ""),
                 "casename": r.get("casename", ""),
                 "file": r.get("file", ""),
                 "min": fmt(r.get("min", None)),
                 "max": fmt(r.get("max", None)),
-                "_key": f"{r.get('producer', '')}|{r.get('casename', '')}|{r.get('file', '')}",
+                "_key": (
+                    str(r.get("source_dataset", "") or "")
+                    or f"{r.get('producer', '')}|{r.get('casename', '')}|{r.get('file', '')}"
+                ),
             }
             for r in rows
         ]
@@ -287,6 +296,7 @@ def attach_controllers(
                 tile: Dict[str, str] = {
                     "variable_name": var_name,
                     "visualization_name": selected_vis,
+                    "source_dataset": row.get("source_dataset", ""),
                     "producer": row.get("producer", ""),
                     "casename": row.get("casename", ""),
                     "file": row.get("file", ""),

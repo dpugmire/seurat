@@ -4,6 +4,8 @@ from typing import Any, Dict, List, Optional
 FIELD_ALIASES = {
     "var": "variable_name",
     "type": "variable_type",
+    "dataset": "source_dataset",
+    "source": "source_dataset",
     "min": "min",
     "max": "max",
 }
@@ -11,10 +13,14 @@ FIELD_ALIASES = {
 ALLOWED_FIELDS = {
     "variable_name",
     "variable_type",
+    "source_dataset",
     "producer",
     "casename",
     "file",
     "visualization_name",
+    "visualization_kind",
+    "visualization_source_dataset",
+    "association_source",
     "variable_path",
     "campaign_path",
     "variable_location",

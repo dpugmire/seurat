@@ -146,21 +146,27 @@ class CampaignDb:
             "visualization_name": {"$ne": ""},
         }
         query = and_filter(base_query, extra_filter)
-        proj = {"_id": 0, "producer": 1, "casename": 1, "file": 1}
+        proj = {"_id": 0, "source_dataset": 1, "producer": 1, "casename": 1, "file": 1}
 
-        cursor = self.collection.find(query, proj).sort([("producer", 1), ("casename", 1), ("file", 1)])
+        cursor = self.collection.find(query, proj).sort(
+            [("source_dataset", 1), ("producer", 1), ("casename", 1), ("file", 1)]
+        )
         seen = set()
         sources: List[Dict[str, Any]] = []
         for doc in cursor:
+            source_dataset = (
+                "" if doc.get("source_dataset", None) is None else str(doc.get("source_dataset"))
+            )
             producer = "" if doc.get("producer", None) is None else str(doc.get("producer"))
             casename = "" if doc.get("casename", None) is None else str(doc.get("casename"))
             file = "" if doc.get("file", None) is None else str(doc.get("file"))
-            key = (producer, casename, file)
+            key = source_dataset or (producer, casename, file)
             if key in seen:
                 continue
             seen.add(key)
             sources.append(
                 {
+                    "source_dataset": source_dataset,
                     "producer": producer,
                     "casename": casename,
                     "file": file,
@@ -209,6 +215,7 @@ class CampaignDb:
 
         proj = {
             "_id": 0,
+            "source_dataset": 1,
             "producer": 1,
             "casename": 1,
             "file": 1,
@@ -248,6 +255,11 @@ class CampaignDb:
 
                 sources.append(
                     {
+                        "source_dataset": (
+                            ""
+                            if doc.get("source_dataset", None) is None
+                            else str(doc.get("source_dataset"))
+                        ),
                         "producer": "" if doc.get("producer", None) is None else str(doc.get("producer")),
                         "casename": "" if doc.get("casename", None) is None else str(doc.get("casename")),
                         "file": "" if doc.get("file", None) is None else str(doc.get("file")),
@@ -299,6 +311,7 @@ class CampaignDb:
         producer: str,
         casename: str,
         file: str = "",
+        source_dataset: str = "",
         extra_filter: Optional[Dict[str, Any]] = None,
         limit_frames: int = 240,
     ) -> Tuple[List[bytes], int]:
@@ -309,11 +322,14 @@ class CampaignDb:
             "variable_name": variable_name,
             "variable_type": "image",
             "visualization_name": visualization_name,
-            "producer": producer,
-            "casename": casename,
         }
-        if file:
-            base_query["file"] = file
+        if source_dataset:
+            base_query["source_dataset"] = source_dataset
+        else:
+            base_query["producer"] = producer
+            base_query["casename"] = casename
+            if file:
+                base_query["file"] = file
 
         query = and_filter(base_query, extra_filter)
 
@@ -361,7 +377,14 @@ class CampaignDb:
         }
         query = and_filter(base_query, extra_filter)
 
-        proj = {"_id": 1, "producer": 1, "casename": 1, "file": 1, "visualization_name": 1}
+        proj = {
+            "_id": 1,
+            "source_dataset": 1,
+            "producer": 1,
+            "casename": 1,
+            "file": 1,
+            "visualization_name": 1,
+        }
 
         try:
             cursor = self.collection.find(query, proj).sort([("_id", 1)])
@@ -371,6 +394,7 @@ class CampaignDb:
 
             for doc in cursor:
                 vis = str(doc.get("visualization_name", "") or "")
+                source_dataset = str(doc.get("source_dataset", "") or "")
                 producer = str(doc.get("producer", "") or "")
                 casename = str(doc.get("casename", "") or "")
                 file = str(doc.get("file", "") or "")
@@ -378,7 +402,7 @@ class CampaignDb:
                 if not vis:
                     continue
 
-                key = (vis, producer, casename, file)
+                key = (vis, source_dataset) if source_dataset else (vis, producer, casename, file)
                 if key in seen:
                     continue
                 seen.add(key)
@@ -389,6 +413,7 @@ class CampaignDb:
                     producer=producer,
                     casename=casename,
                     file=file,
+                    source_dataset=source_dataset,
                     extra_filter=extra_filter,
                     limit_frames=limit_frames,
                 )
@@ -419,6 +444,7 @@ class CampaignDb:
                     {
                         "variable_name": variable_name,
                         "visualization_name": vis,
+                        "source_dataset": source_dataset,
                         "producer": producer,
                         "casename": casename,
                         "file": file,

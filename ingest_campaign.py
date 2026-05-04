@@ -693,6 +693,26 @@ def _parse_image_path_components(parts: list[str]) -> tuple[str, str, str, str, 
     return producer, casename, filename, varname, visualization_name
 
 
+def _source_dataset_from_path(varpath: str) -> str:
+    """
+    Return the logical source dataset path for an ADIOS variable/image path.
+
+    New visualization API entries carry this explicitly. This fallback keeps
+    legacy and raw-variable documents queryable through the same field.
+    """
+    parts = str(varpath or "").strip("/").split("/")
+    if not parts or parts == [""]:
+        return ""
+
+    bp_idx = next((i for i, p in enumerate(parts) if p.lower().endswith(".bp")), -1)
+    if bp_idx >= 0:
+        return "/".join(parts[: bp_idx + 1])
+
+    if len(parts) > 1:
+        return "/".join(parts[:-1])
+    return str(varpath or "").strip("/")
+
+
 def png_size(png_bytes: bytes) -> tuple[int, int]:
     # assumes valid PNG
     width, height = struct.unpack(">II", png_bytes[16:24])
@@ -844,6 +864,7 @@ def parse_campaign(
             physical_var = str(var or "")
             var = _map_physical_to_logical_name(physical_var, image_assoc_schema)
             metadata = varinfo
+            source_dataset = _source_dataset_from_path(varpath)
 
             #print('Var: ', var, 'varpath: ', varpath)
             ## check if it's a statistical variable (e.g. ends with "_stats") and if so, include min/max in the document for easier querying
@@ -855,7 +876,7 @@ def parse_campaign(
                 data = fr.read(varname)
                 if baseVar not in var_stats :
                     var_stats[baseVar] = []
-                var_stats[baseVar].append((producer, statType, data[0]))
+                var_stats[baseVar].append((producer, source_dataset, statType, data[0]))
                 continue
 
             if var_type == "image":
@@ -873,7 +894,7 @@ def parse_campaign(
                         "physical_var": physical_var,
                         "logical_var": var,
                         "roles": [],
-                        "source_dataset": "",
+                        "source_dataset": source_dataset,
                     }
                 ]
 
@@ -918,7 +939,7 @@ def parse_campaign(
                                     "physical_var": physical_var,
                                     "logical_var": var,
                                     "roles": [],
-                                    "source_dataset": "",
+                                    "source_dataset": source_dataset,
                                 }
                             ]
                         if mapped_vis:
@@ -944,7 +965,7 @@ def parse_campaign(
                             "physical_var": physical_var,
                             "logical_var": var,
                             "roles": [],
-                            "source_dataset": "",
+                            "source_dataset": source_dataset,
                         }
                     ]
 
@@ -1004,13 +1025,15 @@ def parse_campaign(
                     )
 
                 for record in image_variable_records:
+                    record_source_dataset = str(record.get("source_dataset", "") or source_dataset)
                     document = dict(base_document)
                     document.update(
                         {
                             "variable_name": record["logical_var"],
                             "variable_name_physical": record["physical_var"],
+                            "source_dataset": record_source_dataset,
                             "visualization_roles": record["roles"],
-                            "visualization_source_dataset": record["source_dataset"],
+                            "visualization_source_dataset": record_source_dataset,
                             "image_bytes": Binary(png_bytes),
                         }
                     )
@@ -1025,6 +1048,7 @@ def parse_campaign(
                     "file": file,
                     "variable_name": var,
                     "variable_name_physical": physical_var,
+                    "source_dataset": source_dataset,
                     "variable_path": varpath,
                     "variable_type": var_type,
                     "producer": producer,
@@ -1044,10 +1068,11 @@ def parse_campaign(
         vname, stats = v
         logical_vname = _map_physical_to_logical_name(vname, image_assoc_schema)
         for stat in stats :
-            producer, statType, data = stat
+            producer, source_dataset, statType, data = stat
             document = {"campaign_path": campaign_path,
                         "variable_name": logical_vname,
                         "variable_name_physical": vname,
+                        "source_dataset": source_dataset,
                         "variable_type": 'statistic',
                         "producer": producer,
                         "statistic_type": statType,
