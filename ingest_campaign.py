@@ -51,6 +51,8 @@ def _load_image_association_schema_text(schema_path: Optional[str]) -> tuple[Opt
 _IMAGE_ASSOC_MODES = {"first_match_wins", "all_matches"}
 _IMAGE_ASSOC_UNMATCHED = {"warn", "error", "ignore"}
 _IMAGE_SIZE_SEGMENT_RE = re.compile(r"^\d+x\d+$")
+# hpc-campaign writes the visualization API into the ACA SQLite database.
+# All four tables are needed to map an image item back to its source variables.
 _VISUALIZATION_API_TABLES = {
     "visualization_sequence",
     "visualization_variable",
@@ -532,6 +534,9 @@ def _load_visualization_api_index(campaign_path: str) -> Dict[str, Dict[str, Any
         if not _VISUALIZATION_API_TABLES.issubset(available_tables):
             return {}
 
+        # The visualization API describes images semantically, while ADIOS stores
+        # the image payloads as datasets. This join builds the bridge:
+        # sequence -> image item -> image dataset, plus sequence -> source vars.
         rows = con.execute(
             """
             select
@@ -564,6 +569,8 @@ def _load_visualization_api_index(campaign_path: str) -> Dict[str, Dict[str, Any
                 continue
 
             sequence_name = str(row["sequence_name"] or "")
+            # Key by the image dataset path because that is what FileReader gives
+            # us when it later walks available ADIOS variables.
             entry = index.setdefault(
                 image_name,
                 {
@@ -582,6 +589,9 @@ def _load_visualization_api_index(campaign_path: str) -> Dict[str, Dict[str, Any
 
             variable_name = str(row["variable_name"] or "").strip()
             if variable_name:
+                # variable_name is the simulation variable used by the
+                # visualization; source_dataset names the BP/output dataset it
+                # came from. role explains how the variable was used.
                 entry["variables"].append(
                     {
                         "name": variable_name,
@@ -607,6 +617,8 @@ def _lookup_visualization_api_image(
     varpath: str,
     visualization_api_index: Dict[str, Dict[str, Any]],
 ) -> Optional[Dict[str, Any]]:
+    # ADIOS may expose image datasets with an added size suffix such as
+    # /480x480. Try both the exact path and normalized candidates.
     for candidate in _image_path_candidates(varpath):
         entry = visualization_api_index.get(candidate)
         if entry is not None:
@@ -837,6 +849,9 @@ def parse_campaign(
     image_assoc_matched = 0
     image_assoc_unmatched = 0
     visualization_api_matched = 0
+    # Load the visualization API once from SQLite metadata, then use it while
+    # walking ADIOS variables. Older campaigns without these tables fall back to
+    # schema or legacy path parsing.
     visualization_api_index = _load_visualization_api_index(campaign_path)
     if visualization_api_index:
         print("visualization API image associations:", len(visualization_api_index))
@@ -889,6 +904,9 @@ def parse_campaign(
                 association_source = "legacy"
                 visualization_api_entry = _lookup_visualization_api_image(varpath, visualization_api_index)
                 visualization_variables: List[Dict[str, Any]] = []
+                # Default legacy association: the image belongs to the variable
+                # parsed from its path. The visualization API can replace this
+                # with one or more explicit source variables and roles.
                 image_variable_records = [
                     {
                         "physical_var": physical_var,
@@ -900,12 +918,18 @@ def parse_campaign(
 
                 if visualization_api_entry is not None:
                     visualization_api_matched += 1
+                    # Prefer API metadata over path-derived names. This is what
+                    # lets a heatmap/contour/streamline image be attached to the
+                    # actual simulation variable instead of the image dataset.
                     visualization_name = str(
                         visualization_api_entry.get("visualization_name", "") or visualization_name
                     )
                     visualization_variables = list(visualization_api_entry.get("variables", []))
                     display_variables = list(visualization_api_entry.get("display_variables", []))
                     if display_variables:
+                        # Insert one viewer document per displayed source
+                        # variable. Multi-variable visualizations therefore show
+                        # up under each meaningful variable in the UI.
                         image_variable_records = []
                         for api_var in display_variables:
                             api_physical_var = str(api_var.get("name", "") or "").strip()
@@ -998,6 +1022,9 @@ def parse_campaign(
                 }
 
                 if visualization_api_entry is not None:
+                    # Preserve the raw API metadata in Mongo so downstream UI or
+                    # debugging code can inspect the original sequence/item
+                    # relationship without reopening the ACA SQLite database.
                     base_document.update(
                         {
                             "visualization_sequence_name": str(
@@ -1027,6 +1054,9 @@ def parse_campaign(
                 for record in image_variable_records:
                     record_source_dataset = str(record.get("source_dataset", "") or source_dataset)
                     document = dict(base_document)
+                    # These fields are the normalized viewer-facing association:
+                    # which source variable this image represents, which source
+                    # dataset it came from, and which visualization roles it had.
                     document.update(
                         {
                             "variable_name": record["logical_var"],
