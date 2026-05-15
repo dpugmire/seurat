@@ -18,7 +18,9 @@ def init_state(state, db) -> None:
 
     state.variableNames = []
     state.variableGroups = []
+    state.variableLabelsById = {}
     state.variableGroupCollapsed = {}
+    state.showOnlyVisualizedVars = False
     state.selectedVar = ""
 
     state.queryText = ""
@@ -29,6 +31,7 @@ def init_state(state, db) -> None:
     state.draggedVar = ""
 
     state.detailsSelectedVar = ""
+    state.detailsSelectedVarId = ""
     state.detailsNumSources = 0
 
     state.detailsGlobalMin = ""
@@ -53,6 +56,7 @@ def init_state(state, db) -> None:
     state.gridCells = [
         {
             "variable_name": "",
+            "variable_id": "",
             "visualization_name": "",
             "selected_visualization": "",
             "visualization_options": [],
@@ -73,6 +77,7 @@ def init_state(state, db) -> None:
     state.contextMenuY = 0
     state.contextMenuKind = ""
     state.contextMenuItem = ""
+    state.contextMenuItemLabel = ""
     state.contextMenuCellIndex = -1
     state.contextMenuCellVisualizationOptions = []
     state.contextMenuCellSelectedVisualization = ""
@@ -80,6 +85,7 @@ def init_state(state, db) -> None:
 
 def clear_details(state) -> None:
     state.detailsSelectedVar = ""
+    state.detailsSelectedVarId = ""
     state.detailsNumSources = 0
 
     state.detailsGlobalMin = ""
@@ -106,3 +112,4 @@ def clear_right_panes(state) -> None:
     state.contextMenuVisible = False
     state.contextMenuCellVisualizationOptions = []
     state.contextMenuCellSelectedVisualization = ""
+    state.contextMenuItemLabel = ""

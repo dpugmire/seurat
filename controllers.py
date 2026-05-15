@@ -17,9 +17,18 @@ def attach_controllers(
     GRID_CELL_COUNT = 9
 
     def refresh_variable_list():
-        grouped = db.grouped_variable_names(extra_filter=state.queryFilter or None)
+        grouped = db.grouped_variable_names(
+            extra_filter=state.queryFilter or None,
+            only_visualized=bool(state.showOnlyVisualizedVars),
+        )
         state.variableGroups = grouped
-        state.variableNames = [v for g in grouped for v in (g.get("variables") or [])]
+        variables = [v for g in grouped for v in (g.get("variables") or []) if isinstance(v, dict)]
+        state.variableNames = [str(v.get("id", "") or "") for v in variables if str(v.get("id", "") or "")]
+        state.variableLabelsById = {
+            str(v.get("id", "") or ""): str(v.get("label", "") or v.get("name", "") or v.get("id", "") or "")
+            for v in variables
+            if str(v.get("id", "") or "")
+        }
         existing_collapsed = dict(state.variableGroupCollapsed or {})
         valid_group_names = {str(g.get("name", "")) for g in grouped}
         state.variableGroupCollapsed = {
@@ -50,6 +59,14 @@ def attach_controllers(
         update_selected_source_label()
 
     def source_filter_from_row(row: Dict[str, str]) -> Dict[str, str]:
+        variable_id = str(row.get("variable_id", "") or "")
+        if variable_id:
+            filt = {"variable_id": variable_id}
+            source_dataset = str(row.get("source_dataset", "") or "")
+            if source_dataset:
+                filt["source_dataset"] = source_dataset
+            return filt
+
         source_dataset = str(row.get("source_dataset", "") or "")
         if source_dataset:
             return {"source_dataset": source_dataset}
@@ -65,6 +82,7 @@ def attach_controllers(
 
     def empty_grid_cell() -> Dict[str, Any]:
         return {
+            "variable_id": "",
             "variable_name": "",
             "visualization_name": "",
             "selected_visualization": "",
@@ -99,20 +117,27 @@ def attach_controllers(
             return "heatmap"
         return vis_names[0] if vis_names else ""
 
-    def build_grid_cell_for_variable(var_name: str, preferred_vis: str = "") -> Dict[str, Any]:
+    def variable_label(variable_id: str) -> str:
+        item_id = str(variable_id or "").strip()
+        labels = dict(state.variableLabelsById or {})
+        return str(labels.get(item_id, "") or item_id)
+
+    def build_grid_cell_for_variable(variable_id: str, preferred_vis: str = "") -> Dict[str, Any]:
         cell = empty_grid_cell()
-        var = str(var_name or "").strip()
-        if not var:
+        var_id = str(variable_id or "").strip()
+        if not var_id:
             return cell
+        label = variable_label(var_id)
 
         qf = state.queryFilter or None
-        vis_names = db.distinct_visualization_names_for_variable(var, extra_filter=qf)
+        vis_names = db.distinct_visualization_names_for_variable(var_id, extra_filter=qf)
 
         selected_vis = choose_visualization_default(vis_names, preferred_vis)
 
         cell.update(
             {
-                "variable_name": var,
+                "variable_id": var_id,
+                "variable_name": label,
                 "visualization_name": selected_vis,
                 "selected_visualization": selected_vis,
                 "visualization_options": vis_names,
@@ -124,7 +149,7 @@ def attach_controllers(
         if selected_vis:
             movie_query = and_filter(qf, {"visualization_name": selected_vis}) if qf else {"visualization_name": selected_vis}
             one = db.get_first_movie_tiles_for_variable(
-                var,
+                var_id,
                 extra_filter=movie_query,
                 limit=1,
                 limit_frames=MAX_MOVIE_FRAMES,
@@ -136,7 +161,8 @@ def attach_controllers(
                 cell["status"] = "no-frames"
                 cell["note"] = f'No movie for "{selected_vis}"'
 
-        cell["variable_name"] = var
+        cell["variable_id"] = var_id
+        cell["variable_name"] = label
         cell["visualization_name"] = selected_vis
         cell["selected_visualization"] = selected_vis
         cell["visualization_options"] = vis_names
@@ -147,17 +173,18 @@ def attach_controllers(
         updated: List[Dict[str, Any]] = []
 
         for c in cells:
-            var = str(c.get("variable_name", "") or "").strip()
-            if not var:
+            var_id = str(c.get("variable_id", "") or c.get("variable_name", "") or "").strip()
+            if not var_id:
                 updated.append(empty_grid_cell())
                 continue
 
             preferred_vis = str(c.get("selected_visualization", "") or "")
             try:
-                updated.append(build_grid_cell_for_variable(var, preferred_vis=preferred_vis))
+                updated.append(build_grid_cell_for_variable(var_id, preferred_vis=preferred_vis))
             except Exception as e:
                 err_cell = empty_grid_cell()
-                err_cell["variable_name"] = var
+                err_cell["variable_id"] = var_id
+                err_cell["variable_name"] = variable_label(var_id)
                 err_cell["status"] = "error"
                 err_cell["note"] = f"{type(e).__name__}: {e}"
                 updated.append(err_cell)
@@ -207,28 +234,40 @@ def attach_controllers(
 
         state.sourceRows = sorted(rows, key=keyfn, reverse=(not asc))
 
-    def update_selected_var_panels(var_name: str):
-        if not var_name:
+    def refresh_after_variable_catalog_change():
+        refresh_variable_list()
+        if state.selectedVar and state.selectedVar not in (state.variableNames or []):
+            state.selectedVar = ""
+            clear_right_panes(state)
+        else:
+            update_selected_var_panels(state.selectedVar)
+        refresh_grid_cells()
+
+    def update_selected_var_panels(variable_id: str):
+        var_id = str(variable_id or "").strip()
+        if not var_id:
             clear_right_panes(state)
             return
 
-        previous_var = state.detailsSelectedVar
+        label = variable_label(var_id)
+        previous_var = state.detailsSelectedVarId
         previous_tile_map = (
             dict(state.tileVisualizationBySource or {})
-            if previous_var == var_name
+            if previous_var == var_id
             else {}
         )
         qf = state.queryFilter or None
-        summary = db.variable_min_max_summary(var_name, extra_filter=qf)
+        summary = db.variable_min_max_summary(var_id, extra_filter=qf)
 
         state.dbOk = db.ok
         state.dbStatus = (
-            f'Connected • Selected variable: "{var_name}" • QueryView: {state.queryViewLabel}'
+            f'Connected • Selected variable: "{label}" • QueryView: {state.queryViewLabel}'
             if db.ok
-            else f'DB error • "{var_name}" • {db.last_error}'
+            else f'DB error • "{label}" • {db.last_error}'
         )
 
-        state.detailsSelectedVar = var_name
+        state.detailsSelectedVar = label
+        state.detailsSelectedVarId = var_id
         state.detailsNumSources = int(summary.get("num_sources", 0))
 
         state.detailsGlobalMin = fmt(summary.get("global_min", None))
@@ -242,13 +281,19 @@ def attach_controllers(
         state.sourceRows = [
             {
                 "source_dataset": r.get("source_dataset", ""),
+                "variable_id": r.get("variable_id", ""),
+                "variable_path": r.get("variable_path", ""),
                 "producer": r.get("producer", ""),
                 "casename": r.get("casename", ""),
                 "file": r.get("file", ""),
                 "min": fmt(r.get("min", None)),
                 "max": fmt(r.get("max", None)),
                 "_key": (
-                    str(r.get("source_dataset", "") or "")
+                    "|".join(
+                        str(r.get(key, "") or "")
+                        for key in ("variable_id", "source_dataset", "producer", "casename", "file")
+                    ).strip("|")
+                    or str(r.get("source_dataset", "") or "")
                     or f"{r.get('producer', '')}|{r.get('casename', '')}|{r.get('file', '')}"
                 ),
             }
@@ -259,7 +304,7 @@ def attach_controllers(
             sort_sources(state.sourceSortField, toggle=False)
 
         all_keys = source_row_keys()
-        if previous_var != var_name:
+        if previous_var != var_id:
             state.selectedSourceKeys = [all_keys[0]] if all_keys else []
         else:
             selected = set(state.selectedSourceKeys or [])
@@ -286,7 +331,7 @@ def attach_controllers(
                 source_query = and_filter(qf, source_filter) if qf else source_filter
 
                 vis_names = db.distinct_visualization_names_for_variable(
-                    var_name,
+                    var_id,
                     extra_filter=source_query,
                 )
                 selected_vis = choose_visualization_default(vis_names, previous_tile_map.get(source_key, ""))
@@ -294,7 +339,8 @@ def attach_controllers(
                     new_tile_map[source_key] = selected_vis
 
                 tile: Dict[str, str] = {
-                    "variable_name": var_name,
+                    "variable_id": var_id,
+                    "variable_name": label,
                     "visualization_name": selected_vis,
                     "source_dataset": row.get("source_dataset", ""),
                     "producer": row.get("producer", ""),
@@ -309,7 +355,7 @@ def attach_controllers(
                 if selected_vis:
                     movie_query = and_filter(source_query, {"visualization_name": selected_vis})
                     one = db.get_first_movie_tiles_for_variable(
-                        var_name,
+                        var_id,
                         extra_filter=movie_query,
                         limit=1,
                         limit_frames=MAX_MOVIE_FRAMES,
@@ -322,6 +368,8 @@ def attach_controllers(
                         tile["note"] = f'No movie for "{selected_vis}"'
 
                 tile["_source_key"] = source_key
+                tile["variable_id"] = var_id
+                tile["variable_name"] = label
                 tile["visualization_options"] = vis_names
                 tile["selected_visualization"] = selected_vis
                 tiles.append(tile)
@@ -391,12 +439,12 @@ def attach_controllers(
 
         target = -1
         if 0 <= active < GRID_CELL_COUNT:
-            if not str(cells[active].get("variable_name", "") or "").strip():
+            if not str(cells[active].get("variable_id", "") or cells[active].get("variable_name", "") or "").strip():
                 target = active
 
         if target < 0:
             for i, c in enumerate(cells):
-                if not str(c.get("variable_name", "") or "").strip():
+                if not str(c.get("variable_id", "") or c.get("variable_name", "") or "").strip():
                     target = i
                     break
 
@@ -407,7 +455,8 @@ def attach_controllers(
             cells[target] = build_grid_cell_for_variable(var)
         except Exception as e:
             err_cell = empty_grid_cell()
-            err_cell["variable_name"] = var
+            err_cell["variable_id"] = var
+            err_cell["variable_name"] = variable_label(var)
             err_cell["status"] = "error"
             err_cell["note"] = f"{type(e).__name__}: {e}"
             cells[target] = err_cell
@@ -434,7 +483,7 @@ def attach_controllers(
 
         state.activeGridCell = idx
         cells = normalize_grid_cells(state.gridCells)
-        var = str(cells[idx].get("variable_name", "") or "")
+        var = str(cells[idx].get("variable_id", "") or cells[idx].get("variable_name", "") or "")
         if var:
             state.selectedVar = var
             state.draggedVar = var
@@ -448,7 +497,8 @@ def attach_controllers(
             cells[idx] = build_grid_cell_for_variable(selected)
         except Exception as e:
             err_cell = empty_grid_cell()
-            err_cell["variable_name"] = selected
+            err_cell["variable_id"] = selected
+            err_cell["variable_name"] = variable_label(selected)
             err_cell["status"] = "error"
             err_cell["note"] = f"{type(e).__name__}: {e}"
             cells[idx] = err_cell
@@ -481,7 +531,7 @@ def attach_controllers(
 
         cells = normalize_grid_cells(state.gridCells)
         source = dict(cells[src] or {})
-        if not str(source.get("variable_name", "") or "").strip():
+        if not str(source.get("variable_id", "") or source.get("variable_name", "") or "").strip():
             return
 
         # Move + overwrite: destination takes source tile, source is cleared.
@@ -516,7 +566,8 @@ def attach_controllers(
             cells[idx] = build_grid_cell_for_variable(var)
         except Exception as e:
             err_cell = empty_grid_cell()
-            err_cell["variable_name"] = var
+            err_cell["variable_id"] = var
+            err_cell["variable_name"] = variable_label(var)
             err_cell["status"] = "error"
             err_cell["note"] = f"{type(e).__name__}: {e}"
             cells[idx] = err_cell
@@ -543,7 +594,7 @@ def attach_controllers(
             return
 
         cells = normalize_grid_cells(state.gridCells)
-        var = str(cells[idx].get("variable_name", "") or "").strip()
+        var = str(cells[idx].get("variable_id", "") or cells[idx].get("variable_name", "") or "").strip()
         if not var:
             return
 
@@ -556,7 +607,8 @@ def attach_controllers(
             cells[idx] = build_grid_cell_for_variable(var, preferred_vis=picked)
         except Exception as e:
             err_cell = empty_grid_cell()
-            err_cell["variable_name"] = var
+            err_cell["variable_id"] = var
+            err_cell["variable_name"] = variable_label(var)
             err_cell["status"] = "error"
             err_cell["note"] = f"{type(e).__name__}: {e}"
             cells[idx] = err_cell
@@ -570,6 +622,7 @@ def attach_controllers(
         state.contextMenuVisible = False
         state.contextMenuKind = ""
         state.contextMenuItem = ""
+        state.contextMenuItemLabel = ""
         state.contextMenuCellIndex = -1
         state.contextMenuCellVisualizationOptions = []
         state.contextMenuCellSelectedVisualization = ""
@@ -594,6 +647,7 @@ def attach_controllers(
 
         state.contextMenuKind = "item"
         state.contextMenuItem = item
+        state.contextMenuItemLabel = variable_label(item)
         state.contextMenuCellIndex = -1
         state.contextMenuCellVisualizationOptions = []
         state.contextMenuCellSelectedVisualization = ""
@@ -632,6 +686,7 @@ def attach_controllers(
 
         state.contextMenuKind = "cell"
         state.contextMenuItem = label
+        state.contextMenuItemLabel = label
         state.contextMenuCellIndex = idx
         state.contextMenuCellVisualizationOptions = vis_opts
         state.contextMenuCellSelectedVisualization = selected_vis
@@ -751,14 +806,7 @@ def attach_controllers(
             state.queryError = ""
             state.queryStatus = "Query cleared"
             state.queryViewLabel = "ALL"
-            refresh_variable_list()
-
-            if state.selectedVar and state.selectedVar not in (state.variableNames or []):
-                state.selectedVar = ""
-                clear_right_panes(state)
-            else:
-                update_selected_var_panels(state.selectedVar)
-            refresh_grid_cells()
+            refresh_after_variable_catalog_change()
             return
 
         try:
@@ -774,14 +822,7 @@ def attach_controllers(
             state.queryViewLabel = "ALL"
             return
 
-        refresh_variable_list()
-
-        if state.selectedVar and state.selectedVar not in (state.variableNames or []):
-            state.selectedVar = ""
-            clear_right_panes(state)
-        else:
-            update_selected_var_panels(state.selectedVar)
-        refresh_grid_cells()
+        refresh_after_variable_catalog_change()
 
     @ctrl.add("clear_query")
     def clear_query(**_):
@@ -790,14 +831,11 @@ def attach_controllers(
         state.queryError = ""
         state.queryStatus = "Query cleared"
         state.queryViewLabel = "ALL"
-        refresh_variable_list()
+        refresh_after_variable_catalog_change()
 
-        if state.selectedVar and state.selectedVar not in (state.variableNames or []):
-            state.selectedVar = ""
-            clear_right_panes(state)
-        else:
-            update_selected_var_panels(state.selectedVar)
-        refresh_grid_cells()
+    @state.change("showOnlyVisualizedVars")
+    def on_show_only_visualized_vars(showOnlyVisualizedVars, **_):
+        refresh_after_variable_catalog_change()
 
     @state.change("selectedVar")
     def on_selected_var(selectedVar, **_):

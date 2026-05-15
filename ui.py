@@ -859,6 +859,13 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                             with vuetify.VCardTitle():
                                 html.Div("Variables")
                             with vuetify.VCardText(style="flex:1 1 auto; min-height:0; overflow-y:auto;"):
+                                with html.Div(style="padding:0 4px 8px 4px;"):
+                                    vuetify.VCheckbox(
+                                        v_model=("showOnlyVisualizedVars",),
+                                        label="Only with visualizations",
+                                        density="compact",
+                                        hide_details=True,
+                                    )
                                 with vuetify.VList(density="compact", class_="catnip-var-list"):
                                     html.Div(
                                         "No variables",
@@ -886,17 +893,17 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                 )
                                                 html.Span("{{ group.name }}")
                                             with html.Div(v_if="!(variableGroupCollapsed && variableGroupCollapsed[group.name])"):
-                                                with vuetify.Template(v_for="v in group.variables", key="group.name + '::' + v"):
+                                                with vuetify.Template(v_for="v in group.variables", key="group.name + '::' + v.id"):
                                                     with html.Div(
-                                                        click=(ctrl.pick_var, "[v]"),
+                                                        click=(ctrl.pick_var, "[v.id]"),
                                                         draggable="true",
                                                         classes="catnip-draggable-var catnip-var-item",
-                                                        raw_attrs=[':data-item="v"'],
+                                                        raw_attrs=[':data-item="v.id"', ':title="v.path || v.id"'],
                                                         style=(
-                                                            "((v === selectedVar) ? 'background:#dfe7ef; box-shadow: inset 0 0 0 1px #b9c8d7;' : '')",
+                                                            "((v.id === selectedVar) ? 'background:#dfe7ef; box-shadow: inset 0 0 0 1px #b9c8d7;' : '')",
                                                         ),
                                                     ):
-                                                        html.Span("{{ v }}")
+                                                        html.Span("{{ v.label || v.name || v.id }}")
 
                     with vuetify.VCol(cols=10, style="display:flex; flex-direction:column; height:80vh;"):
                         with vuetify.VCard(variant="outlined", style="flex:1 1 auto; min-height:0;"):
@@ -1270,7 +1277,7 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                     ':style="{ position: \'fixed\', zIndex: 9999, left: (contextMenuX || 0) + \'px\', top: (contextMenuY || 0) + \'px\' }"'
                 ],
             ):
-                html.Div("{{ contextMenuItem || 'Menu' }}", classes="menu-label")
+                html.Div("{{ contextMenuItemLabel || contextMenuItem || 'Menu' }}", classes="menu-label")
 
                 with html.Div(v_if="contextMenuKind === 'item'"):
                     html.Div("Add To Grid", classes="menu-item", click=ctrl.context_menu_item_add)

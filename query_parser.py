@@ -2,6 +2,7 @@ import ast
 from typing import Any, Dict, List, Optional
 
 FIELD_ALIASES = {
+    "id": "variable_id",
     "var": "variable_name",
     "type": "variable_type",
     "dataset": "source_dataset",
@@ -12,6 +13,7 @@ FIELD_ALIASES = {
 
 ALLOWED_FIELDS = {
     "variable_name",
+    "variable_id",
     "variable_type",
     "source_dataset",
     "producer",

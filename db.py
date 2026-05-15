@@ -74,19 +74,41 @@ class CampaignDb:
 
         return len(parts)
 
+    @staticmethod
+    def _variable_filter(variable_id: str, variable_type: Optional[str] = None) -> Dict[str, Any]:
+        query: Dict[str, Any] = {"variable_id": variable_id}
+        if variable_type:
+            query["variable_type"] = variable_type
+        return query
+
+    @staticmethod
+    def _variable_display_path(doc: Dict[str, Any]) -> str:
+        variable_id = str(doc.get("variable_id", "") or "").strip("/")
+        source_dataset = str(doc.get("source_dataset", "") or "").strip("/")
+        if source_dataset and variable_id.startswith(source_dataset + "/"):
+            return variable_id[len(source_dataset) + 1 :]
+        return variable_id
+
+    @staticmethod
+    def _variable_parent_path(display_path: str) -> str:
+        parts = [part for part in str(display_path or "").strip("/").split("/") if part]
+        if len(parts) <= 1:
+            return ""
+        return "/".join(parts[:-1])
+
     def _classify_variable_group(
         self,
-        variable_name: str,
+        variable_id: str,
         extra_filter: Optional[Dict[str, Any]] = None,
     ) -> str:
-        vis_names = set(self.distinct_visualization_names_for_variable(variable_name, extra_filter=extra_filter))
+        vis_names = set(self.distinct_visualization_names_for_variable(variable_id, extra_filter=extra_filter))
 
         if vis_names.intersection({"heatmap", "contour", "heatmap_contour", "streamlines"}):
             return "2D"
         if vis_names and vis_names.issubset({"timeseries"}):
             return "Scalars"
 
-        query = and_filter({"variable_name": variable_name, "variable_type": "variable"}, extra_filter)
+        query = and_filter(self._variable_filter(variable_id, "variable"), extra_filter)
         try:
             one = self.collection.find_one(query, {"_id": 0, "metadata": 1})
         except Exception:
@@ -99,34 +121,98 @@ class CampaignDb:
             return "Scalars"
         return "2D"
 
-    def distinct_variable_names(self, extra_filter: Optional[Dict[str, Any]] = None) -> List[str]:
+    def distinct_variables(
+        self,
+        extra_filter: Optional[Dict[str, Any]] = None,
+        only_visualized: bool = False,
+    ) -> List[Dict[str, str]]:
         if not self.ok:
             return []
         try:
-            # Stage 2 support: include image-only variables in the left variable list.
-            var_query = and_filter({"variable_type": "variable"}, extra_filter)
-            img_query = and_filter(
-                {"variable_type": "image", "visualization_name": {"$ne": ""}},
-                extra_filter,
-            )
-            var_names = self.collection.distinct("variable_name", var_query)
-            img_names = self.collection.distinct("variable_name", img_query)
-            names = sorted({n for n in (list(var_names) + list(img_names)) if isinstance(n, str) and n})
-            return names
+            image_query = and_filter({"variable_type": "image", "visualization_name": {"$ne": ""}}, extra_filter)
+            queries = [image_query] if only_visualized else [
+                and_filter({"variable_type": "variable"}, extra_filter),
+                image_query,
+            ]
+            proj = {
+                "_id": 0,
+                "variable_id": 1,
+                "variable_name": 1,
+                "variable_name_physical": 1,
+                "variable_path": 1,
+                "source_dataset": 1,
+            }
+
+            by_id: Dict[str, Dict[str, str]] = {}
+            for query in queries:
+                for doc in self.collection.find(query, proj):
+                    variable_id = str(doc.get("variable_id", "") or "").strip()
+                    if not variable_id:
+                        variable_id = str(doc.get("variable_name", "") or "").strip()
+                    if not variable_id or variable_id in by_id:
+                        continue
+
+                    name = str(doc.get("variable_name", "") or "").strip()
+                    if not name:
+                        physical = str(doc.get("variable_name_physical", "") or "").strip("/")
+                        name = physical.rsplit("/", 1)[-1] if physical else variable_id.rsplit("/", 1)[-1]
+
+                    display_path = self._variable_display_path({**doc, "variable_id": variable_id})
+                    by_id[variable_id] = {
+                        "id": variable_id,
+                        "name": name,
+                        "label": name,
+                        "path": display_path,
+                        "source_dataset": str(doc.get("source_dataset", "") or ""),
+                    }
+
+            counts: Dict[str, int] = {}
+            for item in by_id.values():
+                counts[item["name"]] = counts.get(item["name"], 0) + 1
+
+            variables = list(by_id.values())
+            for item in variables:
+                if counts.get(item["name"], 0) <= 1:
+                    continue
+                parent = self._variable_parent_path(item.get("path", ""))
+                item["label"] = f"{item['name']} [{parent}]" if parent else item["name"]
+
+            variables.sort(key=lambda item: (item["name"].lower(), item["label"].lower(), item["id"]))
+            return variables
         except PyMongoError as e:
             self.last_error = f"{type(e).__name__}: {e}"
             self.ok = False
             return []
 
-    def grouped_variable_names(self, extra_filter: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-        names = self.distinct_variable_names(extra_filter=extra_filter)
-        groups: Dict[str, List[str]] = {"Scalars": [], "2D": []}
+    def distinct_variable_names(
+        self,
+        extra_filter: Optional[Dict[str, Any]] = None,
+        only_visualized: bool = False,
+    ) -> List[str]:
+        return [
+            item["id"]
+            for item in self.distinct_variables(
+                extra_filter=extra_filter,
+                only_visualized=only_visualized,
+            )
+        ]
 
-        for name in names:
-            group = self._classify_variable_group(name, extra_filter=extra_filter)
+    def grouped_variable_names(
+        self,
+        extra_filter: Optional[Dict[str, Any]] = None,
+        only_visualized: bool = False,
+    ) -> List[Dict[str, Any]]:
+        variables = self.distinct_variables(
+            extra_filter=extra_filter,
+            only_visualized=only_visualized,
+        )
+        groups: Dict[str, List[Dict[str, str]]] = {"Scalars": [], "2D": []}
+
+        for variable in variables:
+            group = self._classify_variable_group(variable["id"], extra_filter=extra_filter)
             if group not in groups:
                 group = "2D"
-            groups[group].append(name)
+            groups[group].append(variable)
 
         ordered = []
         if groups["Scalars"]:
@@ -137,16 +223,24 @@ class CampaignDb:
 
     def _image_sources_for_variable(
         self,
-        variable_name: str,
+        variable_id: str,
         extra_filter: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         base_query: Dict[str, Any] = {
-            "variable_name": variable_name,
+            "variable_id": variable_id,
             "variable_type": "image",
             "visualization_name": {"$ne": ""},
         }
         query = and_filter(base_query, extra_filter)
-        proj = {"_id": 0, "source_dataset": 1, "producer": 1, "casename": 1, "file": 1}
+        proj = {
+            "_id": 0,
+            "variable_id": 1,
+            "variable_path": 1,
+            "source_dataset": 1,
+            "producer": 1,
+            "casename": 1,
+            "file": 1,
+        }
 
         cursor = self.collection.find(query, proj).sort(
             [("source_dataset", 1), ("producer", 1), ("casename", 1), ("file", 1)]
@@ -167,6 +261,8 @@ class CampaignDb:
             sources.append(
                 {
                     "source_dataset": source_dataset,
+                    "variable_id": str(doc.get("variable_id", "") or ""),
+                    "variable_path": str(doc.get("variable_path", "") or ""),
                     "producer": producer,
                     "casename": casename,
                     "file": file,
@@ -178,14 +274,14 @@ class CampaignDb:
 
     def distinct_visualization_names_for_variable(
         self,
-        variable_name: str,
+        variable_id: str,
         extra_filter: Optional[Dict[str, Any]] = None,
     ) -> List[str]:
-        if not self.ok or not variable_name:
+        if not self.ok or not variable_id:
             return []
         try:
             base_query: Dict[str, Any] = {
-                "variable_name": variable_name,
+                "variable_id": variable_id,
                 "variable_type": "image",
                 "visualization_name": {"$ne": ""},
             }
@@ -201,24 +297,25 @@ class CampaignDb:
 
     def variable_min_max_summary(
         self,
-        variable_name: str,
+        variable_id: str,
         extra_filter: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        if not self.ok or not variable_name:
+        if not self.ok or not variable_id:
             return {}
 
-        base_query: Dict[str, Any] = {
-            "variable_name": variable_name,
-            "variable_type": "variable",
-        }
+        base_query = self._variable_filter(variable_id, "variable")
         query = and_filter(base_query, extra_filter)
 
         proj = {
             "_id": 0,
+            "variable_id": 1,
             "source_dataset": 1,
             "producer": 1,
             "casename": 1,
             "file": 1,
+            "variable_name": 1,
+            "variable_name_physical": 1,
+            "variable_path": 1,
             "metadata": 1,
             "Min": 1,
             "Max": 1,
@@ -227,14 +324,14 @@ class CampaignDb:
         }
 
         try:
-            cursor = self.collection.find(query, proj)
+            source_docs = list(self.collection.find(query, proj))
 
             mins: List[float] = []
             maxs: List[float] = []
             num_sources = 0
             sources: List[Dict[str, Any]] = []
 
-            for doc in cursor:
+            for doc in source_docs:
                 num_sources += 1
 
                 fmin = to_float(doc.get("min", None))
@@ -260,9 +357,11 @@ class CampaignDb:
                             if doc.get("source_dataset", None) is None
                             else str(doc.get("source_dataset"))
                         ),
+                        "variable_id": "" if doc.get("variable_id", None) is None else str(doc.get("variable_id")),
                         "producer": "" if doc.get("producer", None) is None else str(doc.get("producer")),
                         "casename": "" if doc.get("casename", None) is None else str(doc.get("casename")),
                         "file": "" if doc.get("file", None) is None else str(doc.get("file")),
+                        "variable_path": "" if doc.get("variable_path", None) is None else str(doc.get("variable_path")),
                         "min": fmin,
                         "max": fmax,
                     }
@@ -274,9 +373,9 @@ class CampaignDb:
             # have image docs, return source rows with n/a min/max so the viewer can
             # still browse visualizations.
             if num_sources == 0:
-                image_sources = self._image_sources_for_variable(variable_name, extra_filter=extra_filter)
+                image_sources = self._image_sources_for_variable(variable_id, extra_filter=extra_filter)
                 return {
-                    "variable": variable_name,
+                    "variable": variable_id,
                     "num_sources": len(image_sources),
                     "global_min": None,
                     "global_max": None,
@@ -288,7 +387,7 @@ class CampaignDb:
                 }
 
             return {
-                "variable": variable_name,
+                "variable": variable_id,
                 "num_sources": num_sources,
                 "global_min": min(mins) if valid else None,
                 "global_max": max(maxs) if valid else None,
@@ -306,7 +405,7 @@ class CampaignDb:
 
     def get_movie_frames_for_stream(
         self,
-        variable_name: str,
+        variable_id: str,
         visualization_name: str,
         producer: str,
         casename: str,
@@ -315,11 +414,11 @@ class CampaignDb:
         extra_filter: Optional[Dict[str, Any]] = None,
         limit_frames: int = 240,
     ) -> Tuple[List[bytes], int]:
-        if not self.ok or not variable_name:
+        if not self.ok or not variable_id:
             return ([], 0)
 
         base_query: Dict[str, Any] = {
-            "variable_name": variable_name,
+            "variable_id": variable_id,
             "variable_type": "image",
             "visualization_name": visualization_name,
         }
@@ -361,17 +460,17 @@ class CampaignDb:
 
     def get_first_movie_tiles_for_variable(
         self,
-        variable_name: str,
+        variable_id: str,
         extra_filter: Optional[Dict[str, Any]] = None,
         limit: int = 4,
         limit_frames: int = 240,
         fps: int = 24,
     ) -> List[Dict[str, Any]]:
-        if not self.ok or not variable_name:
+        if not self.ok or not variable_id:
             return []
 
         base_query: Dict[str, Any] = {
-            "variable_name": variable_name,
+            "variable_id": variable_id,
             "variable_type": "image",
             "visualization_name": {"$ne": ""},
         }
@@ -380,6 +479,8 @@ class CampaignDb:
         proj = {
             "_id": 1,
             "source_dataset": 1,
+            "variable_id": 1,
+            "variable_name": 1,
             "producer": 1,
             "casename": 1,
             "file": 1,
@@ -408,7 +509,7 @@ class CampaignDb:
                 seen.add(key)
 
                 frames, total = self.get_movie_frames_for_stream(
-                    variable_name,
+                    variable_id,
                     visualization_name=vis,
                     producer=producer,
                     casename=casename,
@@ -442,7 +543,8 @@ class CampaignDb:
 
                 tiles.append(
                     {
-                        "variable_name": variable_name,
+                        "variable_name": str(doc.get("variable_name", "") or variable_id),
+                        "variable_id": variable_id,
                         "visualization_name": vis,
                         "source_dataset": source_dataset,
                         "producer": producer,
