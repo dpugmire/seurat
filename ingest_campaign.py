@@ -678,6 +678,16 @@ def extract_file_var(input: str) -> tuple[str, str, str, str, str]:
     varname = parts[-1]
     filename = parts[-2]
     varpath = "/".join(parts[0:-1])
+
+    bp_idx = next((i for i, p in enumerate(parts) if p.lower().endswith(".bp")), -1)
+    if bp_idx >= 0:
+        filename = parts[bp_idx]
+        if bp_idx - 1 >= 0:
+            casename = parts[bp_idx - 1]
+        if bp_idx + 1 < len(parts):
+            varname = "/".join(parts[bp_idx + 1 :])
+            varpath = "/".join(parts[: bp_idx + 1])
+
     return (varname, filename, varpath, producer, casename)
 
 
@@ -937,7 +947,7 @@ def parse_campaign(
                     {
                         "physical_var": physical_var,
                         "logical_var": var,
-                        "variable_id": _join_variable_id(source_dataset, physical_var),
+                        "variable_id": physical_var,
                         "roles": [],
                         "source_dataset": source_dataset,
                     }
@@ -965,14 +975,11 @@ def parse_campaign(
                             image_variable_records.append(
                                 {
                                     "physical_var": api_physical_var,
-                                    "logical_var": _display_name_from_physical_name(
+                                    "logical_var": _map_physical_to_logical_name(
                                         api_physical_var,
                                         image_assoc_schema,
                                     ),
-                                    "variable_id": _join_variable_id(
-                                        str(api_var.get("source_dataset", "") or ""),
-                                        api_physical_var,
-                                    ),
+                                    "variable_id": api_physical_var,
                                     "roles": list(api_var.get("roles", [])),
                                     "source_dataset": str(api_var.get("source_dataset", "") or ""),
                                 }
@@ -993,7 +1000,7 @@ def parse_campaign(
                                 {
                                     "physical_var": physical_var,
                                     "logical_var": var,
-                                    "variable_id": _join_variable_id(source_dataset, physical_var),
+                                    "variable_id": physical_var,
                                     "roles": [],
                                     "source_dataset": source_dataset,
                                 }
@@ -1020,7 +1027,7 @@ def parse_campaign(
                         {
                             "physical_var": physical_var,
                             "logical_var": var,
-                            "variable_id": _join_variable_id(source_dataset, physical_var),
+                            "variable_id": physical_var,
                             "roles": [],
                             "source_dataset": source_dataset,
                         }
@@ -1093,7 +1100,7 @@ def parse_campaign(
                     document.update(
                         {
                             "variable_id": record.get("variable_id")
-                            or _join_variable_id(record_source_dataset, record["physical_var"]),
+                            or record["physical_var"],
                             "variable_name": record["logical_var"],
                             "variable_name_physical": record["physical_var"],
                             "source_dataset": record_source_dataset,
@@ -1111,7 +1118,7 @@ def parse_campaign(
                 document = {
                     "campaign_path": campaign_path,
                     "file": file,
-                    "variable_id": _raw_variable_id(varpath, physical_var),
+                    "variable_id": physical_var,
                     "variable_name": var,
                     "variable_name_physical": physical_var,
                     "source_dataset": source_dataset,
@@ -1136,7 +1143,7 @@ def parse_campaign(
         for stat in stats :
             producer, source_dataset, statType, data = stat
             document = {"campaign_path": campaign_path,
-                        "variable_id": _join_variable_id(source_dataset, vname),
+                        "variable_id": vname,
                         "variable_name": logical_vname,
                         "variable_name_physical": vname,
                         "source_dataset": source_dataset,

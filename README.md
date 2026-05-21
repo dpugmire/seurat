@@ -42,7 +42,10 @@ python app.py campaign.aca --image-association-schema image_variable_map.yaml
 Visualization association notes:
 
 - Campaigns created with the new hpc-campaign visualization API are associated through the ACA `visualization_*` metadata tables.
+- Seurat treats `variable_id` as a source-independent variable identity. Different source datasets for that same variable remain separate through the `source_dataset` field.
+- For visualization API images, `variable_id` comes from `visualization_variable.variable_name`.
 - Legacy image path parsing is still used as a fallback for older campaigns.
+- Longer term, the viewer should use an explicit display/grouping schema that separates the raw source variable name, the viewer display label, the variable grouping id, and the source dataset. Until that exists, the campaign variable name is used directly for both grouping and display.
 
 Schema notes (`image_variable_map.yaml`):
 
