@@ -1,4 +1,4 @@
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from config import MAX_MOVIE_FRAMES, MOVIE_FPS
 from query_parser import and_filter, python_query_to_mongo
@@ -49,36 +49,105 @@ def attach_controllers(
             state.selectedSourceLabel = "No sources"
         elif selected <= 0:
             state.selectedSourceLabel = "No sources selected"
-        elif selected >= total:
-            state.selectedSourceLabel = "All sources"
         else:
             state.selectedSourceLabel = f"{selected} of {total} selected"
 
-    def show_all_sources():
-        state.selectedSourceKeys = source_row_keys()
+    def select_source_key(key: str):
+        k = str(key or "")
+        state.selectedSourceKeys = [k] if k and k in source_row_keys() else []
         update_selected_source_label()
 
+    def select_first_source():
+        keys = source_row_keys()
+        select_source_key(keys[0] if keys else "")
+
     def source_filter_from_row(row: Dict[str, str]) -> Dict[str, str]:
+        filt: Dict[str, str] = {}
         variable_id = str(row.get("variable_id", "") or "")
         if variable_id:
-            filt = {"variable_id": variable_id}
-            source_dataset = str(row.get("source_dataset", "") or "")
-            if source_dataset:
-                filt["source_dataset"] = source_dataset
-            return filt
+            filt["variable_id"] = variable_id
 
         source_dataset = str(row.get("source_dataset", "") or "")
         if source_dataset:
-            return {"source_dataset": source_dataset}
+            filt["source_dataset"] = source_dataset
+            return filt
 
-        filt: Dict[str, str] = {
-            "producer": row.get("producer", ""),
-            "casename": row.get("casename", ""),
-        }
-        file_name = row.get("file", "")
+        producer = str(row.get("producer", "") or "")
+        casename = str(row.get("casename", "") or "")
+        file_name = str(row.get("file", "") or "")
+        if producer or casename or file_name:
+            filt["producer"] = producer
+            filt["casename"] = casename
         if file_name:
             filt["file"] = file_name
         return filt
+
+    def source_row_for_key(key: str) -> Dict[str, str]:
+        k = str(key or "")
+        if not k:
+            return {}
+        return next((r for r in (state.sourceRows or []) if str(r.get("_key", "")) == k), {})
+
+    def source_fields_from_row(row: Dict[str, str]) -> Dict[str, str]:
+        if not row:
+            return {}
+        return {
+            "_source_key": str(row.get("_key", "") or ""),
+            "source_dataset": str(row.get("source_dataset", "") or ""),
+            "producer": str(row.get("producer", "") or ""),
+            "casename": str(row.get("casename", "") or ""),
+            "file": str(row.get("file", "") or ""),
+        }
+
+    def source_filter_from_cell(cell: Dict[str, Any]) -> Dict[str, str]:
+        source_dataset = str(cell.get("source_dataset", "") or "")
+        if source_dataset:
+            filt = {"source_dataset": source_dataset}
+            variable_id = str(cell.get("variable_id", "") or "")
+            if variable_id:
+                filt["variable_id"] = variable_id
+            return filt
+
+        producer = str(cell.get("producer", "") or "")
+        casename = str(cell.get("casename", "") or "")
+        file_name = str(cell.get("file", "") or "")
+        if producer or casename or file_name:
+            filt = {"producer": producer, "casename": casename}
+            if file_name:
+                filt["file"] = file_name
+            return filt
+        return {}
+
+    def source_row_for_cell(cell: Dict[str, Any]) -> Dict[str, str]:
+        key = str(cell.get("_source_key", "") or "")
+        if key:
+            row = source_row_for_key(key)
+            if row:
+                return row
+
+        source_dataset = str(cell.get("source_dataset", "") or "")
+        producer = str(cell.get("producer", "") or "")
+        casename = str(cell.get("casename", "") or "")
+        file_name = str(cell.get("file", "") or "")
+        for row in state.sourceRows or []:
+            if source_dataset and str(row.get("source_dataset", "") or "") == source_dataset:
+                return row
+            if (
+                (producer or casename or file_name)
+                and str(row.get("producer", "") or "") == producer
+                and str(row.get("casename", "") or "") == casename
+                and str(row.get("file", "") or "") == file_name
+            ):
+                return row
+        return {}
+
+    def active_source_filter_for_variable(variable_id: str) -> Dict[str, str]:
+        if str(state.detailsSelectedVarId or "") != str(variable_id or ""):
+            return {}
+
+        selected = set(state.selectedSourceKeys or [])
+        row = next((r for r in (state.sourceRows or []) if str(r.get("_key", "")) in selected), None)
+        return source_filter_from_row(row) if row else {}
 
     def empty_grid_cell() -> Dict[str, Any]:
         return {
@@ -87,6 +156,7 @@ def attach_controllers(
             "visualization_name": "",
             "selected_visualization": "",
             "visualization_options": [],
+            "_source_key": "",
             "source_dataset": "",
             "producer": "",
             "casename": "",
@@ -122,7 +192,12 @@ def attach_controllers(
         labels = dict(state.variableLabelsById or {})
         return str(labels.get(item_id, "") or item_id)
 
-    def build_grid_cell_for_variable(variable_id: str, preferred_vis: str = "") -> Dict[str, Any]:
+    def build_grid_cell_for_variable(
+        variable_id: str,
+        preferred_vis: str = "",
+        source_row: Optional[Dict[str, str]] = None,
+        existing_cell: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         cell = empty_grid_cell()
         var_id = str(variable_id or "").strip()
         if not var_id:
@@ -130,7 +205,23 @@ def attach_controllers(
         label = variable_label(var_id)
 
         qf = state.queryFilter or None
-        vis_names = db.distinct_visualization_names_for_variable(var_id, extra_filter=qf)
+        source_fields: Dict[str, str] = {}
+        if source_row:
+            source_fields = source_fields_from_row(source_row)
+            source_filter = source_filter_from_row(source_row)
+        elif existing_cell:
+            source_fields = {
+                "_source_key": str(existing_cell.get("_source_key", "") or ""),
+                "source_dataset": str(existing_cell.get("source_dataset", "") or ""),
+                "producer": str(existing_cell.get("producer", "") or ""),
+                "casename": str(existing_cell.get("casename", "") or ""),
+                "file": str(existing_cell.get("file", "") or ""),
+            }
+            source_filter = source_filter_from_cell(existing_cell)
+        else:
+            source_filter = active_source_filter_for_variable(var_id)
+        active_filter = and_filter(qf, source_filter) if qf and source_filter else (qf or source_filter or None)
+        vis_names = db.distinct_visualization_names_for_variable(var_id, extra_filter=active_filter)
 
         selected_vis = choose_visualization_default(vis_names, preferred_vis)
 
@@ -145,9 +236,14 @@ def attach_controllers(
                 "note": "No visualization types for this variable",
             }
         )
+        cell.update({k: v for k, v in source_fields.items() if v})
 
         if selected_vis:
-            movie_query = and_filter(qf, {"visualization_name": selected_vis}) if qf else {"visualization_name": selected_vis}
+            movie_query = (
+                and_filter(active_filter, {"visualization_name": selected_vis})
+                if active_filter
+                else {"visualization_name": selected_vis}
+            )
             one = db.get_first_movie_tiles_for_variable(
                 var_id,
                 extra_filter=movie_query,
@@ -157,9 +253,15 @@ def attach_controllers(
             )
             if one:
                 cell.update(one[0] or {})
+                cell.update({k: v for k, v in source_fields.items() if v})
             else:
                 cell["status"] = "no-frames"
                 cell["note"] = f'No movie for "{selected_vis}"'
+
+        if not str(cell.get("_source_key", "") or ""):
+            row = source_row_for_cell(cell)
+            if row:
+                cell.update(source_fields_from_row(row))
 
         cell["variable_id"] = var_id
         cell["variable_name"] = label
@@ -180,7 +282,7 @@ def attach_controllers(
 
             preferred_vis = str(c.get("selected_visualization", "") or "")
             try:
-                updated.append(build_grid_cell_for_variable(var_id, preferred_vis=preferred_vis))
+                updated.append(build_grid_cell_for_variable(var_id, preferred_vis=preferred_vis, existing_cell=c))
             except Exception as e:
                 err_cell = empty_grid_cell()
                 err_cell["variable_id"] = var_id
@@ -216,7 +318,7 @@ def attach_controllers(
         def keyfn(row: Dict[str, str]):
             if field == "show":
                 key = str(row.get("_key", ""))
-                # Ascending puts checked sources first.
+                # Ascending puts the active source first.
                 return (0 if key in selected_keys else 1, key)
 
             v = row.get(field, "")
@@ -243,7 +345,7 @@ def attach_controllers(
             update_selected_var_panels(state.selectedVar)
         refresh_grid_cells()
 
-    def update_selected_var_panels(variable_id: str):
+    def update_selected_var_panels(variable_id: str, preferred_source_key: str = ""):
         var_id = str(variable_id or "").strip()
         if not var_id:
             clear_right_panes(state)
@@ -304,11 +406,15 @@ def attach_controllers(
             sort_sources(state.sourceSortField, toggle=False)
 
         all_keys = source_row_keys()
-        if previous_var != var_id:
+        preferred_key = str(preferred_source_key or "")
+        if preferred_key and preferred_key in all_keys:
+            state.selectedSourceKeys = [preferred_key]
+        elif previous_var != var_id:
             state.selectedSourceKeys = [all_keys[0]] if all_keys else []
         else:
             selected = set(state.selectedSourceKeys or [])
-            state.selectedSourceKeys = [k for k in all_keys if k in selected]
+            selected_keys = [k for k in all_keys if k in selected]
+            state.selectedSourceKeys = selected_keys[:1] or ([all_keys[0]] if all_keys else [])
         update_selected_source_label()
 
         try:
@@ -452,7 +558,10 @@ def attach_controllers(
             target = active if 0 <= active < GRID_CELL_COUNT else 0
 
         try:
-            cells[target] = build_grid_cell_for_variable(var)
+            source_row = {}
+            if str(state.detailsSelectedVarId or "") == var:
+                source_row = source_row_for_key((state.selectedSourceKeys or [""])[0])
+            cells[target] = build_grid_cell_for_variable(var, source_row=source_row or None)
         except Exception as e:
             err_cell = empty_grid_cell()
             err_cell["variable_id"] = var
@@ -487,6 +596,7 @@ def attach_controllers(
         if var:
             state.selectedVar = var
             state.draggedVar = var
+            update_selected_var_panels(var, preferred_source_key=str(cells[idx].get("_source_key", "") or ""))
             return
 
         selected = str(state.selectedVar or "").strip()
@@ -494,7 +604,10 @@ def attach_controllers(
             return
 
         try:
-            cells[idx] = build_grid_cell_for_variable(selected)
+            source_row = {}
+            if str(state.detailsSelectedVarId or "") == selected:
+                source_row = source_row_for_key((state.selectedSourceKeys or [""])[0])
+            cells[idx] = build_grid_cell_for_variable(selected, source_row=source_row or None)
         except Exception as e:
             err_cell = empty_grid_cell()
             err_cell["variable_id"] = selected
@@ -563,7 +676,10 @@ def attach_controllers(
 
         cells = normalize_grid_cells(state.gridCells)
         try:
-            cells[idx] = build_grid_cell_for_variable(var)
+            source_row = {}
+            if str(state.detailsSelectedVarId or "") == var:
+                source_row = source_row_for_key((state.selectedSourceKeys or [""])[0])
+            cells[idx] = build_grid_cell_for_variable(var, source_row=source_row or None)
         except Exception as e:
             err_cell = empty_grid_cell()
             err_cell["variable_id"] = var
@@ -604,7 +720,7 @@ def attach_controllers(
         picked = str(picked or "")
 
         try:
-            cells[idx] = build_grid_cell_for_variable(var, preferred_vis=picked)
+            cells[idx] = build_grid_cell_for_variable(var, preferred_vis=picked, existing_cell=cells[idx])
         except Exception as e:
             err_cell = empty_grid_cell()
             err_cell["variable_id"] = var
@@ -753,25 +869,38 @@ def attach_controllers(
 
     @ctrl.add("clear_source_filter")
     def clear_source_filter(**_):
-        show_all_sources()
+        select_first_source()
         update_selected_var_panels(state.selectedVar)
+
+    @ctrl.add("select_source")
+    def select_source(key: str, **_):
+        row = source_row_for_key(key)
+        select_source_key(key)
+        state.showSourcesModal = True
+
+        var_id = str(state.detailsSelectedVarId or state.selectedVar or "").strip()
+        try:
+            idx = int(state.activeGridCell)
+        except Exception:
+            idx = -1
+
+        if row and var_id and 0 <= idx < GRID_CELL_COUNT:
+            cells = normalize_grid_cells(state.gridCells)
+            cell_var = str(cells[idx].get("variable_id", "") or cells[idx].get("variable_name", "") or "").strip()
+            if cell_var == var_id:
+                preferred_vis = str(cells[idx].get("selected_visualization", "") or "")
+                cells[idx] = build_grid_cell_for_variable(
+                    var_id,
+                    preferred_vis=preferred_vis,
+                    source_row=row,
+                )
+                state.gridCells = cells
+
+        update_selected_var_panels(var_id, preferred_source_key=str(key or ""))
 
     @ctrl.add("toggle_source_visibility")
     def toggle_source_visibility(key: str, **_):
-        k = str(key or "")
-        if not k:
-            return
-
-        selected = set(state.selectedSourceKeys or [])
-        if k in selected:
-            selected.remove(k)
-        else:
-            selected.add(k)
-        state.selectedSourceKeys = [key for key in source_row_keys() if key in selected]
-        update_selected_source_label()
-
-        state.showSourcesModal = True
-        update_selected_var_panels(state.selectedVar)
+        select_source(key)
 
     @ctrl.add("toggle_movie_details")
     def toggle_movie_details(key: str, **_):

@@ -1136,13 +1136,6 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                             size="small",
                                             click=ctrl.toggle_sources,
                                         )
-                                        with vuetify.Template(v_if="(selectedSourceKeys || []).length !== (sourceRows || []).length"):
-                                            vuetify.VBtn(
-                                                "Show all",
-                                                variant="text",
-                                                size="small",
-                                                click=ctrl.clear_source_filter,
-                                            )
                                         with html.Div(
                                             class_="text-caption",
                                             style="display:flex; align-items:center; gap:12px; white-space:nowrap;",
@@ -1168,18 +1161,11 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                     with html.Div(style="display:flex; align-items:center; gap:8px; width:100%;"):
                                         html.Div("{{ detailsSelectedVar ? ('Sources: ' + detailsSelectedVar) : 'Sources' }}")
                                         vuetify.VSpacer()
-                                        with vuetify.Template(v_if="(selectedSourceKeys || []).length !== (sourceRows || []).length"):
-                                            vuetify.VBtn(
-                                                "Show all",
-                                                variant="text",
-                                                size="small",
-                                                click=ctrl.clear_source_filter,
-                                            )
                                         vuetify.VBtn("Close", variant="text", size="small", click=ctrl.toggle_sources)
 
                                 with vuetify.VCardText():
                                     with vuetify.Template(v_if="detailsSelectedVar"):
-                                        html.Div("{{ 'Visible sources: ' + selectedSourceLabel }}", class_="text-caption mb-2")
+                                        html.Div("{{ 'Selected source: ' + selectedSourceLabel }}", class_="text-caption mb-2")
                                         with html.Div(
                                             style=(
                                                 "max-height:60vh;"
@@ -1196,7 +1182,7 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                             style="cursor:pointer; user-select:none; white-space:nowrap; width:72px;",
                                                             click=(ctrl.sort_sources, "['show']"),
                                                         ):
-                                                            html.Span("Show")
+                                                            html.Span("Selected")
                                                             with vuetify.Template(v_if="sourceSortField === 'show'"):
                                                                 vuetify.VIcon(
                                                                     ("sourceSortAsc ? 'mdi-arrow-up' : 'mdi-arrow-down'",),
@@ -1254,12 +1240,14 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                                 "'background-color:#f5f5f5; cursor:pointer;' : "
                                                                 "'cursor:pointer;'",
                                                             ),
+                                                            click=(ctrl.select_source, "[r._key]"),
                                                         ):
                                                             with html.Td(style="text-align:center; white-space:nowrap;"):
                                                                 html.Input(
-                                                                    type="checkbox",
+                                                                    type="radio",
+                                                                    name="selected-source",
                                                                     checked=("((selectedSourceKeys || []).includes(r._key))",),
-                                                                    click=(ctrl.toggle_source_visibility, "[r._key]"),
+                                                                    click=(ctrl.select_source, "[r._key]"),
                                                                 )
                                                             html.Td(
                                                                 "{{ r.source_dataset || [r.producer, r.casename, r.file].filter(Boolean).join('/') }}",
