@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from config import MAX_MOVIE_FRAMES, MOVIE_FPS
 from query_parser import and_filter, python_query_to_mongo
@@ -14,7 +14,10 @@ def attach_controllers(
     image_association_schema_path: str = "",
 ):
     state, ctrl = server.state, server.controller
-    GRID_CELL_COUNT = 9
+    GRID_MIN_ROWS = 1
+    GRID_MIN_COLS = 1
+    GRID_MAX_ROWS = 8
+    GRID_MAX_COLS = 8
 
     def refresh_variable_list():
         grouped = db.grouped_variable_names(
@@ -167,17 +170,74 @@ def attach_controllers(
             "note": "",
         }
 
-    def normalize_grid_cells(raw_cells) -> List[Dict[str, Any]]:
-        items = list(raw_cells or [])[:GRID_CELL_COUNT]
+    def clear_context_menu_state() -> None:
+        state.contextMenuVisible = False
+        state.contextMenuKind = ""
+        state.contextMenuItem = ""
+        state.contextMenuItemLabel = ""
+        state.contextMenuCellIndex = -1
+        state.contextMenuCellVisualizationOptions = []
+        state.contextMenuCellSelectedVisualization = ""
+
+    def clamp_int(value, default: int, minimum: int, maximum: int) -> int:
+        try:
+            ivalue = int(value)
+        except Exception:
+            ivalue = default
+        return max(minimum, min(maximum, ivalue))
+
+    def grid_dimensions() -> Tuple[int, int]:
+        rows = clamp_int(getattr(state, "gridRows", 3), 3, GRID_MIN_ROWS, GRID_MAX_ROWS)
+        cols = clamp_int(getattr(state, "gridCols", 3), 3, GRID_MIN_COLS, GRID_MAX_COLS)
+        state.gridRows = rows
+        state.gridCols = cols
+        state.gridMinRows = GRID_MIN_ROWS
+        state.gridMinCols = GRID_MIN_COLS
+        state.gridMaxRows = GRID_MAX_ROWS
+        state.gridMaxCols = GRID_MAX_COLS
+        return rows, cols
+
+    def grid_cell_count() -> int:
+        rows, cols = grid_dimensions()
+        return rows * cols
+
+    def is_valid_grid_index(idx: int) -> bool:
+        return 0 <= idx < grid_cell_count()
+
+    def active_grid_index(cell_count: int = -1) -> int:
+        try:
+            idx = int(state.activeGridCell)
+        except Exception:
+            return -1
+        if cell_count < 0:
+            cell_count = grid_cell_count()
+        return idx if 0 <= idx < cell_count else -1
+
+    def normalize_grid_cells(raw_cells, rows=None, cols=None) -> List[Dict[str, Any]]:
+        if rows is None or cols is None:
+            rows, cols = grid_dimensions()
+
+        count = rows * cols
+        items = list(raw_cells or [])[:count]
         cells: List[Dict[str, Any]] = []
         for item in items:
             base = empty_grid_cell()
             if isinstance(item, dict):
                 base.update(item)
             cells.append(base)
-        while len(cells) < GRID_CELL_COUNT:
+        while len(cells) < count:
             cells.append(empty_grid_cell())
         return cells
+
+    def set_grid_layout(rows: int, cols: int, cells: List[Dict[str, Any]], active: int) -> None:
+        rows = clamp_int(rows, 3, GRID_MIN_ROWS, GRID_MAX_ROWS)
+        cols = clamp_int(cols, 3, GRID_MIN_COLS, GRID_MAX_COLS)
+        cells = normalize_grid_cells(cells, rows, cols)
+        state.gridRows = rows
+        state.gridCols = cols
+        state.gridCells = cells
+        state.activeGridCell = active if 0 <= active < rows * cols else -1
+        clear_context_menu_state()
 
     def choose_visualization_default(vis_names: List[str], preferred_vis: str = "") -> str:
         preferred = str(preferred_vis or "").strip()
@@ -297,7 +357,7 @@ def attach_controllers(
             idx = int(state.activeGridCell)
         except Exception:
             idx = -1
-        state.activeGridCell = idx if 0 <= idx < GRID_CELL_COUNT else -1
+        state.activeGridCell = idx if is_valid_grid_index(idx) else -1
 
     @ctrl.add("sort_sources")
     def sort_sources(field: str, toggle: bool = True, **_):
@@ -544,7 +604,7 @@ def attach_controllers(
             active = -1
 
         target = -1
-        if 0 <= active < GRID_CELL_COUNT:
+        if is_valid_grid_index(active):
             if not str(cells[active].get("variable_id", "") or cells[active].get("variable_name", "") or "").strip():
                 target = active
 
@@ -555,7 +615,7 @@ def attach_controllers(
                     break
 
         if target < 0:
-            target = active if 0 <= active < GRID_CELL_COUNT else 0
+            target = active if is_valid_grid_index(active) else 0
 
         try:
             source_row = {}
@@ -587,7 +647,7 @@ def attach_controllers(
             idx = int(cell_index)
         except Exception:
             return
-        if idx < 0 or idx >= GRID_CELL_COUNT:
+        if not is_valid_grid_index(idx):
             return
 
         state.activeGridCell = idx
@@ -623,7 +683,7 @@ def attach_controllers(
             idx = int(cell_index)
         except Exception:
             return
-        if idx < 0 or idx >= GRID_CELL_COUNT:
+        if not is_valid_grid_index(idx):
             return
 
         cells = normalize_grid_cells(state.gridCells)
@@ -637,7 +697,7 @@ def attach_controllers(
             dst = int(to_index)
         except Exception:
             return
-        if src < 0 or src >= GRID_CELL_COUNT or dst < 0 or dst >= GRID_CELL_COUNT:
+        if not is_valid_grid_index(src) or not is_valid_grid_index(dst):
             return
         if src == dst:
             return
@@ -657,13 +717,101 @@ def attach_controllers(
     def move_grid_cell_trigger(from_index, to_index, **_):
         move_grid_cell(from_index, to_index)
 
+    @ctrl.add("add_grid_row")
+    def add_grid_row(**_):
+        rows, cols = grid_dimensions()
+        if rows >= GRID_MAX_ROWS:
+            return
+
+        cells = normalize_grid_cells(state.gridCells, rows, cols)
+        active = active_grid_index(rows * cols)
+        new_cells = list(cells)
+        new_cells.extend(empty_grid_cell() for _ in range(cols))
+        set_grid_layout(rows + 1, cols, new_cells, active)
+
+    @ctrl.add("delete_grid_row")
+    def delete_grid_row(**_):
+        rows, cols = grid_dimensions()
+        if rows <= GRID_MIN_ROWS:
+            return
+
+        cells = normalize_grid_cells(state.gridCells, rows, cols)
+        active = active_grid_index(rows * cols)
+        remove_row = (active // cols) if active >= 0 else rows - 1
+
+        new_cells: List[Dict[str, Any]] = []
+        for row in range(rows):
+            if row == remove_row:
+                continue
+            start = row * cols
+            new_cells.extend(cells[start : start + cols])
+
+        new_active = -1
+        if active >= 0:
+            active_row = active // cols
+            active_col = active % cols
+            if active_row != remove_row:
+                new_row = active_row - (1 if active_row > remove_row else 0)
+                new_active = new_row * cols + active_col
+
+        set_grid_layout(rows - 1, cols, new_cells, new_active)
+
+    @ctrl.add("add_grid_column")
+    def add_grid_column(**_):
+        rows, cols = grid_dimensions()
+        if cols >= GRID_MAX_COLS:
+            return
+
+        cells = normalize_grid_cells(state.gridCells, rows, cols)
+        active = active_grid_index(rows * cols)
+        new_cells: List[Dict[str, Any]] = []
+        for row in range(rows):
+            start = row * cols
+            new_cells.extend(cells[start : start + cols])
+            new_cells.append(empty_grid_cell())
+
+        new_active = -1
+        if active >= 0:
+            active_row = active // cols
+            active_col = active % cols
+            new_active = active_row * (cols + 1) + active_col
+
+        set_grid_layout(rows, cols + 1, new_cells, new_active)
+
+    @ctrl.add("delete_grid_column")
+    def delete_grid_column(**_):
+        rows, cols = grid_dimensions()
+        if cols <= GRID_MIN_COLS:
+            return
+
+        cells = normalize_grid_cells(state.gridCells, rows, cols)
+        active = active_grid_index(rows * cols)
+        remove_col = (active % cols) if active >= 0 else cols - 1
+
+        new_cells: List[Dict[str, Any]] = []
+        for row in range(rows):
+            start = row * cols
+            for col in range(cols):
+                if col != remove_col:
+                    new_cells.append(cells[start + col])
+
+        new_active = -1
+        if active >= 0:
+            active_row = active // cols
+            active_col = active % cols
+            if active_col != remove_col:
+                new_col = active_col - (1 if active_col > remove_col else 0)
+                new_active = active_row * (cols - 1) + new_col
+
+        set_grid_layout(rows, cols - 1, new_cells, new_active)
+
     @ctrl.add("assign_var_to_grid_cell")
     def assign_var_to_grid_cell(cell_index: int, var_name: str, sync_selection: bool = True, **_):
         try:
             idx = int(cell_index)
         except Exception:
             return
-        if idx < 0 or idx >= GRID_CELL_COUNT:
+        if not is_valid_grid_index(idx):
             return
 
         var = str(var_name or "").strip()
@@ -706,7 +854,7 @@ def attach_controllers(
             idx = int(cell_index)
         except Exception:
             return
-        if idx < 0 or idx >= GRID_CELL_COUNT:
+        if not is_valid_grid_index(idx):
             return
 
         cells = normalize_grid_cells(state.gridCells)
@@ -735,13 +883,7 @@ def attach_controllers(
 
     @ctrl.add("hide_context_menu")
     def hide_context_menu(**_):
-        state.contextMenuVisible = False
-        state.contextMenuKind = ""
-        state.contextMenuItem = ""
-        state.contextMenuItemLabel = ""
-        state.contextMenuCellIndex = -1
-        state.contextMenuCellVisualizationOptions = []
-        state.contextMenuCellSelectedVisualization = ""
+        clear_context_menu_state()
 
     @ctrl.trigger("hide_context_menu_trigger")
     def hide_context_menu_trigger(**_):
@@ -777,7 +919,7 @@ def attach_controllers(
             idx = int(cell_index)
         except Exception:
             return
-        if idx < 0 or idx >= GRID_CELL_COUNT:
+        if not is_valid_grid_index(idx):
             return
         try:
             px = int(float(x))
@@ -831,7 +973,7 @@ def attach_controllers(
             idx = int(state.contextMenuCellIndex)
         except Exception:
             idx = -1
-        if 0 <= idx < GRID_CELL_COUNT:
+        if is_valid_grid_index(idx):
             clear_grid_cell(idx)
         hide_context_menu()
 
@@ -841,7 +983,7 @@ def attach_controllers(
             idx = int(state.contextMenuCellIndex)
         except Exception:
             idx = -1
-        if 0 <= idx < GRID_CELL_COUNT:
+        if is_valid_grid_index(idx):
             set_active_grid_cell(idx, 0)
         hide_context_menu()
 
@@ -851,7 +993,7 @@ def attach_controllers(
             idx = int(state.contextMenuCellIndex)
         except Exception:
             idx = -1
-        if idx < 0 or idx >= GRID_CELL_COUNT:
+        if not is_valid_grid_index(idx):
             hide_context_menu()
             return
 
@@ -884,7 +1026,7 @@ def attach_controllers(
         except Exception:
             idx = -1
 
-        if row and var_id and 0 <= idx < GRID_CELL_COUNT:
+        if row and var_id and is_valid_grid_index(idx):
             cells = normalize_grid_cells(state.gridCells)
             cell_var = str(cells[idx].get("variable_id", "") or cells[idx].get("variable_name", "") or "").strip()
             if cell_var == var_id:

@@ -53,6 +53,15 @@ def init_state(state, db) -> None:
     state.movieDetailsOpen = {}
     state.tileVisualizationBySource = {}
 
+    state.gridRows = 3
+    state.gridCols = 3
+    state.gridMinRows = 1
+    state.gridMinCols = 1
+    state.gridMaxRows = 8
+    state.gridMaxCols = 8
+    state.gridCellSize = 300
+    state.gridMinCellSize = 160
+    state.gridMaxCellSize = 520
     state.gridCells = [
         {
             "variable_name": "",
@@ -69,7 +78,7 @@ def init_state(state, db) -> None:
             "status": "empty",
             "note": "",
         }
-        for _ in range(9)
+        for _ in range(state.gridRows * state.gridCols)
     ]
     state.activeGridCell = -1
     state.contextMenuVisible = False

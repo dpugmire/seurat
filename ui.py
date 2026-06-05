@@ -767,9 +767,10 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                   box-shadow: inset 0 0 0 2px #1976d2 !important;
                 }
                 .catnip-vcr-bar {
-                  display: grid;
-                  grid-template-columns: 1fr auto 1fr;
+                  display: flex;
                   align-items: center;
+                  gap: 12px;
+                  flex-wrap: wrap;
                   width: 100%;
                   min-height: 28px;
                   margin: 0 0 8px 0;
@@ -778,10 +779,10 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                   display: flex;
                   align-items: center;
                   gap: 6px;
-                  justify-self: start;
                 }
                 .catnip-vcr-btn,
-                .catnip-vcr-bar button[data-vcr-action] {
+                .catnip-vcr-bar button[data-vcr-action],
+                .catnip-grid-layout-btn {
                   min-width: 34px;
                   height: 24px;
                   border: 1px solid #9d9d9d;
@@ -794,19 +795,55 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                   padding: 0 8px;
                 }
                 .catnip-vcr-btn:hover,
-                .catnip-vcr-bar button[data-vcr-action]:hover {
+                .catnip-vcr-bar button[data-vcr-action]:hover,
+                .catnip-grid-layout-btn:hover:not(:disabled) {
                   background: #f2f2f2;
                 }
+                .catnip-vcr-btn:disabled,
+                .catnip-vcr-bar button[data-vcr-action]:disabled,
+                .catnip-grid-layout-btn:disabled {
+                  opacity: 0.45;
+                  cursor: not-allowed;
+                }
                 .catnip-vcr-time {
-                  justify-self: center;
                   min-width: 170px;
                   text-align: center;
                 }
                 .catnip-vcr-slider {
-                  justify-self: start;
-                  margin-left: 44px;
                   width: 220px;
                   cursor: pointer;
+                }
+                .catnip-grid-layout-controls {
+                  margin-left: auto;
+                  display: flex;
+                  flex-direction: column;
+                  align-items: flex-end;
+                  gap: 4px;
+                }
+                .catnip-grid-layout-buttons {
+                  display: flex;
+                  align-items: center;
+                  gap: 6px;
+                }
+                .catnip-grid-layout-label {
+                  min-width: 44px;
+                  text-align: center;
+                  color: #555;
+                }
+                .catnip-grid-size-controls {
+                  display: flex;
+                  align-items: center;
+                  gap: 6px;
+                  min-width: 190px;
+                }
+                .catnip-grid-size-slider {
+                  flex: 1 1 auto;
+                  min-width: 120px;
+                }
+                .catnip-grid-size-label {
+                  min-width: 48px;
+                  text-align: right;
+                  color: #555;
                 }
                 #catnip-context-menu {
                   background: #fff;
@@ -998,17 +1035,78 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                             'title="Timestep (frame index)"',
                                         ],
                                     )
+                                    with html.Div(classes="catnip-grid-layout-controls"):
+                                        with html.Div(classes="catnip-grid-size-controls"):
+                                            vuetify.VSlider(
+                                                v_model=("gridCellSize",),
+                                                min=160,
+                                                max=520,
+                                                step=20,
+                                                density="compact",
+                                                hide_details=True,
+                                                class_="catnip-grid-size-slider",
+                                                title="Grid cell size",
+                                            )
+                                            html.Span(
+                                                "{{ gridCellSize + 'px' }}",
+                                                class_="text-caption catnip-grid-size-label",
+                                            )
+                                        with html.Div(classes="catnip-grid-layout-buttons"):
+                                            html.Span(
+                                                "{{ gridRows + 'x' + gridCols }}",
+                                                class_="text-caption catnip-grid-layout-label",
+                                            )
+                                            html.Button(
+                                                "+ Row",
+                                                classes="catnip-grid-layout-btn",
+                                                click=ctrl.add_grid_row,
+                                                raw_attrs=[
+                                                    'type="button"',
+                                                    ':disabled="gridRows >= gridMaxRows"',
+                                                ],
+                                                title="Add row",
+                                            )
+                                            html.Button(
+                                                "- Row",
+                                                classes="catnip-grid-layout-btn",
+                                                click=ctrl.delete_grid_row,
+                                                raw_attrs=[
+                                                    'type="button"',
+                                                    ':disabled="gridRows <= gridMinRows"',
+                                                ],
+                                                title="Delete active row or last row",
+                                            )
+                                            html.Button(
+                                                "+ Col",
+                                                classes="catnip-grid-layout-btn",
+                                                click=ctrl.add_grid_column,
+                                                raw_attrs=[
+                                                    'type="button"',
+                                                    ':disabled="gridCols >= gridMaxCols"',
+                                                ],
+                                                title="Add column",
+                                            )
+                                            html.Button(
+                                                "- Col",
+                                                classes="catnip-grid-layout-btn",
+                                                click=ctrl.delete_grid_column,
+                                                raw_attrs=[
+                                                    'type="button"',
+                                                    ':disabled="gridCols <= gridMinCols"',
+                                                ],
+                                                title="Delete active column or last column",
+                                            )
                                 with html.Div(
                                     style=(
-                                        "display:grid;"
-                                        "grid-template-columns:repeat(3, 300px);"
-                                        "grid-template-rows:repeat(3, 332px);"
-                                        "width:max-content;"
-                                        "margin:0 auto;"
-                                        "justify-content:center;"
-                                        "align-content:start;"
-                                        "border:1px solid #cfcfcf;"
-                                    )
+                                        "('display:grid;'"
+                                        " + 'grid-template-columns:repeat(' + gridCols + ', ' + Number(gridCellSize || 300) + 'px);'"
+                                        " + 'grid-template-rows:repeat(' + gridRows + ', ' + (Number(gridCellSize || 300) + 32) + 'px);'"
+                                        " + 'width:max-content;'"
+                                        " + 'margin:0 auto;'"
+                                        " + 'justify-content:center;'"
+                                        " + 'align-content:start;'"
+                                        " + 'border:1px solid #cfcfcf;')",
+                                    ),
                                 ):
                                     with vuetify.Template(v_for="(tile, i) in gridCells", key="i"):
                                         with html.Div(
@@ -1023,9 +1121,9 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                 ':draggable="!!(tile && tile.variable_name)"',
                                             ],
                                             style=(
-                                                "('width:300px; height:332px; overflow:hidden; cursor:pointer; display:flex; flex-direction:column;'"
-                                                " + ((i % 3 !== 2) ? 'border-right:1px solid #cfcfcf;' : '')"
-                                                " + ((i < 6) ? 'border-bottom:1px solid #cfcfcf;' : '')"
+                                                "('width:' + Number(gridCellSize || 300) + 'px; height:' + (Number(gridCellSize || 300) + 32) + 'px; overflow:hidden; cursor:pointer; display:flex; flex-direction:column;'"
+                                                " + (((i % gridCols) !== (gridCols - 1)) ? 'border-right:1px solid #cfcfcf;' : '')"
+                                                " + ((i < ((gridRows - 1) * gridCols)) ? 'border-bottom:1px solid #cfcfcf;' : '')"
                                                 " + ((activeGridCell === i) ? 'background:#eef5ff; box-shadow: inset 0 0 0 2px #1e88e5;' : ''))",
                                             ),
                                         ):
@@ -1066,15 +1164,19 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                         title="Remove",
                                                     )
 
-                                                with html.Div(style="width:300px; height:300px; background:#111;"):
+                                                with html.Div(
+                                                    style=(
+                                                        "('width:' + Number(gridCellSize || 300) + 'px; height:' + Number(gridCellSize || 300) + 'px; background:#111;')",
+                                                    ),
+                                                ):
                                                     with vuetify.Template(v_if="tile.src"):
                                                         with vuetify.Template(v_if="tile.media_type === 'image'"):
                                                             html.Img(
                                                                 src=("tile.src",),
                                                                 style=(
                                                                     "display:block;"
-                                                                    "width:300px;"
-                                                                    "height:300px;"
+                                                                    "width:100%;"
+                                                                    "height:100%;"
                                                                     "object-fit:contain;"
                                                                     "background:#111;"
                                                                 ),
@@ -1090,8 +1192,8 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                                 raw_attrs=['data-grid-video="1"', "playsinline", "webkit-playsinline"],
                                                                 style=(
                                                                     "display:block;"
-                                                                    "width:300px;"
-                                                                    "height:300px;"
+                                                                    "width:100%;"
+                                                                    "height:100%;"
                                                                     "object-fit:contain;"
                                                                     "background:#111;"
                                                                 ),
@@ -1101,13 +1203,13 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                             "{{ tile.note ? tile.note : 'No movie src' }}",
                                                             class_="text-caption",
                                                             style=(
-                                                                "height:300px;"
+                                                                "('height:' + Number(gridCellSize || 300) + 'px;"
                                                                 "display:flex;"
                                                                 "align-items:center;"
                                                                 "justify-content:center;"
                                                                 "text-align:center;"
                                                                 "padding:8px;"
-                                                                "color:#ddd;"
+                                                                "color:#ddd;')"
                                                             ),
                                                         )
                                             with vuetify.Template(v_if="!(tile && tile.variable_name)"):
