@@ -1,0 +1,9 @@
+pymongo
+trame
+trame-vuetify
+adios2
+numpy
+Pillow
+
+# Optional: only needed when using --image-association-schema with YAML files.
+PyYAML
