@@ -427,17 +427,39 @@ class CampaignDb:
         width: int = 900,
         height: int = 750,
     ) -> bytes:
-        x = np.asarray(x_values, dtype=float).reshape(-1)
-        y = np.asarray(y_values, dtype=float).reshape(-1)
-        n = min(int(x.size), int(y.size))
-        if n <= 0:
-            raise ValueError("No finite values available for plot")
-        x = x[:n]
-        y = y[:n]
-        mask = np.isfinite(x) & np.isfinite(y)
-        x = x[mask]
-        y = y[mask]
-        if x.size <= 0:
+        return CampaignDb._draw_multi_line_plot_png(
+            [(x_values, y_values)],
+            title,
+            x_label,
+            y_label,
+            width=width,
+            height=height,
+        )
+
+    @staticmethod
+    def _draw_multi_line_plot_png(
+        series_values: List[Tuple[Any, Any]],
+        title: str,
+        x_label: str,
+        y_label: str,
+        width: int = 900,
+        height: int = 750,
+    ) -> bytes:
+        series: List[Tuple[np.ndarray, np.ndarray]] = []
+        for x_values, y_values in series_values:
+            x = np.asarray(x_values, dtype=float).reshape(-1)
+            y = np.asarray(y_values, dtype=float).reshape(-1)
+            n = min(int(x.size), int(y.size))
+            if n <= 0:
+                continue
+            x = x[:n]
+            y = y[:n]
+            mask = np.isfinite(x) & np.isfinite(y)
+            x = x[mask]
+            y = y[mask]
+            if x.size > 0:
+                series.append((x, y))
+        if not series:
             raise ValueError("No finite values available for plot")
 
         width = max(360, int(width))
@@ -454,10 +476,12 @@ class CampaignDb:
         plot_w = max(1, width - left - right)
         plot_h = max(1, height - top - bottom)
 
-        xmin = float(np.min(x))
-        xmax = float(np.max(x))
-        ymin = float(np.min(y))
-        ymax = float(np.max(y))
+        all_x = np.concatenate([x for x, _ in series])
+        all_y = np.concatenate([y for _, y in series])
+        xmin = float(np.min(all_x))
+        xmax = float(np.max(all_x))
+        ymin = float(np.min(all_y))
+        ymax = float(np.max(all_y))
         if math.isclose(xmin, xmax):
             xmin -= 0.5
             xmax += 0.5
@@ -512,14 +536,26 @@ class CampaignDb:
                 font=tick_font,
             )
 
-        points = [(sx(xv), sy(yv)) for xv, yv in zip(x, y)]
-        if len(points) == 1:
-            px, py = points[0]
-            draw.ellipse([px - 5, py - 5, px + 5, py + 5], fill="#1565c0")
-        else:
-            draw.line(points, fill="#1565c0", width=6)
-            for px, py in points[:: max(1, len(points) // 60)]:
-                draw.ellipse([px - 3, py - 3, px + 3, py + 3], fill="#1565c0")
+        colors = (
+            "#1565c0",
+            "#c62828",
+            "#2e7d32",
+            "#ef6c00",
+            "#6a1b9a",
+            "#00838f",
+            "#ad1457",
+            "#5d4037",
+        )
+        for series_index, (x, y) in enumerate(series):
+            color = colors[series_index % len(colors)]
+            points = [(sx(xv), sy(yv)) for xv, yv in zip(x, y)]
+            if len(points) == 1:
+                px, py = points[0]
+                draw.ellipse([px - 5, py - 5, px + 5, py + 5], fill=color)
+            else:
+                draw.line(points, fill=color, width=5 if len(series) > 1 else 6)
+                for px, py in points[:: max(1, len(points) // 60)]:
+                    draw.ellipse([px - 3, py - 3, px + 3, py + 3], fill=color)
 
         source_line = fit_text(title, label_font, plot_w)
         if source_line:
@@ -704,6 +740,92 @@ class CampaignDb:
             "media_type": "image",
             "status": "ok",
             "note": "generated scalar plot",
+        }
+
+    def get_generated_scalar_plot_tile_for_sources(
+        self,
+        campaign_path: str,
+        variable_id: str,
+        source_filters: List[Dict[str, Any]],
+        extra_filter: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        if not source_filters:
+            return {}
+
+        candidates: List[Dict[str, Any]] = []
+        series: List[Tuple[Any, Any]] = []
+        source_labels: List[str] = []
+        x_labels: List[str] = []
+        seen = set()
+
+        for source_filter in source_filters:
+            candidate = self.scalar_plot_candidate(
+                variable_id,
+                source_filter=source_filter or None,
+                extra_filter=extra_filter,
+            )
+            if not candidate:
+                continue
+
+            source_fields = dict(candidate.get("source_fields", {}) or {})
+            key = (
+                str(candidate.get("variable_path", "") or ""),
+                str(source_fields.get("source_dataset", "") or ""),
+                str(source_fields.get("producer", "") or ""),
+                str(source_fields.get("casename", "") or ""),
+                str(source_fields.get("file", "") or ""),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+
+            try:
+                x, y, x_label = self._read_plot_series(
+                    campaign_path,
+                    str(candidate.get("variable_path", "") or ""),
+                    candidate.get("metadata", {}),
+                    str(source_fields.get("source_dataset", "") or ""),
+                )
+            except Exception:
+                continue
+
+            candidates.append(candidate)
+            series.append((x, y))
+            x_labels.append(str(x_label or ""))
+            label = str(candidate.get("source_label", "") or "")
+            if label:
+                source_labels.append(label)
+
+        if not candidates or not series:
+            return {}
+
+        x_label_values = {label for label in x_labels if label}
+        x_label = x_labels[0] if len(x_label_values) <= 1 else "x"
+        title = source_labels[0] if len(series) == 1 and source_labels else ""
+        first = candidates[0]
+        first_source_fields = dict(first.get("source_fields", {}) or {})
+        png_bytes = self._draw_multi_line_plot_png(
+            series,
+            title,
+            x_label,
+            str(first.get("variable_name", "") or variable_id),
+        )
+
+        return {
+            "variable_name": str(first.get("variable_name", "") or variable_id),
+            "variable_id": variable_id,
+            "visualization_name": GENERATED_SCALAR_PLOT_VIS,
+            "selected_visualization": GENERATED_SCALAR_PLOT_VIS,
+            "visualization_options": [GENERATED_SCALAR_PLOT_VIS],
+            "source_dataset": str(first_source_fields.get("source_dataset", "") or ""),
+            "producer": str(first_source_fields.get("producer", "") or ""),
+            "casename": str(first_source_fields.get("casename", "") or ""),
+            "file": str(first_source_fields.get("file", "") or ""),
+            "src": png_bytes_to_data_uri(png_bytes),
+            "media_type": "image",
+            "status": "ok",
+            "note": f"generated scalar plot ({len(series)} source{'s' if len(series) != 1 else ''})",
+            "source_count": len(series),
         }
 
     def variable_min_max_summary(

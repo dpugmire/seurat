@@ -103,6 +103,70 @@ def attach_controllers(
             "file": str(row.get("file", "") or ""),
         }
 
+    def normalize_source_keys(raw_keys) -> List[str]:
+        if isinstance(raw_keys, str):
+            items = [raw_keys]
+        elif isinstance(raw_keys, (list, tuple)):
+            items = list(raw_keys)
+        else:
+            items = []
+
+        keys: List[str] = []
+        for raw_key in items:
+            key = str(raw_key or "").strip()
+            if key and key not in keys:
+                keys.append(key)
+        return keys
+
+    def source_keys_from_cell(cell: Dict[str, Any]) -> List[str]:
+        keys = normalize_source_keys(cell.get("_source_keys", []))
+        key = str(cell.get("_source_key", "") or "").strip()
+        if key and key not in keys:
+            keys.insert(0, key)
+        return keys
+
+    def source_rows_for_keys(keys: List[str]) -> List[Dict[str, str]]:
+        rows: List[Dict[str, str]] = []
+        for key in normalize_source_keys(keys):
+            row = source_row_for_key(key)
+            if row:
+                rows.append(row)
+        return rows
+
+    def source_fields_list_from_cell(cell: Dict[str, Any]) -> List[Dict[str, Any]]:
+        raw_items = cell.get("_source_fields_list", [])
+        fields_list: List[Dict[str, Any]] = []
+        if isinstance(raw_items, list):
+            for raw_item in raw_items:
+                if isinstance(raw_item, dict):
+                    fields = {
+                        "_source_key": str(raw_item.get("_source_key", "") or ""),
+                        "source_dataset": str(raw_item.get("source_dataset", "") or ""),
+                        "producer": str(raw_item.get("producer", "") or ""),
+                        "casename": str(raw_item.get("casename", "") or ""),
+                        "file": str(raw_item.get("file", "") or ""),
+                    }
+                    if any(fields.values()):
+                        fields_list.append(fields)
+
+        if not fields_list:
+            for row in source_rows_for_keys(source_keys_from_cell(cell)):
+                fields = source_fields_from_row(row)
+                if fields:
+                    fields_list.append(fields)
+
+        if not fields_list:
+            fields = {
+                "_source_key": str(cell.get("_source_key", "") or ""),
+                "source_dataset": str(cell.get("source_dataset", "") or ""),
+                "producer": str(cell.get("producer", "") or ""),
+                "casename": str(cell.get("casename", "") or ""),
+                "file": str(cell.get("file", "") or ""),
+            }
+            if any(fields.values()):
+                fields_list.append(fields)
+        return fields_list
+
     def source_filter_from_cell(cell: Dict[str, Any]) -> Dict[str, str]:
         source_dataset = str(cell.get("source_dataset", "") or "")
         if source_dataset:
@@ -161,6 +225,8 @@ def attach_controllers(
             "selected_visualization": "",
             "visualization_options": [],
             "_source_key": "",
+            "_source_keys": [],
+            "_source_fields_list": [],
             "source_dataset": "",
             "producer": "",
             "casename": "",
@@ -178,6 +244,7 @@ def attach_controllers(
         state.contextMenuItemLabel = ""
         state.contextMenuCellIndex = -1
         state.contextMenuCellHasVariable = False
+        state.contextMenuCellCanAddSource = False
         state.contextMenuCellVisualizationOptions = []
         state.contextMenuCellSelectedVisualization = ""
 
@@ -437,6 +504,66 @@ def attach_controllers(
             state.draggedVar = variable_id
         return bool(tile)
 
+    def set_generated_scalar_plot_sources_cell(
+        cell_index: int,
+        variable_id: str,
+        source_rows: List[Dict[str, str]],
+        sync_selection: bool = True,
+    ) -> bool:
+        try:
+            idx = int(cell_index)
+        except Exception:
+            return False
+        if not is_valid_grid_index(idx):
+            return False
+
+        rows = [row for row in source_rows if row]
+        if not rows:
+            return False
+
+        source_fields_list = [source_fields_from_row(row) for row in rows]
+        source_filters = [source_filter_from_row(row) for row in rows]
+        source_keys = [
+            str(fields.get("_source_key", "") or "")
+            for fields in source_fields_list
+            if str(fields.get("_source_key", "") or "")
+        ]
+        try:
+            tile = db.get_generated_scalar_plot_tile_for_sources(
+                campaign_path,
+                variable_id,
+                source_filters=source_filters,
+                extra_filter=state.queryFilter or None,
+            )
+        except Exception as e:
+            tile = {}
+            state.scalarPlotStatus = f"Scalar plot generation failed: {type(e).__name__}: {e}"
+
+        cells = normalize_grid_cells(state.gridCells)
+        if tile:
+            first_fields = source_fields_list[0]
+            tile.update({k: v for k, v in first_fields.items() if v and k != "_source_key"})
+            tile["_source_key"] = source_keys[0] if source_keys else str(first_fields.get("_source_key", "") or "")
+            tile["_source_keys"] = source_keys
+            tile["_source_fields_list"] = source_fields_list
+            tile["visualization_name"] = GENERATED_SCALAR_PLOT_VIS
+            tile["selected_visualization"] = GENERATED_SCALAR_PLOT_VIS
+            tile["visualization_options"] = [GENERATED_SCALAR_PLOT_VIS]
+            cells[idx] = tile
+            state.scalarPlotStatus = ""
+        else:
+            cells[idx] = no_visualization_grid_cell(
+                variable_id,
+                "Could not generate scalar plot for the selected sources",
+            )
+
+        state.gridCells = cells
+        state.activeGridCell = idx
+        if sync_selection:
+            state.selectedVar = variable_id
+            state.draggedVar = variable_id
+        return bool(tile)
+
     def maybe_handle_generated_scalar_plot(
         variable_id: str,
         cell_index: int,
@@ -507,21 +634,38 @@ def attach_controllers(
                 continue
 
             if str(c.get("visualization_name", "") or "") == GENERATED_SCALAR_PLOT_VIS:
-                source_fields = {
-                    "source_dataset": str(c.get("source_dataset", "") or ""),
-                    "producer": str(c.get("producer", "") or ""),
-                    "casename": str(c.get("casename", "") or ""),
-                    "file": str(c.get("file", "") or ""),
-                    "_source_key": str(c.get("_source_key", "") or ""),
-                }
+                source_keys = source_keys_from_cell(c)
+                source_fields_list = source_fields_list_from_cell(c)
                 try:
-                    tile = db.get_or_create_generated_scalar_plot_tile(
-                        campaign_path,
-                        var_id,
-                        source_filter=source_fields_to_filter(var_id, source_fields) or None,
-                        extra_filter=state.queryFilter or None,
-                    )
-                    tile.update({k: v for k, v in source_fields.items() if v})
+                    if len(source_fields_list) > 1:
+                        source_filters = [
+                            source_fields_to_filter(var_id, fields)
+                            for fields in source_fields_list
+                        ]
+                        tile = db.get_generated_scalar_plot_tile_for_sources(
+                            campaign_path,
+                            var_id,
+                            source_filters=source_filters,
+                            extra_filter=state.queryFilter or None,
+                        )
+                        if not tile:
+                            raise ValueError("Could not regenerate scalar plot for selected sources")
+                        first_fields = source_fields_list[0]
+                        tile.update({k: v for k, v in first_fields.items() if v and k != "_source_key"})
+                        tile["_source_key"] = source_keys[0] if source_keys else str(first_fields.get("_source_key", "") or "")
+                        tile["_source_keys"] = source_keys
+                        tile["_source_fields_list"] = source_fields_list
+                    else:
+                        source_fields = source_fields_list[0] if source_fields_list else {}
+                        tile = db.get_or_create_generated_scalar_plot_tile(
+                            campaign_path,
+                            var_id,
+                            source_filter=source_fields_to_filter(var_id, source_fields) or None,
+                            extra_filter=state.queryFilter or None,
+                        )
+                        if not tile:
+                            raise ValueError("Could not regenerate scalar plot for source")
+                        tile.update({k: v for k, v in source_fields.items() if v})
                     tile["visualization_name"] = GENERATED_SCALAR_PLOT_VIS
                     tile["selected_visualization"] = GENERATED_SCALAR_PLOT_VIS
                     tile["visualization_options"] = [GENERATED_SCALAR_PLOT_VIS]
@@ -596,7 +740,11 @@ def attach_controllers(
             update_selected_var_panels(state.selectedVar)
         refresh_grid_cells()
 
-    def update_selected_var_panels(variable_id: str, preferred_source_key: str = ""):
+    def update_selected_var_panels(
+        variable_id: str,
+        preferred_source_key: str = "",
+        preferred_source_keys: Optional[List[str]] = None,
+    ):
         var_id = str(variable_id or "").strip()
         if not var_id:
             clear_right_panes(state)
@@ -657,15 +805,22 @@ def attach_controllers(
             sort_sources(state.sourceSortField, toggle=False)
 
         all_keys = source_row_keys()
+        allow_multi_sources = str(state.sourceDialogMode or "single") == "add"
+        preferred_keys = [key for key in normalize_source_keys(preferred_source_keys or []) if key in all_keys]
         preferred_key = str(preferred_source_key or "")
-        if preferred_key and preferred_key in all_keys:
+        if preferred_keys:
+            state.selectedSourceKeys = preferred_keys if allow_multi_sources else preferred_keys[:1]
+        elif preferred_key and preferred_key in all_keys:
             state.selectedSourceKeys = [preferred_key]
         elif previous_var != var_id:
             state.selectedSourceKeys = [all_keys[0]] if all_keys else []
         else:
             selected = set(state.selectedSourceKeys or [])
             selected_keys = [k for k in all_keys if k in selected]
-            state.selectedSourceKeys = selected_keys[:1] or ([all_keys[0]] if all_keys else [])
+            if allow_multi_sources:
+                state.selectedSourceKeys = selected_keys or ([all_keys[0]] if all_keys else [])
+            else:
+                state.selectedSourceKeys = selected_keys[:1] or ([all_keys[0]] if all_keys else [])
         update_selected_source_label()
 
         try:
@@ -1123,6 +1278,7 @@ def attach_controllers(
         state.contextMenuItemLabel = variable_label(item)
         state.contextMenuCellIndex = -1
         state.contextMenuCellHasVariable = False
+        state.contextMenuCellCanAddSource = False
         state.contextMenuCellVisualizationOptions = []
         state.contextMenuCellSelectedVisualization = ""
         state.contextMenuX = px
@@ -1156,14 +1312,19 @@ def attach_controllers(
             if vis and vis not in vis_opts:
                 vis_opts.append(vis)
         selected_vis = str(cell.get("selected_visualization", "") or cell.get("visualization_name", "") or "").strip()
+        visualization_name = str(cell.get("visualization_name", "") or selected_vis).strip()
         if selected_vis and selected_vis not in vis_opts:
             vis_opts.append(selected_vis)
+        can_add_source = has_var and (
+            visualization_name == GENERATED_SCALAR_PLOT_VIS or selected_vis == GENERATED_SCALAR_PLOT_VIS
+        )
 
         state.contextMenuKind = "cell"
         state.contextMenuItem = label
         state.contextMenuItemLabel = label
         state.contextMenuCellIndex = idx
         state.contextMenuCellHasVariable = has_var
+        state.contextMenuCellCanAddSource = can_add_source
         state.contextMenuCellVisualizationOptions = vis_opts
         state.contextMenuCellSelectedVisualization = selected_vis
         state.contextMenuX = px
@@ -1220,10 +1381,43 @@ def attach_controllers(
         var = str(cell.get("variable_id", "") or cell.get("variable_name", "") or "").strip()
         if var:
             state.activeGridCell = idx
+            state.sourceDialogMode = "single"
+            state.sourceDialogCellIndex = idx
             state.selectedVar = var
             state.draggedVar = var
-            update_selected_var_panels(var, preferred_source_key=str(cell.get("_source_key", "") or ""))
+            source_keys = source_keys_from_cell(cell)
+            preferred_key = source_keys[0] if source_keys else str(cell.get("_source_key", "") or "")
+            update_selected_var_panels(var, preferred_source_key=preferred_key)
             state.showSourcesModal = True
+        hide_context_menu()
+
+    @ctrl.add("context_menu_cell_add_source")
+    def context_menu_cell_add_source(**_):
+        try:
+            idx = int(state.contextMenuCellIndex)
+        except Exception:
+            idx = -1
+        if not is_valid_grid_index(idx):
+            hide_context_menu()
+            return
+
+        cells = normalize_grid_cells(state.gridCells)
+        cell = dict(cells[idx] or {})
+        var = str(cell.get("variable_id", "") or cell.get("variable_name", "") or "").strip()
+        selected_vis = str(cell.get("selected_visualization", "") or cell.get("visualization_name", "") or "").strip()
+        visualization_name = str(cell.get("visualization_name", "") or selected_vis).strip()
+        if not var or (selected_vis != GENERATED_SCALAR_PLOT_VIS and visualization_name != GENERATED_SCALAR_PLOT_VIS):
+            hide_context_menu()
+            return
+
+        source_keys = source_keys_from_cell(cell)
+        state.activeGridCell = idx
+        state.sourceDialogMode = "add"
+        state.sourceDialogCellIndex = idx
+        state.selectedVar = var
+        state.draggedVar = var
+        update_selected_var_panels(var, preferred_source_keys=source_keys)
+        state.showSourcesModal = True
         hide_context_menu()
 
     @ctrl.add("context_menu_cell_pick_visualization")
@@ -1274,16 +1468,85 @@ def attach_controllers(
 
     @ctrl.add("toggle_sources")
     def toggle_sources(**_):
-        state.showSourcesModal = not bool(state.showSourcesModal)
+        opening = not bool(state.showSourcesModal)
+        state.showSourcesModal = opening
+        if opening:
+            state.sourceDialogMode = "single"
+            try:
+                idx = int(state.activeGridCell)
+            except Exception:
+                idx = -1
+            state.sourceDialogCellIndex = idx if is_valid_grid_index(idx) else -1
 
     @ctrl.add("clear_source_filter")
     def clear_source_filter(**_):
         select_first_source()
         update_selected_var_panels(state.selectedVar)
 
+    @ctrl.add("toggle_add_source")
+    def toggle_add_source(key: str, **_):
+        k = str(key or "").strip()
+        if not k:
+            return
+
+        valid_keys = source_row_keys()
+        if k not in valid_keys:
+            return
+
+        var_id = str(state.detailsSelectedVarId or state.selectedVar or "").strip()
+        try:
+            idx = int(state.sourceDialogCellIndex)
+        except Exception:
+            idx = -1
+        if not is_valid_grid_index(idx):
+            try:
+                idx = int(state.activeGridCell)
+            except Exception:
+                idx = -1
+
+        selected = [key for key in normalize_source_keys(state.selectedSourceKeys or []) if key in valid_keys]
+        if not selected and is_valid_grid_index(idx):
+            cells = normalize_grid_cells(state.gridCells)
+            selected = [key for key in source_keys_from_cell(cells[idx]) if key in valid_keys]
+
+        if k in selected:
+            if len(selected) > 1:
+                selected = [key for key in selected if key != k]
+        else:
+            selected.append(k)
+        selected_set = set(selected)
+        selected = [key for key in valid_keys if key in selected_set]
+
+        state.sourceDialogMode = "add"
+        state.selectedSourceKeys = selected
+        update_selected_source_label()
+
+        if not var_id or not is_valid_grid_index(idx):
+            return
+
+        cells = normalize_grid_cells(state.gridCells)
+        cell_var = str(cells[idx].get("variable_id", "") or cells[idx].get("variable_name", "") or "").strip()
+        selected_vis = str(cells[idx].get("selected_visualization", "") or cells[idx].get("visualization_name", "") or "")
+        visualization_name = str(cells[idx].get("visualization_name", "") or selected_vis)
+        if cell_var != var_id or (
+            selected_vis != GENERATED_SCALAR_PLOT_VIS and visualization_name != GENERATED_SCALAR_PLOT_VIS
+        ):
+            return
+
+        rows = source_rows_for_keys(selected)
+        if rows:
+            set_generated_scalar_plot_sources_cell(
+                idx,
+                var_id,
+                rows,
+                sync_selection=False,
+            )
+            update_selected_var_panels(var_id, preferred_source_keys=selected)
+
     @ctrl.add("select_source")
     def select_source(key: str, **_):
         row = source_row_for_key(key)
+        state.sourceDialogMode = "single"
         select_source_key(key)
         state.showSourcesModal = True
 
@@ -1315,6 +1578,13 @@ def attach_controllers(
                     state.gridCells = cells
 
         update_selected_var_panels(var_id, preferred_source_key=str(key or ""))
+
+    @ctrl.add("source_dialog_select")
+    def source_dialog_select(key: str, **_):
+        if str(state.sourceDialogMode or "single") == "add":
+            toggle_add_source(key)
+        else:
+            select_source(key)
 
     @ctrl.add("toggle_source_visibility")
     def toggle_source_visibility(key: str, **_):

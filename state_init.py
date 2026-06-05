@@ -42,6 +42,8 @@ def init_state(state, db) -> None:
     state.detailsMedianMax = ""
 
     state.showSourcesModal = False
+    state.sourceDialogMode = "single"
+    state.sourceDialogCellIndex = -1
     state.sourceRows = []
     state.sourceSortField = SOURCE_FIELDS[0]
     state.sourceSortAsc = True
@@ -79,6 +81,9 @@ def init_state(state, db) -> None:
             "visualization_name": "",
             "selected_visualization": "",
             "visualization_options": [],
+            "_source_key": "",
+            "_source_keys": [],
+            "_source_fields_list": [],
             "source_dataset": "",
             "producer": "",
             "casename": "",
@@ -99,6 +104,7 @@ def init_state(state, db) -> None:
     state.contextMenuItemLabel = ""
     state.contextMenuCellIndex = -1
     state.contextMenuCellHasVariable = False
+    state.contextMenuCellCanAddSource = False
     state.contextMenuCellVisualizationOptions = []
     state.contextMenuCellSelectedVisualization = ""
 
@@ -116,6 +122,8 @@ def clear_details(state) -> None:
     state.detailsMedianMax = ""
 
     state.showSourcesModal = False
+    state.sourceDialogMode = "single"
+    state.sourceDialogCellIndex = -1
     state.sourceRows = []
     state.sourceSortField = SOURCE_FIELDS[0]
     state.sourceSortAsc = True
@@ -134,6 +142,7 @@ def clear_right_panes(state) -> None:
     state.contextMenuCellSelectedVisualization = ""
     state.contextMenuItemLabel = ""
     state.contextMenuCellHasVariable = False
+    state.contextMenuCellCanAddSource = False
     state.showScalarPlotDialog = False
     state.pendingScalarPlotVariableId = ""
     state.pendingScalarPlotCellIndex = -1

@@ -1281,13 +1281,18 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                             with vuetify.VCard():
                                 with vuetify.VCardTitle():
                                     with html.Div(style="display:flex; align-items:center; gap:8px; width:100%;"):
-                                        html.Div("{{ detailsSelectedVar ? ('Sources: ' + detailsSelectedVar) : 'Sources' }}")
+                                        html.Div(
+                                            "{{ detailsSelectedVar ? (((sourceDialogMode === 'add') ? 'Add Source: ' : 'Sources: ') + detailsSelectedVar) : 'Sources' }}"
+                                        )
                                         vuetify.VSpacer()
                                         vuetify.VBtn("Close", variant="text", size="small", click=ctrl.toggle_sources)
 
                                 with vuetify.VCardText():
                                     with vuetify.Template(v_if="detailsSelectedVar"):
-                                        html.Div("{{ 'Selected source: ' + selectedSourceLabel }}", class_="text-caption mb-2")
+                                        html.Div(
+                                            "{{ ((sourceDialogMode === 'add') ? 'Selected sources: ' : 'Selected source: ') + selectedSourceLabel }}",
+                                            class_="text-caption mb-2",
+                                        )
                                         with html.Div(
                                             style=(
                                                 "max-height:60vh;"
@@ -1362,15 +1367,20 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                                 "'background-color:#f5f5f5; cursor:pointer;' : "
                                                                 "'cursor:pointer;'",
                                                             ),
-                                                            click=(ctrl.select_source, "[r._key]"),
+                                                            click=(ctrl.source_dialog_select, "[r._key]"),
                                                         ):
                                                             with html.Td(style="text-align:center; white-space:nowrap;"):
-                                                                html.Input(
-                                                                    type="radio",
-                                                                    name="selected-source",
-                                                                    checked=("((selectedSourceKeys || []).includes(r._key))",),
-                                                                    click=(ctrl.select_source, "[r._key]"),
-                                                                )
+                                                                with vuetify.Template(v_if="sourceDialogMode === 'add'"):
+                                                                    html.Input(
+                                                                        type="checkbox",
+                                                                        checked=("((selectedSourceKeys || []).includes(r._key))",),
+                                                                    )
+                                                                with vuetify.Template(v_if="sourceDialogMode !== 'add'"):
+                                                                    html.Input(
+                                                                        type="radio",
+                                                                        name="selected-source",
+                                                                        checked=("((selectedSourceKeys || []).includes(r._key))",),
+                                                                    )
                                                             html.Td(
                                                                 "{{ r.source_dataset || [r.producer, r.casename, r.file].filter(Boolean).join('/') }}",
                                                                 style="white-space:nowrap;",
@@ -1423,6 +1433,8 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                     html.Div("Clear Cell", classes="menu-item danger", click=ctrl.context_menu_cell_clear)
                     with vuetify.Template(v_if="contextMenuCellHasVariable"):
                         html.Div("Sources...", classes="menu-item", click=ctrl.context_menu_cell_sources)
+                    with vuetify.Template(v_if="contextMenuCellCanAddSource"):
+                        html.Div("Add Source", classes="menu-item", click=ctrl.context_menu_cell_add_source)
                     with vuetify.Template(v_if="(contextMenuCellVisualizationOptions || []).length"):
                         html.Div("Visualization Type", classes="menu-section")
                         with vuetify.Template(v_for="vis in contextMenuCellVisualizationOptions", key="vis"):
