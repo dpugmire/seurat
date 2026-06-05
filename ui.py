@@ -845,6 +845,15 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                   text-align: right;
                   color: #555;
                 }
+                .catnip-scalar-plot-policy {
+                  height: 24px;
+                  border: 1px solid #9d9d9d;
+                  border-radius: 3px;
+                  background: #fff;
+                  color: #222;
+                  font-size: 12px;
+                  padding: 0 4px;
+                }
                 #catnip-context-menu {
                   background: #fff;
                   border: 1px solid #c9c9c9;
@@ -1052,6 +1061,15 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                 class_="text-caption catnip-grid-size-label",
                                             )
                                         with html.Div(classes="catnip-grid-layout-buttons"):
+                                            html.Span("Scalar plots", class_="text-caption")
+                                            with html.Select(
+                                                v_model=("scalarPlotPolicy",),
+                                                classes="catnip-scalar-plot-policy",
+                                                title="Generated scalar plot behavior",
+                                            ):
+                                                html.Option("Ask", value="ask")
+                                                html.Option("Generate", value="always")
+                                                html.Option("Never", value="never")
                                             html.Span(
                                                 "{{ gridRows + 'x' + gridCols }}",
                                                 class_="text-caption catnip-grid-layout-label",
@@ -1096,6 +1114,8 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                 ],
                                                 title="Delete active column or last column",
                                             )
+                                with vuetify.Template(v_if="scalarPlotStatus"):
+                                    html.Div("{{ scalarPlotStatus }}", class_="text-caption mb-2", style="color:#8a4b00;")
                                 with html.Div(
                                     style=(
                                         "('display:grid;'"
@@ -1360,6 +1380,31 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                         with vuetify.Template(v_if="!detailsSelectedVar"):
                                             html.Div("Select a variable first.", class_="text-caption")
 
+                        with vuetify.VDialog(v_model=("showScalarPlotDialog",), max_width="560"):
+                            with vuetify.VCard():
+                                vuetify.VCardTitle("Generate Scalar Plot")
+                                with vuetify.VCardText():
+                                    html.Div("{{ scalarPlotDialogMessage }}", class_="text-body-2")
+                                    vuetify.VCheckbox(
+                                        v_model=("scalarPlotAlwaysForSession",),
+                                        label="Always generate scalar plots for this session",
+                                        density="compact",
+                                        hide_details=True,
+                                        class_="mt-3",
+                                    )
+                                with vuetify.VCardActions():
+                                    vuetify.VSpacer()
+                                    vuetify.VBtn(
+                                        "Cancel",
+                                        variant="text",
+                                        click=ctrl.cancel_scalar_plot_generation,
+                                    )
+                                    vuetify.VBtn(
+                                        "Generate",
+                                        variant="tonal",
+                                        click=ctrl.confirm_scalar_plot_generation,
+                                    )
+
             with html.Div(
                 id="catnip-context-menu",
                 v_show=("contextMenuVisible",),
@@ -1376,6 +1421,8 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                 with html.Div(v_if="contextMenuKind === 'cell'"):
                     html.Div("Select Cell", classes="menu-item", click=ctrl.context_menu_cell_select)
                     html.Div("Clear Cell", classes="menu-item danger", click=ctrl.context_menu_cell_clear)
+                    with vuetify.Template(v_if="contextMenuCellHasVariable"):
+                        html.Div("Sources...", classes="menu-item", click=ctrl.context_menu_cell_sources)
                     with vuetify.Template(v_if="(contextMenuCellVisualizationOptions || []).length"):
                         html.Div("Visualization Type", classes="menu-section")
                         with vuetify.Template(v_for="vis in contextMenuCellVisualizationOptions", key="vis"):

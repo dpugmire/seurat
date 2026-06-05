@@ -1,6 +1,7 @@
 from typing import Any, Dict, List, Optional, Tuple
 
 from config import MAX_MOVIE_FRAMES, MOVIE_FPS
+from db import GENERATED_SCALAR_PLOT_VIS
 from query_parser import and_filter, python_query_to_mongo
 from state_init import clear_right_panes, fmt
 
@@ -176,6 +177,7 @@ def attach_controllers(
         state.contextMenuItem = ""
         state.contextMenuItemLabel = ""
         state.contextMenuCellIndex = -1
+        state.contextMenuCellHasVariable = False
         state.contextMenuCellVisualizationOptions = []
         state.contextMenuCellSelectedVisualization = ""
 
@@ -251,6 +253,56 @@ def attach_controllers(
         item_id = str(variable_id or "").strip()
         labels = dict(state.variableLabelsById or {})
         return str(labels.get(item_id, "") or item_id)
+
+    def normalize_scalar_plot_policy() -> str:
+        policy = str(state.scalarPlotPolicy or "ask").strip().lower()
+        if policy not in {"ask", "always", "never"}:
+            policy = "ask"
+        state.scalarPlotPolicy = policy
+        return policy
+
+    def clear_pending_scalar_plot() -> None:
+        state.showScalarPlotDialog = False
+        state.pendingScalarPlotVariableId = ""
+        state.pendingScalarPlotCellIndex = -1
+        state.pendingScalarPlotSourceFields = {}
+        state.pendingScalarPlotSyncSelection = True
+        state.scalarPlotDialogMessage = ""
+        state.scalarPlotAlwaysForSession = False
+
+    def source_fields_to_filter(variable_id: str, source_fields: Dict[str, Any]) -> Dict[str, Any]:
+        cell = dict(source_fields or {})
+        cell["variable_id"] = str(variable_id or "")
+        return source_filter_from_cell(cell)
+
+    def source_filter_for_assignment(
+        variable_id: str,
+        source_row: Optional[Dict[str, str]] = None,
+        existing_cell: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        if source_row:
+            return source_filter_from_row(source_row)
+        if existing_cell:
+            return source_filter_from_cell(existing_cell)
+        return active_source_filter_for_variable(variable_id)
+
+    def source_fields_for_assignment(
+        variable_id: str,
+        source_row: Optional[Dict[str, str]] = None,
+        candidate: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        if source_row:
+            return source_fields_from_row(source_row)
+        source_fields = dict((candidate or {}).get("source_fields", {}) or {})
+        if source_fields:
+            return source_fields
+        source_filter = active_source_filter_for_variable(variable_id)
+        return {
+            "source_dataset": str(source_filter.get("source_dataset", "") or ""),
+            "producer": str(source_filter.get("producer", "") or ""),
+            "casename": str(source_filter.get("casename", "") or ""),
+            "file": str(source_filter.get("file", "") or ""),
+        }
 
     def build_grid_cell_for_variable(
         variable_id: str,
@@ -330,6 +382,120 @@ def attach_controllers(
         cell["visualization_options"] = vis_names
         return cell
 
+    def no_visualization_grid_cell(variable_id: str, note: str) -> Dict[str, Any]:
+        cell = empty_grid_cell()
+        cell["variable_id"] = variable_id
+        cell["variable_name"] = variable_label(variable_id)
+        cell["status"] = "no-visualizations"
+        cell["note"] = note
+        return cell
+
+    def set_generated_scalar_plot_cell(
+        cell_index: int,
+        variable_id: str,
+        source_fields: Optional[Dict[str, Any]] = None,
+        sync_selection: bool = True,
+    ) -> bool:
+        try:
+            idx = int(cell_index)
+        except Exception:
+            return False
+        if not is_valid_grid_index(idx):
+            return False
+
+        source_fields = dict(source_fields or {})
+        source_filter = source_fields_to_filter(variable_id, source_fields)
+        try:
+            tile = db.get_or_create_generated_scalar_plot_tile(
+                campaign_path,
+                variable_id,
+                source_filter=source_filter or None,
+                extra_filter=state.queryFilter or None,
+            )
+        except Exception as e:
+            tile = {}
+            state.scalarPlotStatus = f"Scalar plot generation failed: {type(e).__name__}: {e}"
+
+        cells = normalize_grid_cells(state.gridCells)
+        if tile:
+            tile.update({k: v for k, v in source_fields.items() if v})
+            tile["visualization_name"] = str(tile.get("visualization_name", "") or GENERATED_SCALAR_PLOT_VIS)
+            tile["selected_visualization"] = str(tile.get("selected_visualization", "") or GENERATED_SCALAR_PLOT_VIS)
+            tile["visualization_options"] = [GENERATED_SCALAR_PLOT_VIS]
+            cells[idx] = tile
+            state.scalarPlotStatus = ""
+        else:
+            cells[idx] = no_visualization_grid_cell(
+                variable_id,
+                "Could not generate scalar plot for this source",
+            )
+
+        state.gridCells = cells
+        state.activeGridCell = idx
+        if sync_selection:
+            state.selectedVar = variable_id
+            state.draggedVar = variable_id
+        return bool(tile)
+
+    def maybe_handle_generated_scalar_plot(
+        variable_id: str,
+        cell_index: int,
+        source_row: Optional[Dict[str, str]] = None,
+        sync_selection: bool = True,
+    ) -> bool:
+        source_filter = source_filter_for_assignment(variable_id, source_row=source_row)
+        qf = state.queryFilter or None
+        active_filter = and_filter(qf, source_filter) if qf and source_filter else (qf or source_filter or None)
+        if db.distinct_visualization_names_for_variable(variable_id, extra_filter=active_filter):
+            return False
+
+        candidate = db.scalar_plot_candidate(
+            variable_id,
+            source_filter=source_filter or None,
+            extra_filter=qf,
+        )
+        if not candidate:
+            return False
+
+        source_fields = source_fields_for_assignment(variable_id, source_row=source_row, candidate=candidate)
+        source_label = str(candidate.get("source_label", "") or "").strip()
+        label = variable_label(variable_id)
+        policy = normalize_scalar_plot_policy()
+        state.activeGridCell = cell_index
+        state.selectedVar = variable_id
+        state.draggedVar = variable_id
+
+        if policy == "never":
+            cells = normalize_grid_cells(state.gridCells)
+            note = "No saved visualization; scalar plot generation is disabled"
+            cells[cell_index] = no_visualization_grid_cell(variable_id, note)
+            state.gridCells = cells
+            state.scalarPlotStatus = note
+            return True
+
+        if policy == "always":
+            set_generated_scalar_plot_cell(
+                cell_index,
+                variable_id,
+                source_fields=source_fields,
+                sync_selection=sync_selection,
+            )
+            return True
+
+        state.pendingScalarPlotVariableId = variable_id
+        state.pendingScalarPlotCellIndex = cell_index
+        state.pendingScalarPlotSourceFields = source_fields
+        state.pendingScalarPlotSyncSelection = bool(sync_selection)
+        state.scalarPlotDialogMessage = (
+            f'"{label}" has no saved visualization'
+            + (f" for {source_label}" if source_label else "")
+            + ". Generate a scalar plot from the raw campaign data?"
+        )
+        state.scalarPlotAlwaysForSession = False
+        state.showScalarPlotDialog = True
+        state.scalarPlotStatus = ""
+        return True
+
     def refresh_grid_cells():
         cells = normalize_grid_cells(state.gridCells)
         updated: List[Dict[str, Any]] = []
@@ -338,6 +504,31 @@ def attach_controllers(
             var_id = str(c.get("variable_id", "") or c.get("variable_name", "") or "").strip()
             if not var_id:
                 updated.append(empty_grid_cell())
+                continue
+
+            if str(c.get("visualization_name", "") or "") == GENERATED_SCALAR_PLOT_VIS:
+                source_fields = {
+                    "source_dataset": str(c.get("source_dataset", "") or ""),
+                    "producer": str(c.get("producer", "") or ""),
+                    "casename": str(c.get("casename", "") or ""),
+                    "file": str(c.get("file", "") or ""),
+                    "_source_key": str(c.get("_source_key", "") or ""),
+                }
+                try:
+                    tile = db.get_or_create_generated_scalar_plot_tile(
+                        campaign_path,
+                        var_id,
+                        source_filter=source_fields_to_filter(var_id, source_fields) or None,
+                        extra_filter=state.queryFilter or None,
+                    )
+                    tile.update({k: v for k, v in source_fields.items() if v})
+                    tile["visualization_name"] = GENERATED_SCALAR_PLOT_VIS
+                    tile["selected_visualization"] = GENERATED_SCALAR_PLOT_VIS
+                    tile["visualization_options"] = [GENERATED_SCALAR_PLOT_VIS]
+                    updated.append(tile)
+                except Exception as e:
+                    err_cell = no_visualization_grid_cell(var_id, f"{type(e).__name__}: {e}")
+                    updated.append(err_cell)
                 continue
 
             preferred_vis = str(c.get("selected_visualization", "") or "")
@@ -617,10 +808,18 @@ def attach_controllers(
         if target < 0:
             target = active if is_valid_grid_index(active) else 0
 
+        source_row = {}
+        if str(state.detailsSelectedVarId or "") == var:
+            source_row = source_row_for_key((state.selectedSourceKeys or [""])[0])
+        if maybe_handle_generated_scalar_plot(
+            var,
+            target,
+            source_row=source_row or None,
+            sync_selection=True,
+        ):
+            return
+
         try:
-            source_row = {}
-            if str(state.detailsSelectedVarId or "") == var:
-                source_row = source_row_for_key((state.selectedSourceKeys or [""])[0])
             cells[target] = build_grid_cell_for_variable(var, source_row=source_row or None)
         except Exception as e:
             err_cell = empty_grid_cell()
@@ -663,10 +862,18 @@ def attach_controllers(
         if not selected:
             return
 
+        source_row = {}
+        if str(state.detailsSelectedVarId or "") == selected:
+            source_row = source_row_for_key((state.selectedSourceKeys or [""])[0])
+        if maybe_handle_generated_scalar_plot(
+            selected,
+            idx,
+            source_row=source_row or None,
+            sync_selection=True,
+        ):
+            return
+
         try:
-            source_row = {}
-            if str(state.detailsSelectedVarId or "") == selected:
-                source_row = source_row_for_key((state.selectedSourceKeys or [""])[0])
             cells[idx] = build_grid_cell_for_variable(selected, source_row=source_row or None)
         except Exception as e:
             err_cell = empty_grid_cell()
@@ -823,10 +1030,18 @@ def attach_controllers(
             return
 
         cells = normalize_grid_cells(state.gridCells)
+        source_row = {}
+        if str(state.detailsSelectedVarId or "") == var:
+            source_row = source_row_for_key((state.selectedSourceKeys or [""])[0])
+        if maybe_handle_generated_scalar_plot(
+            var,
+            idx,
+            source_row=source_row or None,
+            sync_selection=sync_selection,
+        ):
+            return
+
         try:
-            source_row = {}
-            if str(state.detailsSelectedVarId or "") == var:
-                source_row = source_row_for_key((state.selectedSourceKeys or [""])[0])
             cells[idx] = build_grid_cell_for_variable(var, source_row=source_row or None)
         except Exception as e:
             err_cell = empty_grid_cell()
@@ -907,6 +1122,7 @@ def attach_controllers(
         state.contextMenuItem = item
         state.contextMenuItemLabel = variable_label(item)
         state.contextMenuCellIndex = -1
+        state.contextMenuCellHasVariable = False
         state.contextMenuCellVisualizationOptions = []
         state.contextMenuCellSelectedVisualization = ""
         state.contextMenuX = px
@@ -932,6 +1148,7 @@ def attach_controllers(
 
         cells = normalize_grid_cells(state.gridCells)
         cell = dict(cells[idx] or {})
+        has_var = bool(str(cell.get("variable_id", "") or cell.get("variable_name", "") or "").strip())
         label = str(cell.get("variable_name", "") or "").strip() or f"Cell {idx + 1}"
         vis_opts = []
         for raw_vis in (cell.get("visualization_options", []) or []):
@@ -946,6 +1163,7 @@ def attach_controllers(
         state.contextMenuItem = label
         state.contextMenuItemLabel = label
         state.contextMenuCellIndex = idx
+        state.contextMenuCellHasVariable = has_var
         state.contextMenuCellVisualizationOptions = vis_opts
         state.contextMenuCellSelectedVisualization = selected_vis
         state.contextMenuX = px
@@ -987,6 +1205,27 @@ def attach_controllers(
             set_active_grid_cell(idx, 0)
         hide_context_menu()
 
+    @ctrl.add("context_menu_cell_sources")
+    def context_menu_cell_sources(**_):
+        try:
+            idx = int(state.contextMenuCellIndex)
+        except Exception:
+            idx = -1
+        if not is_valid_grid_index(idx):
+            hide_context_menu()
+            return
+
+        cells = normalize_grid_cells(state.gridCells)
+        cell = dict(cells[idx] or {})
+        var = str(cell.get("variable_id", "") or cell.get("variable_name", "") or "").strip()
+        if var:
+            state.activeGridCell = idx
+            state.selectedVar = var
+            state.draggedVar = var
+            update_selected_var_panels(var, preferred_source_key=str(cell.get("_source_key", "") or ""))
+            state.showSourcesModal = True
+        hide_context_menu()
+
     @ctrl.add("context_menu_cell_pick_visualization")
     def context_menu_cell_pick_visualization(value: str = "", **_):
         try:
@@ -1004,6 +1243,34 @@ def attach_controllers(
 
         pick_grid_cell_visualization(idx, picked)
         hide_context_menu()
+
+    @ctrl.add("cancel_scalar_plot_generation")
+    def cancel_scalar_plot_generation(**_):
+        clear_pending_scalar_plot()
+
+    @ctrl.add("confirm_scalar_plot_generation")
+    def confirm_scalar_plot_generation(**_):
+        var_id = str(state.pendingScalarPlotVariableId or "").strip()
+        try:
+            idx = int(state.pendingScalarPlotCellIndex)
+        except Exception:
+            idx = -1
+        source_fields = dict(state.pendingScalarPlotSourceFields or {})
+        sync_selection = bool(state.pendingScalarPlotSyncSelection)
+
+        if bool(state.scalarPlotAlwaysForSession):
+            state.scalarPlotPolicy = "always"
+
+        clear_pending_scalar_plot()
+        if not var_id or not is_valid_grid_index(idx):
+            return
+
+        set_generated_scalar_plot_cell(
+            idx,
+            var_id,
+            source_fields=source_fields,
+            sync_selection=sync_selection,
+        )
 
     @ctrl.add("toggle_sources")
     def toggle_sources(**_):
@@ -1030,13 +1297,22 @@ def attach_controllers(
             cells = normalize_grid_cells(state.gridCells)
             cell_var = str(cells[idx].get("variable_id", "") or cells[idx].get("variable_name", "") or "").strip()
             if cell_var == var_id:
-                preferred_vis = str(cells[idx].get("selected_visualization", "") or "")
-                cells[idx] = build_grid_cell_for_variable(
-                    var_id,
-                    preferred_vis=preferred_vis,
-                    source_row=row,
-                )
-                state.gridCells = cells
+                selected_vis = str(cells[idx].get("selected_visualization", "") or "")
+                visualization_name = str(cells[idx].get("visualization_name", "") or selected_vis)
+                if visualization_name == GENERATED_SCALAR_PLOT_VIS or selected_vis == GENERATED_SCALAR_PLOT_VIS:
+                    set_generated_scalar_plot_cell(
+                        idx,
+                        var_id,
+                        source_fields=source_fields_from_row(row),
+                        sync_selection=False,
+                    )
+                else:
+                    cells[idx] = build_grid_cell_for_variable(
+                        var_id,
+                        preferred_vis=selected_vis,
+                        source_row=row,
+                    )
+                    state.gridCells = cells
 
         update_selected_var_panels(var_id, preferred_source_key=str(key or ""))
 

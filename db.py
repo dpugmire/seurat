@@ -1,10 +1,20 @@
+import io
+import math
 import statistics
 from typing import Any, Dict, List, Optional, Tuple
 
+import numpy as np
+from adios2 import FileReader
+from bson.binary import Binary
+from PIL import Image, ImageDraw, ImageFont
 from pymongo.errors import PyMongoError
 
 from media_utils import frames_to_mp4_bytes, mp4_bytes_to_data_uri, png_bytes_to_data_uri
 from query_parser import and_filter
+
+
+GENERATED_SCALAR_PLOT_VIS = "generated_timeseries"
+GENERATED_SCALAR_PLOT_VERSION = 3
 
 
 def to_float(value: Any) -> Optional[float]:
@@ -95,6 +105,45 @@ class CampaignDb:
         if len(parts) <= 1:
             return ""
         return "/".join(parts[:-1])
+
+    @staticmethod
+    def _adios_variable_read_path(doc: Dict[str, Any]) -> str:
+        variable_id = str(doc.get("variable_id", "") or "").strip("/")
+        source_dataset = str(doc.get("source_dataset", "") or "").strip("/")
+        variable_path = str(doc.get("variable_path", "") or "").strip("/")
+
+        if variable_id and source_dataset and variable_id.startswith(source_dataset + "/"):
+            return variable_id
+        if variable_id and source_dataset:
+            return f"{source_dataset}/{variable_id}"
+        if variable_id:
+            return variable_id
+        return variable_path
+
+    @staticmethod
+    def _metadata_steps_count(metadata: Any) -> int:
+        if not isinstance(metadata, dict):
+            return 1
+        for key in ("AvailableStepsCount", "Steps", "steps"):
+            raw = metadata.get(key, None)
+            try:
+                count = int(float(str(raw).strip()))
+            except Exception:
+                continue
+            if count > 0:
+                return count
+        return 1
+
+    @staticmethod
+    def _plot_source_label(doc: Dict[str, Any]) -> str:
+        source_dataset = str(doc.get("source_dataset", "") or "")
+        if source_dataset:
+            return source_dataset
+        producer = str(doc.get("producer", "") or "")
+        casename = str(doc.get("casename", "") or "")
+        file_name = str(doc.get("file", "") or "")
+        parts = [p for p in (producer, casename, file_name) if p]
+        return " / ".join(parts)
 
     def _classify_variable_group(
         self,
@@ -294,6 +343,368 @@ class CampaignDb:
             self.last_error = f"{type(e).__name__}: {e}"
             self.ok = False
             return []
+
+    def scalar_plot_candidate(
+        self,
+        variable_id: str,
+        source_filter: Optional[Dict[str, Any]] = None,
+        extra_filter: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        if not self.ok or not variable_id:
+            return {}
+
+        base_query = self._variable_filter(variable_id, "variable")
+        query = and_filter(base_query, source_filter) if source_filter else base_query
+        query = and_filter(query, extra_filter)
+        proj = {
+            "_id": 0,
+            "campaign_path": 1,
+            "file": 1,
+            "variable_id": 1,
+            "variable_name": 1,
+            "variable_name_physical": 1,
+            "variable_path": 1,
+            "source_dataset": 1,
+            "producer": 1,
+            "casename": 1,
+            "metadata": 1,
+            "min": 1,
+            "max": 1,
+        }
+
+        try:
+            doc = self.collection.find_one(query, proj, sort=[("source_dataset", 1), ("_id", 1)])
+        except PyMongoError as e:
+            self.last_error = f"{type(e).__name__}: {e}"
+            self.ok = False
+            return {}
+
+        if not doc:
+            return {}
+
+        metadata = doc.get("metadata", {})
+        ndims = self._metadata_ndims(metadata)
+        if ndims is None or ndims > 1:
+            return {}
+
+        read_path = self._adios_variable_read_path(doc)
+        if not read_path:
+            return {}
+
+        source_fields = {
+            "source_dataset": str(doc.get("source_dataset", "") or ""),
+            "producer": str(doc.get("producer", "") or ""),
+            "casename": str(doc.get("casename", "") or ""),
+            "file": str(doc.get("file", "") or ""),
+        }
+        source_filter_out: Dict[str, str] = {"variable_id": variable_id}
+        if source_fields["source_dataset"]:
+            source_filter_out["source_dataset"] = source_fields["source_dataset"]
+        else:
+            for key in ("producer", "casename", "file"):
+                if source_fields[key]:
+                    source_filter_out[key] = source_fields[key]
+
+        return {
+            "variable_id": variable_id,
+            "variable_name": str(doc.get("variable_name", "") or variable_id),
+            "variable_path": read_path,
+            "metadata": metadata,
+            "source_fields": source_fields,
+            "source_filter": source_filter_out,
+            "source_label": self._plot_source_label(doc),
+            "min": doc.get("min", None),
+            "max": doc.get("max", None),
+        }
+
+    @staticmethod
+    def _draw_line_plot_png(
+        x_values: Any,
+        y_values: Any,
+        title: str,
+        x_label: str,
+        y_label: str,
+        width: int = 900,
+        height: int = 750,
+    ) -> bytes:
+        x = np.asarray(x_values, dtype=float).reshape(-1)
+        y = np.asarray(y_values, dtype=float).reshape(-1)
+        n = min(int(x.size), int(y.size))
+        if n <= 0:
+            raise ValueError("No finite values available for plot")
+        x = x[:n]
+        y = y[:n]
+        mask = np.isfinite(x) & np.isfinite(y)
+        x = x[mask]
+        y = y[mask]
+        if x.size <= 0:
+            raise ValueError("No finite values available for plot")
+
+        width = max(360, int(width))
+        height = max(300, int(height))
+        img = Image.new("RGB", (width, height), "white")
+        draw = ImageDraw.Draw(img)
+        label_font = CampaignDb._plot_font(28)
+        tick_font = CampaignDb._plot_font(26)
+
+        left = 106
+        right = 38
+        top = 72
+        bottom = 96
+        plot_w = max(1, width - left - right)
+        plot_h = max(1, height - top - bottom)
+
+        xmin = float(np.min(x))
+        xmax = float(np.max(x))
+        ymin = float(np.min(y))
+        ymax = float(np.max(y))
+        if math.isclose(xmin, xmax):
+            xmin -= 0.5
+            xmax += 0.5
+        if math.isclose(ymin, ymax):
+            pad = abs(ymin) * 0.05 if ymin else 1.0
+            ymin -= pad
+            ymax += pad
+        else:
+            pad = (ymax - ymin) * 0.06
+            ymin -= pad
+            ymax += pad
+
+        def sx(value: float) -> float:
+            return left + ((float(value) - xmin) / (xmax - xmin)) * plot_w
+
+        def sy(value: float) -> float:
+            return top + plot_h - ((float(value) - ymin) / (ymax - ymin)) * plot_h
+
+        def fit_text(text: str, font: Any, max_width: float) -> str:
+            text = str(text or "")
+            if draw.textbbox((0, 0), text, font=font)[2] <= max_width:
+                return text
+            ellipsis = "..."
+            while text and draw.textbbox((0, 0), text + ellipsis, font=font)[2] > max_width:
+                text = text[:-1]
+            return text + ellipsis if text else ellipsis
+
+        draw.rectangle([left, top, left + plot_w, top + plot_h], outline="#3f3f3f", width=2)
+        for i in range(5):
+            frac = i / 4.0
+            gx = left + frac * plot_w
+            gy = top + frac * plot_h
+            draw.line([(gx, top), (gx, top + plot_h)], fill="#eeeeee", width=2)
+            draw.line([(left, gy), (left + plot_w, gy)], fill="#eeeeee", width=2)
+
+            xv = xmin + frac * (xmax - xmin)
+            yv = ymax - frac * (ymax - ymin)
+            x_text = f"{xv:.3g}"
+            y_text = f"{yv:.3g}"
+            x_bbox = draw.textbbox((0, 0), x_text, font=tick_font)
+            y_bbox = draw.textbbox((0, 0), y_text, font=tick_font)
+            draw.text(
+                (gx - (x_bbox[2] - x_bbox[0]) / 2, top + plot_h + 14),
+                x_text,
+                fill="#333333",
+                font=tick_font,
+            )
+            draw.text(
+                (left - 16 - (y_bbox[2] - y_bbox[0]), gy - (y_bbox[3] - y_bbox[1]) / 2),
+                y_text,
+                fill="#333333",
+                font=tick_font,
+            )
+
+        points = [(sx(xv), sy(yv)) for xv, yv in zip(x, y)]
+        if len(points) == 1:
+            px, py = points[0]
+            draw.ellipse([px - 5, py - 5, px + 5, py + 5], fill="#1565c0")
+        else:
+            draw.line(points, fill="#1565c0", width=6)
+            for px, py in points[:: max(1, len(points) // 60)]:
+                draw.ellipse([px - 3, py - 3, px + 3, py + 3], fill="#1565c0")
+
+        source_line = fit_text(title, label_font, plot_w)
+        if source_line:
+            draw.text((left, 24), source_line, fill="#555555", font=label_font)
+        x_bbox = draw.textbbox((0, 0), x_label, font=label_font)
+        draw.text(
+            (left + plot_w / 2 - (x_bbox[2] - x_bbox[0]) / 2, height - 46),
+            x_label,
+            fill="#333333",
+            font=label_font,
+        )
+
+        out = io.BytesIO()
+        img.save(out, format="PNG")
+        return out.getvalue()
+
+    @staticmethod
+    def _plot_font(size: int):
+        for path in (
+            "/System/Library/Fonts/Supplemental/Arial.ttf",
+            "/System/Library/Fonts/Helvetica.ttc",
+            "/Library/Fonts/Arial.ttf",
+        ):
+            try:
+                return ImageFont.truetype(path, size)
+            except Exception:
+                pass
+        try:
+            return ImageFont.load_default(size=size)
+        except Exception:
+            return ImageFont.load_default()
+
+    @staticmethod
+    def _read_plot_series(campaign_path: str, variable_path: str, metadata: Any, source_dataset: str) -> Tuple[np.ndarray, np.ndarray, str]:
+        steps_count = CampaignDb._metadata_steps_count(metadata)
+        ndims = CampaignDb._metadata_ndims(metadata)
+        with FileReader(campaign_path) as fr:
+            kwargs = {"step_selection": [0, steps_count]} if steps_count > 1 else {}
+            y_raw = np.asarray(fr.read(variable_path, **kwargs), dtype=float)
+
+            if ndims == 0:
+                y = y_raw.reshape(-1)
+                x = np.arange(y.size, dtype=float)
+                x_label = "step"
+                time_path = f"{source_dataset}/time" if source_dataset else ""
+                if time_path:
+                    try:
+                        t_raw = np.asarray(fr.read(time_path, **kwargs), dtype=float).reshape(-1)
+                        if t_raw.size == y.size:
+                            x = t_raw
+                            x_label = "time"
+                    except Exception:
+                        pass
+                return x, y, x_label
+
+            if y_raw.ndim >= 2:
+                y = np.asarray(y_raw[-1], dtype=float).reshape(-1)
+            else:
+                y = y_raw.reshape(-1)
+            x = np.arange(y.size, dtype=float)
+            return x, y, "index"
+
+    def get_or_create_generated_scalar_plot_tile(
+        self,
+        campaign_path: str,
+        variable_id: str,
+        source_filter: Optional[Dict[str, Any]] = None,
+        extra_filter: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        candidate = self.scalar_plot_candidate(variable_id, source_filter=source_filter, extra_filter=extra_filter)
+        if not candidate:
+            return {}
+
+        cache_query: Dict[str, Any] = {
+            "campaign_path": campaign_path,
+            "variable_id": variable_id,
+            "variable_type": "image",
+            "visualization_name": GENERATED_SCALAR_PLOT_VIS,
+            "generated_plot_version": GENERATED_SCALAR_PLOT_VERSION,
+            "association_source": "generated-scalar-plot",
+        }
+        source_fields = dict(candidate.get("source_fields", {}) or {})
+        if source_fields.get("source_dataset"):
+            cache_query["source_dataset"] = source_fields["source_dataset"]
+        else:
+            for key in ("producer", "casename", "file"):
+                if source_fields.get(key):
+                    cache_query[key] = source_fields[key]
+
+        proj = {
+            "_id": 1,
+            "source_dataset": 1,
+            "variable_id": 1,
+            "variable_name": 1,
+            "producer": 1,
+            "casename": 1,
+            "file": 1,
+            "visualization_name": 1,
+            "image_bytes": 1,
+            "status": 1,
+            "note": 1,
+        }
+
+        try:
+            cached = self.collection.find_one(and_filter(cache_query, extra_filter), proj)
+        except PyMongoError as e:
+            self.last_error = f"{type(e).__name__}: {e}"
+            self.ok = False
+            cached = None
+
+        if cached and cached.get("image_bytes"):
+            return {
+                "variable_name": str(cached.get("variable_name", "") or candidate["variable_name"]),
+                "variable_id": variable_id,
+                "visualization_name": GENERATED_SCALAR_PLOT_VIS,
+                "selected_visualization": GENERATED_SCALAR_PLOT_VIS,
+                "visualization_options": [GENERATED_SCALAR_PLOT_VIS],
+                "source_dataset": str(cached.get("source_dataset", "") or ""),
+                "producer": str(cached.get("producer", "") or ""),
+                "casename": str(cached.get("casename", "") or ""),
+                "file": str(cached.get("file", "") or ""),
+                "src": png_bytes_to_data_uri(bytes(cached.get("image_bytes"))),
+                "media_type": "image",
+                "status": "ok",
+                "note": str(cached.get("note", "") or "generated scalar plot"),
+            }
+
+        x, y, x_label = self._read_plot_series(
+            campaign_path,
+            str(candidate.get("variable_path", "") or ""),
+            candidate.get("metadata", {}),
+            str(source_fields.get("source_dataset", "") or ""),
+        )
+        source_label = str(candidate.get("source_label", "") or "")
+        png_bytes = self._draw_line_plot_png(
+            x,
+            y,
+            source_label,
+            x_label,
+            str(candidate.get("variable_name", "") or variable_id),
+        )
+
+        doc = {
+            **cache_query,
+            "variable_name": str(candidate.get("variable_name", "") or variable_id),
+            "variable_name_physical": variable_id,
+            "variable_path": str(candidate.get("variable_path", "") or ""),
+            "source_dataset": str(source_fields.get("source_dataset", "") or ""),
+            "producer": str(source_fields.get("producer", "") or ""),
+            "casename": str(source_fields.get("casename", "") or ""),
+            "file": str(source_fields.get("file", "") or ""),
+            "variable_location": "generated",
+            "metadata": candidate.get("metadata", {}),
+            "movie_cache": 1,
+            "frame_index": 0,
+            "image_width": 900,
+            "image_height": 750,
+            "image_bytes": Binary(png_bytes),
+            "media_type": "image",
+            "status": "ok",
+            "note": "generated scalar plot",
+            "min": candidate.get("min", None),
+            "max": candidate.get("max", None),
+        }
+        try:
+            self.collection.insert_one(doc)
+        except PyMongoError as e:
+            self.last_error = f"{type(e).__name__}: {e}"
+            self.ok = False
+
+        return {
+            "variable_name": doc["variable_name"],
+            "variable_id": variable_id,
+            "visualization_name": GENERATED_SCALAR_PLOT_VIS,
+            "selected_visualization": GENERATED_SCALAR_PLOT_VIS,
+            "visualization_options": [GENERATED_SCALAR_PLOT_VIS],
+            "source_dataset": doc["source_dataset"],
+            "producer": doc["producer"],
+            "casename": doc["casename"],
+            "file": doc["file"],
+            "src": png_bytes_to_data_uri(png_bytes),
+            "media_type": "image",
+            "status": "ok",
+            "note": "generated scalar plot",
+        }
 
     def variable_min_max_summary(
         self,

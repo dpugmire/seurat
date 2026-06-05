@@ -53,6 +53,16 @@ def init_state(state, db) -> None:
     state.movieDetailsOpen = {}
     state.tileVisualizationBySource = {}
 
+    state.scalarPlotPolicy = "ask"
+    state.scalarPlotAlwaysForSession = False
+    state.showScalarPlotDialog = False
+    state.pendingScalarPlotVariableId = ""
+    state.pendingScalarPlotCellIndex = -1
+    state.pendingScalarPlotSourceFields = {}
+    state.pendingScalarPlotSyncSelection = True
+    state.scalarPlotDialogMessage = ""
+    state.scalarPlotStatus = ""
+
     state.gridRows = 3
     state.gridCols = 3
     state.gridMinRows = 1
@@ -88,6 +98,7 @@ def init_state(state, db) -> None:
     state.contextMenuItem = ""
     state.contextMenuItemLabel = ""
     state.contextMenuCellIndex = -1
+    state.contextMenuCellHasVariable = False
     state.contextMenuCellVisualizationOptions = []
     state.contextMenuCellSelectedVisualization = ""
 
@@ -122,3 +133,9 @@ def clear_right_panes(state) -> None:
     state.contextMenuCellVisualizationOptions = []
     state.contextMenuCellSelectedVisualization = ""
     state.contextMenuItemLabel = ""
+    state.contextMenuCellHasVariable = False
+    state.showScalarPlotDialog = False
+    state.pendingScalarPlotVariableId = ""
+    state.pendingScalarPlotCellIndex = -1
+    state.pendingScalarPlotSourceFields = {}
+    state.scalarPlotDialogMessage = ""
