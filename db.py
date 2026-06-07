@@ -5,7 +5,6 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 from adios2 import FileReader
-from bson.binary import Binary
 from PIL import Image, ImageDraw, ImageFont
 from pymongo.errors import PyMongoError
 
@@ -618,6 +617,91 @@ class CampaignDb:
             x = np.arange(y.size, dtype=float)
             return x, y, "index"
 
+    @staticmethod
+    def _clean_plot_series(x_values: Any, y_values: Any) -> Tuple[np.ndarray, np.ndarray]:
+        x = np.asarray(x_values, dtype=float).reshape(-1)
+        y = np.asarray(y_values, dtype=float).reshape(-1)
+        n = min(int(x.size), int(y.size))
+        if n <= 0:
+            return np.asarray([], dtype=float), np.asarray([], dtype=float)
+        x = x[:n]
+        y = y[:n]
+        mask = np.isfinite(x) & np.isfinite(y)
+        return x[mask], y[mask]
+
+    @staticmethod
+    def _plot1d_payload(series_values: List[Dict[str, Any]], x_label: str, y_label: str) -> Dict[str, Any]:
+        colors = (
+            "#1565c0",
+            "#c62828",
+            "#2e7d32",
+            "#ef6c00",
+            "#6a1b9a",
+            "#00838f",
+            "#ad1457",
+            "#5d4037",
+        )
+        series: List[Dict[str, Any]] = []
+        all_x: List[np.ndarray] = []
+        all_y: List[np.ndarray] = []
+
+        for i, item in enumerate(series_values):
+            x, y = CampaignDb._clean_plot_series(item.get("x", []), item.get("y", []))
+            if x.size <= 0:
+                continue
+            all_x.append(x)
+            all_y.append(y)
+            series.append(
+                {
+                    "x": [float(v) for v in x],
+                    "y": [float(v) for v in y],
+                    "source_label": str(item.get("source_label", "") or ""),
+                    "source_key": str(item.get("source_key", "") or ""),
+                    "color": colors[(len(series)) % len(colors)],
+                }
+            )
+
+        if not series:
+            raise ValueError("No finite values available for plot")
+
+        x_values = np.concatenate(all_x)
+        y_values = np.concatenate(all_y)
+        xmin = float(np.min(x_values))
+        xmax = float(np.max(x_values))
+        ymin = float(np.min(y_values))
+        ymax = float(np.max(y_values))
+
+        x_axis_min = xmin
+        x_axis_max = xmax
+        if math.isclose(x_axis_min, x_axis_max):
+            x_axis_min -= 0.5
+            x_axis_max += 0.5
+
+        y_axis_min = ymin
+        y_axis_max = ymax
+        if math.isclose(y_axis_min, y_axis_max):
+            pad = abs(y_axis_min) * 0.05 if y_axis_min else 1.0
+            y_axis_min -= pad
+            y_axis_max += pad
+        else:
+            pad = (y_axis_max - y_axis_min) * 0.06
+            y_axis_min -= pad
+            y_axis_max += pad
+
+        return {
+            "x_label": str(x_label or "x"),
+            "y_label": str(y_label or ""),
+            "x_min": x_axis_min,
+            "x_max": x_axis_max,
+            "y_min": y_axis_min,
+            "y_max": y_axis_max,
+            "data_x_min": xmin,
+            "data_x_max": xmax,
+            "data_y_min": ymin,
+            "data_y_max": ymax,
+            "series": series,
+        }
+
     def get_or_create_generated_scalar_plot_tile(
         self,
         campaign_path: str,
@@ -629,117 +713,42 @@ class CampaignDb:
         if not candidate:
             return {}
 
-        cache_query: Dict[str, Any] = {
-            "campaign_path": campaign_path,
-            "variable_id": variable_id,
-            "variable_type": "image",
-            "visualization_name": GENERATED_SCALAR_PLOT_VIS,
-            "generated_plot_version": GENERATED_SCALAR_PLOT_VERSION,
-            "association_source": "generated-scalar-plot",
-        }
         source_fields = dict(candidate.get("source_fields", {}) or {})
-        if source_fields.get("source_dataset"):
-            cache_query["source_dataset"] = source_fields["source_dataset"]
-        else:
-            for key in ("producer", "casename", "file"):
-                if source_fields.get(key):
-                    cache_query[key] = source_fields[key]
-
-        proj = {
-            "_id": 1,
-            "source_dataset": 1,
-            "variable_id": 1,
-            "variable_name": 1,
-            "producer": 1,
-            "casename": 1,
-            "file": 1,
-            "visualization_name": 1,
-            "image_bytes": 1,
-            "status": 1,
-            "note": 1,
-        }
-
-        try:
-            cached = self.collection.find_one(and_filter(cache_query, extra_filter), proj)
-        except PyMongoError as e:
-            self.last_error = f"{type(e).__name__}: {e}"
-            self.ok = False
-            cached = None
-
-        if cached and cached.get("image_bytes"):
-            return {
-                "variable_name": str(cached.get("variable_name", "") or candidate["variable_name"]),
-                "variable_id": variable_id,
-                "visualization_name": GENERATED_SCALAR_PLOT_VIS,
-                "selected_visualization": GENERATED_SCALAR_PLOT_VIS,
-                "visualization_options": [GENERATED_SCALAR_PLOT_VIS],
-                "source_dataset": str(cached.get("source_dataset", "") or ""),
-                "producer": str(cached.get("producer", "") or ""),
-                "casename": str(cached.get("casename", "") or ""),
-                "file": str(cached.get("file", "") or ""),
-                "src": png_bytes_to_data_uri(bytes(cached.get("image_bytes"))),
-                "media_type": "image",
-                "status": "ok",
-                "note": str(cached.get("note", "") or "generated scalar plot"),
-            }
-
         x, y, x_label = self._read_plot_series(
             campaign_path,
             str(candidate.get("variable_path", "") or ""),
             candidate.get("metadata", {}),
             str(source_fields.get("source_dataset", "") or ""),
         )
-        source_label = str(candidate.get("source_label", "") or "")
-        png_bytes = self._draw_line_plot_png(
-            x,
-            y,
-            source_label,
+        variable_name = str(candidate.get("variable_name", "") or variable_id)
+        plot = self._plot1d_payload(
+            [
+                {
+                    "x": x,
+                    "y": y,
+                    "source_label": str(candidate.get("source_label", "") or ""),
+                }
+            ],
             x_label,
-            str(candidate.get("variable_name", "") or variable_id),
+            variable_name,
         )
 
-        doc = {
-            **cache_query,
-            "variable_name": str(candidate.get("variable_name", "") or variable_id),
-            "variable_name_physical": variable_id,
-            "variable_path": str(candidate.get("variable_path", "") or ""),
-            "source_dataset": str(source_fields.get("source_dataset", "") or ""),
-            "producer": str(source_fields.get("producer", "") or ""),
-            "casename": str(source_fields.get("casename", "") or ""),
-            "file": str(source_fields.get("file", "") or ""),
-            "variable_location": "generated",
-            "metadata": candidate.get("metadata", {}),
-            "movie_cache": 1,
-            "frame_index": 0,
-            "image_width": 900,
-            "image_height": 750,
-            "image_bytes": Binary(png_bytes),
-            "media_type": "image",
-            "status": "ok",
-            "note": "generated scalar plot",
-            "min": candidate.get("min", None),
-            "max": candidate.get("max", None),
-        }
-        try:
-            self.collection.insert_one(doc)
-        except PyMongoError as e:
-            self.last_error = f"{type(e).__name__}: {e}"
-            self.ok = False
-
         return {
-            "variable_name": doc["variable_name"],
+            "variable_name": variable_name,
             "variable_id": variable_id,
             "visualization_name": GENERATED_SCALAR_PLOT_VIS,
             "selected_visualization": GENERATED_SCALAR_PLOT_VIS,
             "visualization_options": [GENERATED_SCALAR_PLOT_VIS],
-            "source_dataset": doc["source_dataset"],
-            "producer": doc["producer"],
-            "casename": doc["casename"],
-            "file": doc["file"],
-            "src": png_bytes_to_data_uri(png_bytes),
-            "media_type": "image",
+            "source_dataset": str(source_fields.get("source_dataset", "") or ""),
+            "producer": str(source_fields.get("producer", "") or ""),
+            "casename": str(source_fields.get("casename", "") or ""),
+            "file": str(source_fields.get("file", "") or ""),
+            "src": "",
+            "media_type": "plot1d",
+            "plot": plot,
             "status": "ok",
             "note": "generated scalar plot",
+            "source_count": 1,
         }
 
     def get_generated_scalar_plot_tile_for_sources(
@@ -753,8 +762,7 @@ class CampaignDb:
             return {}
 
         candidates: List[Dict[str, Any]] = []
-        series: List[Tuple[Any, Any]] = []
-        source_labels: List[str] = []
+        series: List[Dict[str, Any]] = []
         x_labels: List[str] = []
         seen = set()
 
@@ -790,29 +798,31 @@ class CampaignDb:
                 continue
 
             candidates.append(candidate)
-            series.append((x, y))
+            series.append(
+                {
+                    "x": x,
+                    "y": y,
+                    "source_label": str(candidate.get("source_label", "") or ""),
+                }
+            )
             x_labels.append(str(x_label or ""))
-            label = str(candidate.get("source_label", "") or "")
-            if label:
-                source_labels.append(label)
 
         if not candidates or not series:
             return {}
 
         x_label_values = {label for label in x_labels if label}
         x_label = x_labels[0] if len(x_label_values) <= 1 else "x"
-        title = source_labels[0] if len(series) == 1 and source_labels else ""
         first = candidates[0]
         first_source_fields = dict(first.get("source_fields", {}) or {})
-        png_bytes = self._draw_multi_line_plot_png(
+        variable_name = str(first.get("variable_name", "") or variable_id)
+        plot = self._plot1d_payload(
             series,
-            title,
             x_label,
-            str(first.get("variable_name", "") or variable_id),
+            variable_name,
         )
 
         return {
-            "variable_name": str(first.get("variable_name", "") or variable_id),
+            "variable_name": variable_name,
             "variable_id": variable_id,
             "visualization_name": GENERATED_SCALAR_PLOT_VIS,
             "selected_visualization": GENERATED_SCALAR_PLOT_VIS,
@@ -821,8 +831,9 @@ class CampaignDb:
             "producer": str(first_source_fields.get("producer", "") or ""),
             "casename": str(first_source_fields.get("casename", "") or ""),
             "file": str(first_source_fields.get("file", "") or ""),
-            "src": png_bytes_to_data_uri(png_bytes),
-            "media_type": "image",
+            "src": "",
+            "media_type": "plot1d",
+            "plot": plot,
             "status": "ok",
             "note": f"generated scalar plot ({len(series)} source{'s' if len(series) != 1 else ''})",
             "source_count": len(series),
