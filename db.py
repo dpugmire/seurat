@@ -6,7 +6,6 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 from adios2 import FileReader
 from PIL import Image, ImageDraw, ImageFont
-from pymongo.errors import PyMongoError
 
 from media_utils import frames_to_mp4_bytes, mp4_bytes_to_data_uri, png_bytes_to_data_uri
 from query_parser import and_filter
@@ -237,7 +236,7 @@ class CampaignDb:
 
             variables.sort(key=lambda item: (item["name"].lower(), item["label"].lower(), item["id"]))
             return variables
-        except PyMongoError as e:
+        except Exception as e:
             self.last_error = f"{type(e).__name__}: {e}"
             self.ok = False
             return []
@@ -348,7 +347,7 @@ class CampaignDb:
             names = [n for n in names if isinstance(n, str) and n]
             names.sort()
             return names
-        except PyMongoError as e:
+        except Exception as e:
             self.last_error = f"{type(e).__name__}: {e}"
             self.ok = False
             return []
@@ -383,7 +382,7 @@ class CampaignDb:
 
         try:
             doc = self.collection.find_one(query, proj, sort=[("source_dataset", 1), ("_id", 1)])
-        except PyMongoError as e:
+        except Exception as e:
             self.last_error = f"{type(e).__name__}: {e}"
             self.ok = False
             return {}

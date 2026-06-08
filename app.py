@@ -1,14 +1,13 @@
 import argparse
 from pathlib import Path
 
-from pymongo import MongoClient
 from trame.app import get_server
 
 from ingest_campaign import parse_campaign
 
-from config import MONGO_COLLECTION, MONGO_DB, MONGO_URI
 from db import CampaignDb
 from controllers import attach_controllers
+from sqlite_store import open_sqlite_collection
 from state_init import init_state
 from ui import build_ui
 
@@ -27,8 +26,9 @@ def main():
     if args.image_association_schema:
         schema_path = str(Path(args.image_association_schema).expanduser())
 
-    client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=1500)
-    collection = client[MONGO_DB][MONGO_COLLECTION]
+    campaign_path = str(Path(args.campaign_path).expanduser())
+    collection = open_sqlite_collection(campaign_path)
+    print(f"Seurat sidecar DB: {collection.path}")
 
     server = get_server(client_type="vue3")
     state, ctrl = server.state, server.controller
@@ -42,14 +42,14 @@ def main():
         db=db,
         collection=collection,
         parse_campaign=parse_campaign,
-        campaign_path=args.campaign_path,
+        campaign_path=campaign_path,
         image_association_schema_path=schema_path,
     )
 
     build_ui(
         server,
         refresh_variable_list,
-        campaign_name=Path(args.campaign_path).name,
+        campaign_name=Path(campaign_path).name,
     )
 
     server.start()

@@ -12,7 +12,6 @@ dependencies = [
     "adios2",
     "numpy",
     "pillow",
-    "pymongo",
     "trame",
     "trame-vuetify",
 ]
@@ -37,6 +36,7 @@ py-modules = [
     "ingest_campaign",
     "media_utils",
     "query_parser",
+    "sqlite_store",
     "state_init",
     "ui",
 ]
