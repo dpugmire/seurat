@@ -1132,7 +1132,7 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                 .catnip-var-item:hover {
                   background: #eaf0f6;
                 }
-                .catnip-dropcell { transition: background 0.15s, box-shadow 0.15s; }
+                .catnip-dropcell { transition: background 0.15s, outline-color 0.15s; }
                 .catnip-plot1d {
                   position: relative;
                   overflow: hidden;
@@ -1147,11 +1147,17 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                 .catnip-vcr-bar {
                   display: flex;
                   align-items: center;
-                  gap: 12px;
+                  gap: 10px 14px;
                   flex-wrap: wrap;
                   width: 100%;
                   min-height: 28px;
-                  margin: 0 0 8px 0;
+                  margin: 0;
+                }
+                .catnip-grid-controls-header {
+                  flex: 0 0 auto;
+                  padding: 2px 8px 6px;
+                  border-bottom: 1px solid #d8d8d8;
+                  background: #fff;
                 }
                 .catnip-vcr-controls {
                   display: flex;
@@ -1188,20 +1194,28 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                   text-align: center;
                 }
                 .catnip-vcr-slider {
-                  width: 220px;
+                  flex: 0 1 280px;
+                  min-width: 180px;
+                  max-width: 340px;
                   cursor: pointer;
                 }
                 .catnip-grid-layout-controls {
-                  margin-left: auto;
+                  flex: 1 1 100%;
+                  margin-left: 0;
                   display: flex;
                   flex-direction: column;
-                  align-items: flex-end;
-                  gap: 4px;
+                  align-items: stretch;
+                  gap: 2px;
                 }
                 .catnip-grid-layout-buttons {
                   display: flex;
                   align-items: center;
-                  gap: 6px;
+                  justify-content: flex-end;
+                  flex-wrap: wrap;
+                  gap: 6px 8px;
+                }
+                .catnip-grid-layout-btn {
+                  min-width: 54px;
                 }
                 .catnip-grid-layout-label {
                   min-width: 44px;
@@ -1212,11 +1226,32 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                   display: flex;
                   align-items: center;
                   gap: 6px;
-                  min-width: 190px;
+                  align-self: flex-end;
+                  width: min(360px, 100%);
+                  min-width: 240px;
+                  min-height: 24px;
                 }
                 .catnip-grid-size-slider {
                   flex: 1 1 auto;
                   min-width: 120px;
+                  margin: 0;
+                }
+                .catnip-grid-size-slider.v-input {
+                  margin: 0;
+                  padding: 0;
+                }
+                .catnip-grid-size-slider .v-input__control {
+                  min-height: 24px;
+                }
+                .catnip-grid-size-slider .v-input__details {
+                  display: none;
+                }
+                .catnip-grid-size-slider .v-slider {
+                  margin: 0;
+                  min-height: 24px;
+                }
+                .catnip-grid-size-slider .v-slider__container {
+                  height: 24px;
                 }
                 .catnip-grid-size-label {
                   min-width: 48px;
@@ -1231,6 +1266,9 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                   color: #222;
                   font-size: 12px;
                   padding: 0 4px;
+                }
+                .catnip-scalar-plot-label {
+                  white-space: nowrap;
                 }
                 #catnip-context-menu {
                   background: #fff;
@@ -1330,9 +1368,20 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                         html.Span("{{ v.label || v.name || v.id }}")
 
                     with vuetify.VCol(cols=10, style="display:flex; flex-direction:column; height:80vh;"):
-                        with vuetify.VCard(variant="outlined", style="flex:1 1 auto; min-height:0;"):
-                            with vuetify.VCardText(style="height:100%; overflow:auto;"):
-                                with html.Div(classes="catnip-vcr-bar"):
+                        with vuetify.VCard(
+                            variant="outlined",
+                            style="flex:1 1 auto; min-height:0; display:flex; flex-direction:column;",
+                        ):
+                            with vuetify.VCardText(
+                                style=(
+                                    "height:100%;"
+                                    "min-height:0;"
+                                    "display:flex;"
+                                    "flex-direction:column;"
+                                    "overflow:hidden;"
+                                ),
+                            ):
+                                with html.Div(classes="catnip-vcr-bar catnip-grid-controls-header"):
                                     with html.Div(classes="catnip-vcr-controls"):
                                         html.Button(
                                             "|<",
@@ -1439,7 +1488,7 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                 class_="text-caption catnip-grid-size-label",
                                             )
                                         with html.Div(classes="catnip-grid-layout-buttons"):
-                                            html.Span("Scalar plots", class_="text-caption")
+                                            html.Span("Scalar plots", class_="text-caption catnip-scalar-plot-label")
                                             with html.Select(
                                                 v_model=("scalarPlotPolicy",),
                                                 classes="catnip-scalar-plot-policy",
@@ -1499,8 +1548,12 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                         "('display:grid;'"
                                         " + 'grid-template-columns:repeat(' + gridCols + ', ' + Number(gridCellSize || 300) + 'px);'"
                                         " + 'grid-template-rows:repeat(' + gridRows + ', ' + (Number(gridCellSize || 300) + 32) + 'px);'"
-                                        " + 'width:max-content;'"
-                                        " + 'margin:0 auto;'"
+                                        " + 'flex:1 1 auto;'"
+                                        " + 'min-height:0;'"
+                                        " + 'overflow:auto;'"
+                                        " + 'width:100%;'"
+                                        " + 'box-sizing:border-box;'"
+                                        " + 'margin:8px 0 0 0;'"
                                         " + 'justify-content:center;'"
                                         " + 'align-content:start;'"
                                         " + 'border:1px solid #cfcfcf;')",
@@ -1519,28 +1572,27 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                 ':draggable="!!(tile && tile.variable_name)"',
                                             ],
                                             style=(
-                                                "('width:' + Number(gridCellSize || 300) + 'px; height:' + (Number(gridCellSize || 300) + 32) + 'px; overflow:hidden; cursor:pointer; display:flex; flex-direction:column;'"
+                                                "('width:' + Number(gridCellSize || 300) + 'px; height:' + (Number(gridCellSize || 300) + 32) + 'px; overflow:hidden; cursor:pointer; display:flex; flex-direction:column; position:relative;'"
                                                 " + (((i % gridCols) !== (gridCols - 1)) ? 'border-right:1px solid #cfcfcf;' : '')"
                                                 " + ((i < ((gridRows - 1) * gridCols)) ? 'border-bottom:1px solid #cfcfcf;' : '')"
-                                                " + ((activeGridCell === i) ? 'background:#eef5ff; box-shadow: inset 0 0 0 2px #1e88e5;' : ''))",
+                                                " + ((activeGridCell === i) ? 'background:#e7f0ff; outline:3px solid #0d47a1; outline-offset:-3px; z-index:2;' : ''))",
                                             ),
                                         ):
                                             with vuetify.Template(v_if="tile && tile.variable_name"):
                                                 with html.Div(
                                                     style=(
-                                                        "display:flex;"
-                                                        "align-items:center;"
-                                                        "gap:8px;"
-                                                        "width:100%;"
-                                                        "height:32px;"
-                                                        "padding:4px 6px;"
-                                                        "background:#7bd0ef;"
-                                                        "border-bottom:1px solid #3ca7c9;"
+                                                        "('display:flex;'"
+                                                        " + 'align-items:center;'"
+                                                        " + 'gap:8px;'"
+                                                        " + 'width:100%;'"
+                                                        " + 'height:32px;'"
+                                                        " + 'padding:4px 6px;'"
+                                                        " + ((activeGridCell === i) ? 'background:#1565c0; color:#fff; border-bottom:1px solid #0d47a1;' : 'background:#7bd0ef; color:#111; border-bottom:1px solid #3ca7c9;'))",
                                                     ),
                                                 ):
                                                     html.Div(
                                                         "{{ tile.variable_name || 'variable' }}",
-                                                        style="flex:1; min-width:0; font-size:0.9rem; font-weight:400; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;",
+                                                        style="flex:1 1 auto; min-width:0; font-size:0.9rem; font-weight:400; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;",
                                                     )
                                                     html.Button(
                                                         "x",
@@ -1548,6 +1600,7 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                         click=(ctrl.clear_grid_cell, "[i]"),
                                                         style=(
                                                             "margin-left:auto;"
+                                                            "flex:0 0 auto;"
                                                             "width:18px;"
                                                             "height:18px;"
                                                             "line-height:16px;"
