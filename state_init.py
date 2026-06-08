@@ -55,7 +55,7 @@ def init_state(state, db) -> None:
     state.movieDetailsOpen = {}
     state.tileVisualizationBySource = {}
 
-    state.scalarPlotPolicy = "ask"
+    state.scalarPlotPolicy = "always"
     state.scalarPlotAlwaysForSession = False
     state.showScalarPlotDialog = False
     state.pendingScalarPlotVariableId = ""
@@ -64,6 +64,38 @@ def init_state(state, db) -> None:
     state.pendingScalarPlotSyncSelection = True
     state.scalarPlotDialogMessage = ""
     state.scalarPlotStatus = ""
+    state.showPlotSettingsModal = False
+    state.plotSettingsCellIndex = -1
+    state.plotSettingsTitle = ""
+    state.plotSettingsStatus = ""
+    state.plotSettingsXAuto = True
+    state.plotSettingsXMin = ""
+    state.plotSettingsXMax = ""
+    state.plotSettingsXScale = "linear"
+    state.plotSettingsYAuto = True
+    state.plotSettingsYMin = ""
+    state.plotSettingsYMax = ""
+    state.plotSettingsYScale = "linear"
+    state.plotSettingsLineWidth = 2.5
+    state.plotSettingsShowGrid = True
+    state.plotSettingsShowCursor = True
+    state.plotSettingsBackgroundColor = "#ffffff"
+    state.plotSettingsGridColor = "#e8e8e8"
+    state.plotSettingsCursorColor = "#111111"
+    state.plotSettingsSeriesRows = []
+    state.plotSettingsStandardColors = [
+        "#c00000",
+        "#ff0000",
+        "#ffc000",
+        "#ffff00",
+        "#92d050",
+        "#00b050",
+        "#00b0f0",
+        "#0070c0",
+        "#002060",
+        "#7030a0",
+        "#000000",
+    ]
 
     state.gridRows = 3
     state.gridCols = 3
@@ -90,6 +122,8 @@ def init_state(state, db) -> None:
             "file": "",
             "src": "",
             "media_type": "",
+            "plot": {},
+            "plot_settings": {},
             "status": "empty",
             "note": "",
         }
@@ -105,6 +139,7 @@ def init_state(state, db) -> None:
     state.contextMenuCellIndex = -1
     state.contextMenuCellHasVariable = False
     state.contextMenuCellCanAddSource = False
+    state.contextMenuCellCanPlotSettings = False
     state.contextMenuCellVisualizationOptions = []
     state.contextMenuCellSelectedVisualization = ""
 
@@ -148,3 +183,11 @@ def clear_right_panes(state) -> None:
     state.pendingScalarPlotCellIndex = -1
     state.pendingScalarPlotSourceFields = {}
     state.scalarPlotDialogMessage = ""
+    state.showPlotSettingsModal = False
+    state.plotSettingsCellIndex = -1
+    state.plotSettingsTitle = ""
+    state.plotSettingsStatus = ""
+    state.plotSettingsBackgroundColor = "#ffffff"
+    state.plotSettingsGridColor = "#e8e8e8"
+    state.plotSettingsCursorColor = "#111111"
+    state.plotSettingsSeriesRows = []

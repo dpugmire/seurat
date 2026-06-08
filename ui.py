@@ -310,12 +310,178 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
           return el.__catnipPlotData || {};
         }
 
+        function parsePlotSettings(el) {
+          if (!el) return {};
+          const raw = el.getAttribute("data-plot-settings") || "{}";
+          if (el.__catnipPlotSettingsRaw === raw && el.__catnipPlotSettings) {
+            return el.__catnipPlotSettings;
+          }
+          try {
+            el.__catnipPlotSettings = JSON.parse(raw);
+            el.__catnipPlotSettingsRaw = raw;
+          } catch (_err) {
+            el.__catnipPlotSettings = {};
+            el.__catnipPlotSettingsRaw = raw;
+          }
+          return el.__catnipPlotSettings || {};
+        }
+
+        function plotSeriesKey(item, index) {
+          const sourceKey = String((item && item.source_key) || "").trim();
+          if (sourceKey) return sourceKey;
+          const sourceLabel = String((item && item.source_label) || "").trim();
+          return sourceLabel || ("series:" + index);
+        }
+
+        function normalizeLineStyle(value) {
+          const style = String(value || "solid").toLowerCase().replace("_", "-");
+          return ["solid", "dash", "dot", "dash-dot"].includes(style) ? style : "solid";
+        }
+
+        function lineStyleDashArray(value, lineWidth) {
+          const style = normalizeLineStyle(value);
+          const width = Math.max(0.5, finiteNumber(lineWidth, 2.5));
+          if (style === "dash") return String(4 * width) + " " + String(2.5 * width);
+          if (style === "dot") return String(0.8 * width) + " " + String(2 * width);
+          if (style === "dash-dot") return String(4 * width) + " " + String(2 * width) + " " + String(0.8 * width) + " " + String(2 * width);
+          return "";
+        }
+
+        function normalizePlotSettings(raw) {
+          raw = raw || {};
+          const xScale = String(raw.x_scale || "linear").toLowerCase() === "log" ? "log" : "linear";
+          const yScale = String(raw.y_scale || "linear").toLowerCase() === "log" ? "log" : "linear";
+          const lineWidth = Math.max(0.5, Math.min(8, finiteNumber(raw.line_width, 2.5)));
+          return {
+            x_auto: raw.x_auto !== false,
+            x_min: finiteNumber(raw.x_min, NaN),
+            x_max: finiteNumber(raw.x_max, NaN),
+            x_scale: xScale,
+            y_auto: raw.y_auto !== false,
+            y_min: finiteNumber(raw.y_min, NaN),
+            y_max: finiteNumber(raw.y_max, NaN),
+            y_scale: yScale,
+            series_colors: (raw.series_colors && typeof raw.series_colors === "object") ? raw.series_colors : {},
+            series_styles: (raw.series_styles && typeof raw.series_styles === "object") ? raw.series_styles : {},
+            line_width: lineWidth,
+            show_grid: raw.show_grid !== false,
+            show_cursor: raw.show_cursor !== false,
+            background_color: String(raw.background_color || "#ffffff"),
+            grid_color: String(raw.grid_color || "#e8e8e8"),
+            cursor_color: String(raw.cursor_color || "#111111"),
+          };
+        }
+
+        function positivePlotBounds(series, axisName) {
+          const field = axisName === "x" ? "x" : "y";
+          let minValue = Infinity;
+          let maxValue = -Infinity;
+          for (const item of (series || [])) {
+            const values = Array.isArray(item && item[field]) ? item[field] : [];
+            for (const rawValue of values) {
+              const value = Number(rawValue);
+              if (Number.isFinite(value) && value > 0) {
+                minValue = Math.min(minValue, value);
+                maxValue = Math.max(maxValue, value);
+              }
+            }
+          }
+          if (!Number.isFinite(minValue) || !Number.isFinite(maxValue)) return null;
+          return { min: minValue, max: maxValue };
+        }
+
+        function resolvePlotAxis(plot, series, settings, axisName) {
+          const autoKey = axisName + "_auto";
+          const minKey = axisName + "_min";
+          const maxKey = axisName + "_max";
+          const scaleKey = axisName + "_scale";
+          const scale = settings[scaleKey] === "log" ? "log" : "linear";
+          const autoRange = settings[autoKey] !== false;
+          let minValue = autoRange
+            ? finiteNumber(plot[minKey], axisName === "x" ? 0 : 0)
+            : finiteNumber(settings[minKey], NaN);
+          let maxValue = autoRange
+            ? finiteNumber(plot[maxKey], axisName === "x" ? 1 : 1)
+            : finiteNumber(settings[maxKey], NaN);
+
+          if (scale === "log") {
+            const positiveBounds = positivePlotBounds(series, axisName);
+            if (autoRange && positiveBounds) {
+              const logMin = Math.log10(positiveBounds.min);
+              const logMax = Math.log10(positiveBounds.max);
+              if (Math.abs(logMax - logMin) <= 1e-12) {
+                minValue = Math.pow(10, logMin - 0.5);
+                maxValue = Math.pow(10, logMax + 0.5);
+              } else {
+                const pad = (logMax - logMin) * 0.04;
+                minValue = Math.pow(10, logMin - pad);
+                maxValue = Math.pow(10, logMax + pad);
+              }
+            }
+            if (!Number.isFinite(minValue) || !Number.isFinite(maxValue) || minValue <= 0 || maxValue <= 0 || minValue >= maxValue) {
+              if (positiveBounds) {
+                minValue = positiveBounds.min;
+                maxValue = positiveBounds.max;
+              } else {
+                minValue = 1;
+                maxValue = 10;
+              }
+            }
+            let tMin = Math.log10(minValue);
+            let tMax = Math.log10(maxValue);
+            if (Math.abs(tMax - tMin) <= 1e-12) {
+              tMin -= 0.5;
+              tMax += 0.5;
+              minValue = Math.pow(10, tMin);
+              maxValue = Math.pow(10, tMax);
+            }
+            return {
+              min: minValue,
+              max: maxValue,
+              tMin,
+              tMax,
+              scale,
+              transform: function(value) {
+                const n = Number(value);
+                return Number.isFinite(n) && n > 0 ? Math.log10(n) : NaN;
+              },
+              inverse: function(value) {
+                return Math.pow(10, value);
+              },
+            };
+          }
+
+          if (!Number.isFinite(minValue) || !Number.isFinite(maxValue)) {
+            minValue = axisName === "x" ? 0 : 0;
+            maxValue = axisName === "x" ? 1 : 1;
+          }
+          if (Math.abs(maxValue - minValue) <= 1e-12) {
+            minValue -= 0.5;
+            maxValue += 0.5;
+          }
+          return {
+            min: minValue,
+            max: maxValue,
+            tMin: minValue,
+            tMax: maxValue,
+            scale,
+            transform: function(value) {
+              const n = Number(value);
+              return Number.isFinite(n) ? n : NaN;
+            },
+            inverse: function(value) {
+              return value;
+            },
+          };
+        }
+
         function renderPlot1d(el) {
           const plot = parsePlotData(el);
+          const settings = normalizePlotSettings(parsePlotSettings(el));
           const rect = el.getBoundingClientRect ? el.getBoundingClientRect() : { width: 0, height: 0 };
           const width = Math.max(240, Math.round(rect.width || el.clientWidth || 300));
           const height = Math.max(180, Math.round(rect.height || el.clientHeight || 300));
-          const renderKey = String(el.__catnipPlotRaw || "") + "|" + width + "x" + height;
+          const renderKey = String(el.__catnipPlotRaw || "") + "|" + String(el.__catnipPlotSettingsRaw || "") + "|" + width + "x" + height;
           if (el.__catnipPlotRenderKey === renderKey && el.querySelector("svg")) {
             return;
           }
@@ -347,20 +513,20 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
           const pad = { left: 52, right: 14, top: 12, bottom: 40 };
           const plotW = Math.max(1, width - pad.left - pad.right);
           const plotH = Math.max(1, height - pad.top - pad.bottom);
-          const xMin = finiteNumber(plot.x_min, 0);
-          const xMax = finiteNumber(plot.x_max, 1);
-          const yMin = finiteNumber(plot.y_min, 0);
-          const yMax = finiteNumber(plot.y_max, 1);
-          const dataXMin = finiteNumber(plot.data_x_min, xMin);
-          const dataXMax = finiteNumber(plot.data_x_max, xMax);
-          const safeXMax = Math.abs(xMax - xMin) > 1e-12 ? xMax : xMin + 1;
-          const safeYMax = Math.abs(yMax - yMin) > 1e-12 ? yMax : yMin + 1;
+          const xAxis = resolvePlotAxis(plot, series, settings, "x");
+          const yAxis = resolvePlotAxis(plot, series, settings, "y");
+          const dataXMin = finiteNumber(plot.data_x_min, xAxis.min);
+          const dataXMax = finiteNumber(plot.data_x_max, xAxis.max);
 
           function sx(value) {
-            return pad.left + ((Number(value) - xMin) / (safeXMax - xMin)) * plotW;
+            const tv = xAxis.transform(value);
+            if (!Number.isFinite(tv)) return NaN;
+            return pad.left + ((tv - xAxis.tMin) / (xAxis.tMax - xAxis.tMin)) * plotW;
           }
           function sy(value) {
-            return pad.top + plotH - ((Number(value) - yMin) / (safeYMax - yMin)) * plotH;
+            const tv = yAxis.transform(value);
+            if (!Number.isFinite(tv)) return NaN;
+            return pad.top + plotH - ((tv - yAxis.tMin) / (yAxis.tMax - yAxis.tMin)) * plotH;
           }
 
           const frame = createSvgNode("rect");
@@ -368,7 +534,7 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
           frame.setAttribute("y", String(pad.top));
           frame.setAttribute("width", String(plotW));
           frame.setAttribute("height", String(plotH));
-          frame.setAttribute("fill", "#ffffff");
+          frame.setAttribute("fill", settings.background_color || "#ffffff");
           frame.setAttribute("stroke", "#3f3f3f");
           frame.setAttribute("stroke-width", "1");
           svg.appendChild(frame);
@@ -377,21 +543,23 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
             const frac = i / 4;
             const gx = pad.left + frac * plotW;
             const gy = pad.top + frac * plotH;
-            const gridV = createSvgNode("line");
-            gridV.setAttribute("x1", String(gx));
-            gridV.setAttribute("x2", String(gx));
-            gridV.setAttribute("y1", String(pad.top));
-            gridV.setAttribute("y2", String(pad.top + plotH));
-            gridV.setAttribute("stroke", "#e8e8e8");
-            svg.appendChild(gridV);
+            if (settings.show_grid) {
+              const gridV = createSvgNode("line");
+              gridV.setAttribute("x1", String(gx));
+              gridV.setAttribute("x2", String(gx));
+              gridV.setAttribute("y1", String(pad.top));
+              gridV.setAttribute("y2", String(pad.top + plotH));
+              gridV.setAttribute("stroke", settings.grid_color || "#e8e8e8");
+              svg.appendChild(gridV);
 
-            const gridH = createSvgNode("line");
-            gridH.setAttribute("x1", String(pad.left));
-            gridH.setAttribute("x2", String(pad.left + plotW));
-            gridH.setAttribute("y1", String(gy));
-            gridH.setAttribute("y2", String(gy));
-            gridH.setAttribute("stroke", "#e8e8e8");
-            svg.appendChild(gridH);
+              const gridH = createSvgNode("line");
+              gridH.setAttribute("x1", String(pad.left));
+              gridH.setAttribute("x2", String(pad.left + plotW));
+              gridH.setAttribute("y1", String(gy));
+              gridH.setAttribute("y2", String(gy));
+              gridH.setAttribute("stroke", settings.grid_color || "#e8e8e8");
+              svg.appendChild(gridH);
+            }
 
             const xTick = createSvgNode("text");
             xTick.setAttribute("x", String(gx));
@@ -399,7 +567,7 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
             xTick.setAttribute("text-anchor", "middle");
             xTick.setAttribute("font-size", "12");
             xTick.setAttribute("fill", "#333333");
-            xTick.textContent = formatPlotTick(xMin + frac * (safeXMax - xMin));
+            xTick.textContent = formatPlotTick(xAxis.inverse(xAxis.tMin + frac * (xAxis.tMax - xAxis.tMin)));
             svg.appendChild(xTick);
 
             const yTick = createSvgNode("text");
@@ -408,7 +576,7 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
             yTick.setAttribute("text-anchor", "end");
             yTick.setAttribute("font-size", "12");
             yTick.setAttribute("fill", "#333333");
-            yTick.textContent = formatPlotTick(safeYMax - frac * (safeYMax - yMin));
+            yTick.textContent = formatPlotTick(yAxis.inverse(yAxis.tMax - frac * (yAxis.tMax - yAxis.tMin)));
             svg.appendChild(yTick);
           }
 
@@ -418,35 +586,54 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
             const ys = Array.isArray(item.y) ? item.y : [];
             const n = Math.min(xs.length, ys.length);
             let d = "";
+            let moveNext = true;
             for (let j = 0; j < n; j += 1) {
               const xv = Number(xs[j]);
               const yv = Number(ys[j]);
-              if (!Number.isFinite(xv) || !Number.isFinite(yv)) continue;
+              if (!Number.isFinite(xv) || !Number.isFinite(yv)) {
+                moveNext = true;
+                continue;
+              }
               const px = sx(xv);
               const py = sy(yv);
-              d += (d ? " L " : "M ") + px.toFixed(2) + " " + py.toFixed(2);
+              if (!Number.isFinite(px) || !Number.isFinite(py)) {
+                moveNext = true;
+                continue;
+              }
+              d += (moveNext ? " M " : " L ") + px.toFixed(2) + " " + py.toFixed(2);
+              moveNext = false;
             }
             if (!d) continue;
             const path = createSvgNode("path");
             path.setAttribute("d", d);
             path.setAttribute("fill", "none");
-            path.setAttribute("stroke", String(item.color || "#1565c0"));
-            path.setAttribute("stroke-width", series.length > 1 ? "2" : "2.5");
+            const seriesKey = plotSeriesKey(item, i);
+            const seriesStyle = (settings.series_styles && settings.series_styles[seriesKey]) || {};
+            const lineStyle = normalizeLineStyle(seriesStyle.line_style || "solid");
+            path.setAttribute("stroke", String(seriesStyle.color || settings.series_colors[seriesKey] || item.color || "#1565c0"));
+            path.setAttribute("stroke-width", String(settings.line_width));
+            const dashArray = lineStyleDashArray(lineStyle, settings.line_width);
+            if (dashArray) {
+              path.setAttribute("stroke-dasharray", dashArray);
+            }
             path.setAttribute("stroke-linejoin", "round");
             path.setAttribute("stroke-linecap", "round");
             svg.appendChild(path);
           }
 
-          const cursor = createSvgNode("line");
-          cursor.setAttribute("class", "catnip-plot1d-cursor-line");
-          cursor.setAttribute("x1", String(pad.left));
-          cursor.setAttribute("x2", String(pad.left));
-          cursor.setAttribute("y1", String(pad.top));
-          cursor.setAttribute("y2", String(pad.top + plotH));
-          cursor.setAttribute("stroke", "#111111");
-          cursor.setAttribute("stroke-width", "2");
-          cursor.setAttribute("opacity", "0.85");
-          svg.appendChild(cursor);
+          let cursor = null;
+          if (settings.show_cursor) {
+            cursor = createSvgNode("line");
+            cursor.setAttribute("class", "catnip-plot1d-cursor-line");
+            cursor.setAttribute("x1", String(pad.left));
+            cursor.setAttribute("x2", String(pad.left));
+            cursor.setAttribute("y1", String(pad.top));
+            cursor.setAttribute("y2", String(pad.top + plotH));
+            cursor.setAttribute("stroke", settings.cursor_color || "#111111");
+            cursor.setAttribute("stroke-width", "2");
+            cursor.setAttribute("opacity", "0.85");
+            svg.appendChild(cursor);
+          }
 
           const xLabel = String(plot.x_label || "");
           if (xLabel) {
@@ -461,8 +648,8 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
           }
 
           el.__catnipPlotMeta = {
-            xMin,
-            xMax: safeXMax,
+            xMin: xAxis.min,
+            xMax: xAxis.max,
             dataXMin,
             dataXMax,
             sx,
@@ -529,6 +716,11 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
               : meta.dataXMin + Math.max(0, Math.min(1, progress)) * (meta.dataXMax - meta.dataXMin);
             const clampedValue = Math.max(meta.xMin, Math.min(meta.xMax, cursorValue));
             const px = meta.sx(clampedValue);
+            if (!Number.isFinite(px)) {
+              meta.cursor.setAttribute("display", "none");
+              continue;
+            }
+            meta.cursor.removeAttribute("display");
             meta.cursor.setAttribute("x1", String(px));
             meta.cursor.setAttribute("x2", String(px));
           }
@@ -550,7 +742,7 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
           const observer = new MutationObserver(function() {
             scheduleRenderAllPlot1d();
           });
-          observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-plot"] });
+          observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-plot", "data-plot-settings"] });
           window.addEventListener("resize", scheduleRenderAllPlot1d);
           scheduleRenderAllPlot1d();
         }
@@ -1140,6 +1332,61 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                 .catnip-plot1d svg {
                   font-family: Arial, Helvetica, sans-serif;
                 }
+                .catnip-plot-legend {
+                  position: absolute;
+                  top: 6px;
+                  right: 6px;
+                  z-index: 3;
+                  display: flex;
+                  flex-direction: column;
+                  align-items: stretch;
+                  gap: 2px;
+                  max-width: min(48%, 160px);
+                  max-height: 42%;
+                  padding: 4px 6px;
+                  background: rgba(255, 255, 255, 0.78);
+                  border: 1px solid rgba(0, 0, 0, 0.18);
+                  border-radius: 3px;
+                  overflow: hidden;
+                  box-sizing: border-box;
+                  pointer-events: none;
+                }
+                .catnip-plot-legend-item {
+                  display: flex;
+                  align-items: center;
+                  min-width: 0;
+                  max-width: 100%;
+                  gap: 4px;
+                  font-size: 10px;
+                  line-height: 1.1;
+                  color: #222;
+                }
+                .catnip-plot-legend-line {
+                  flex: 0 0 20px;
+                  width: 20px;
+                  height: 2px;
+                  border-radius: 1px;
+                  background: var(--catnip-legend-color, #1565c0);
+                }
+                .catnip-plot-legend-line[data-line-style="dash"] {
+                  background: repeating-linear-gradient(to right, var(--catnip-legend-color, #1565c0) 0 8px, transparent 8px 12px);
+                }
+                .catnip-plot-legend-line[data-line-style="dot"] {
+                  background: radial-gradient(circle at center, var(--catnip-legend-color, #1565c0) 0 1.6px, transparent 1.8px);
+                  background-position: left center;
+                  background-repeat: repeat-x;
+                  background-size: 6px 3px;
+                }
+                .catnip-plot-legend-line[data-line-style="dash-dot"] {
+                  background: repeating-linear-gradient(to right, var(--catnip-legend-color, #1565c0) 0 8px, transparent 8px 11px, var(--catnip-legend-color, #1565c0) 11px 13px, transparent 13px 17px);
+                }
+                .catnip-plot-legend-label {
+                  min-width: 0;
+                  max-width: 120px;
+                  overflow: hidden;
+                  text-overflow: ellipsis;
+                  white-space: nowrap;
+                }
                 .catnip-drop-hover {
                   background: #e3f2fd !important;
                   box-shadow: inset 0 0 0 2px #1976d2 !important;
@@ -1269,6 +1516,143 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                 }
                 .catnip-scalar-plot-label {
                   white-space: nowrap;
+                }
+                .catnip-plot-settings-axis-list {
+                  display: flex;
+                  flex-direction: column;
+                  gap: 6px;
+                }
+                .catnip-plot-settings-section {
+                  border: 1px solid #d8d8d8;
+                  border-radius: 4px;
+                  padding: 8px;
+                }
+                .catnip-plot-settings-section-title {
+                  font-weight: 600;
+                  margin-bottom: 6px;
+                }
+                .catnip-plot-settings-axis-row {
+                  display: grid;
+                  grid-template-columns: 24px 120px minmax(90px, 1fr) minmax(90px, 1fr) auto 96px;
+                  align-items: center;
+                  gap: 8px;
+                }
+                .catnip-plot-settings-axis-label {
+                  font-weight: 600;
+                  white-space: nowrap;
+                }
+                .catnip-plot-settings-row {
+                  display: flex;
+                  align-items: center;
+                  gap: 8px;
+                  margin-top: 6px;
+                }
+                .catnip-plot-settings-grid-controls {
+                  display: flex;
+                  align-items: center;
+                  flex-wrap: wrap;
+                  gap: 10px 14px;
+                }
+                .catnip-plot-settings-background-control {
+                  display: flex;
+                  align-items: center;
+                  gap: 6px;
+                }
+                .catnip-plot-settings-toggle {
+                  flex: 0 0 auto;
+                }
+                .catnip-plot-settings-toggle .v-selection-control {
+                  min-height: 24px;
+                }
+                .catnip-plot-settings-toggle .v-selection-control__wrapper {
+                  margin-inline-end: 0;
+                }
+                .catnip-plot-settings-curves-layout {
+                  display: grid;
+                  grid-template-columns: minmax(240px, 0.9fr) minmax(220px, 1.1fr);
+                  align-items: start;
+                  gap: 12px;
+                }
+                .catnip-plot-settings-curve-controls {
+                  display: flex;
+                  align-items: center;
+                  flex-wrap: wrap;
+                  gap: 8px;
+                }
+                .catnip-plot-settings-color-list {
+                  min-width: 0;
+                }
+                .catnip-plot-settings-series-row {
+                  display: grid;
+                  grid-template-columns: 32px minmax(0, 1fr) 92px;
+                  align-items: center;
+                  gap: 6px 8px;
+                  padding: 4px 0;
+                  border-bottom: 1px solid #eeeeee;
+                }
+                .catnip-plot-settings-series-row:last-child {
+                  border-bottom: 0;
+                  padding-bottom: 0;
+                }
+                .catnip-plot-settings-series-label {
+                  min-width: 0;
+                  white-space: nowrap;
+                  overflow: hidden;
+                  text-overflow: ellipsis;
+                }
+                .catnip-plot-settings-line-style {
+                  width: 92px;
+                  height: 24px;
+                  border: 1px solid #9d9d9d;
+                  border-radius: 3px;
+                  background: #fff;
+                  color: #222;
+                  font-size: 12px;
+                  padding: 0 4px;
+                }
+                .catnip-plot-settings-color-menu {
+                  width: 24px;
+                  height: 24px;
+                  justify-self: start;
+                }
+                .catnip-plot-settings-current-color {
+                  width: 24px;
+                  height: 24px;
+                  border: 1px solid rgba(0, 0, 0, 0.35);
+                  border-radius: 3px;
+                  padding: 0;
+                  cursor: pointer;
+                  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.45);
+                }
+                .catnip-plot-settings-color-popup {
+                  width: 238px;
+                }
+                .catnip-plot-settings-popup-title {
+                  font-weight: 600;
+                  color: #333;
+                  margin-bottom: 6px;
+                }
+                .catnip-plot-settings-standard-colors {
+                  display: flex;
+                  flex-wrap: wrap;
+                  align-items: center;
+                  gap: 3px;
+                  padding-bottom: 8px;
+                  border-bottom: 1px solid #e4e4e4;
+                  margin-bottom: 8px;
+                }
+                .catnip-plot-settings-color-swatch {
+                  width: 16px;
+                  height: 16px;
+                  border: 1px solid rgba(0, 0, 0, 0.25);
+                  border-radius: 0;
+                  padding: 0;
+                  cursor: pointer;
+                }
+                .catnip-plot-settings-more-colors {
+                  font-weight: 600;
+                  color: #333;
+                  margin-bottom: 4px;
                 }
                 #catnip-context-menu {
                   background: #fff;
@@ -1617,13 +2001,18 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
 
                                                 with html.Div(
                                                     style=(
-                                                        "('width:' + Number(gridCellSize || 300) + 'px; height:' + Number(gridCellSize || 300) + 'px; background:#111;')",
+                                                        "('width:' + Number(gridCellSize || 300) + 'px;'"
+                                                        " + 'height:' + Number(gridCellSize || 300) + 'px;'"
+                                                        " + 'background:#111; position:relative;')",
                                                     ),
                                                 ):
                                                     with vuetify.Template(v_if="tile.media_type === 'plot1d'"):
                                                         html.Div(
                                                             classes="catnip-plot1d",
-                                                            raw_attrs=[':data-plot="JSON.stringify(tile.plot || {})"'],
+                                                            raw_attrs=[
+                                                                ':data-plot="JSON.stringify(tile.plot || {})"',
+                                                                ':data-plot-settings="JSON.stringify(tile.plot_settings || {})"',
+                                                            ],
                                                             style=(
                                                                 "display:block;"
                                                                 "width:100%;"
@@ -1631,6 +2020,35 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                                 "background:#fff;"
                                                             ),
                                                         )
+                                                        with vuetify.Template(
+                                                            v_if=(
+                                                                "tile.plot"
+                                                                " && tile.plot.series"
+                                                                " && tile.plot.series.length > 1"
+                                                            ),
+                                                        ):
+                                                            with html.Div(classes="catnip-plot-legend"):
+                                                                with vuetify.Template(
+                                                                    v_for="(item, j) in ((tile.plot && tile.plot.series) || [])",
+                                                                    key="j",
+                                                                ):
+                                                                    with html.Div(
+                                                                        classes="catnip-plot-legend-item",
+                                                                        raw_attrs=[
+                                                                            ':title="item.source_label || item.source_key || (\'Series \' + (j + 1))"',
+                                                                        ],
+                                                                    ):
+                                                                        html.Div(
+                                                                            classes="catnip-plot-legend-line",
+                                                                            raw_attrs=[
+                                                                                ":data-line-style=\"(((tile.plot_settings && tile.plot_settings.series_styles && tile.plot_settings.series_styles[(item.source_key || item.source_label || ('series:' + j))] && tile.plot_settings.series_styles[(item.source_key || item.source_label || ('series:' + j))].line_style) || item.line_style || 'solid').toLowerCase().replace('_', '-'))\"",
+                                                                                ":style=\"{'--catnip-legend-color': ((tile.plot_settings && tile.plot_settings.series_styles && tile.plot_settings.series_styles[(item.source_key || item.source_label || ('series:' + j))] && tile.plot_settings.series_styles[(item.source_key || item.source_label || ('series:' + j))].color) || (tile.plot_settings && tile.plot_settings.series_colors && tile.plot_settings.series_colors[(item.source_key || item.source_label || ('series:' + j))]) || item.color || '#1565c0')}\"",
+                                                                            ],
+                                                                        )
+                                                                        html.Span(
+                                                                            "{{ item.source_label || item.source_key || ('Series ' + (j + 1)) }}",
+                                                                            classes="catnip-plot-legend-label",
+                                                                        )
                                                     with vuetify.Template(v_if="tile.media_type !== 'plot1d'"):
                                                         with vuetify.Template(v_if="tile.src"):
                                                             with vuetify.Template(v_if="tile.media_type === 'image'"):
@@ -1858,6 +2276,334 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                         click=ctrl.confirm_scalar_plot_generation,
                                     )
 
+                        with vuetify.VDialog(v_model=("showPlotSettingsModal",), max_width="760"):
+                            with vuetify.VCard():
+                                with vuetify.VCardTitle():
+                                    with html.Div(style="display:flex; align-items:center; gap:8px; width:100%;"):
+                                        html.Div("{{ 'Plot Settings: ' + (plotSettingsTitle || '') }}")
+                                        vuetify.VSpacer()
+                                        vuetify.VBtn("Close", variant="text", size="small", click=ctrl.cancel_plot_settings)
+
+                                with vuetify.VCardText():
+                                    with vuetify.Template(v_if="plotSettingsStatus"):
+                                        html.Div("{{ plotSettingsStatus }}", class_="text-caption mb-2", style="color:#b00020;")
+
+                                    html.Div("Grid", classes="catnip-plot-settings-section-title")
+                                    with html.Div(classes="catnip-plot-settings-section"):
+                                        with html.Div(classes="catnip-plot-settings-grid-controls"):
+                                            with html.Div(classes="catnip-plot-settings-background-control"):
+                                                html.Span("Background", class_="text-caption")
+                                                with html.Div(classes="catnip-plot-settings-color-menu"):
+                                                    html.Button(
+                                                        "",
+                                                        classes="catnip-plot-settings-current-color",
+                                                        raw_attrs=[
+                                                            'type="button"',
+                                                            ':title="\'Background: \' + (plotSettingsBackgroundColor || \'\')"',
+                                                            ':style="{ backgroundColor: plotSettingsBackgroundColor || \'#ffffff\' }"',
+                                                        ],
+                                                    )
+                                                    with vuetify.VMenu(
+                                                        activator="parent",
+                                                        location="bottom end",
+                                                        close_on_content_click=False,
+                                                    ):
+                                                        with vuetify.VCard(classes="catnip-plot-settings-color-popup", elevation=4):
+                                                            with vuetify.VCardText(class_="pa-2"):
+                                                                html.Div("Standard Colors", classes="text-caption catnip-plot-settings-popup-title")
+                                                                with html.Div(classes="catnip-plot-settings-standard-colors"):
+                                                                    with vuetify.Template(
+                                                                        v_for="color in plotSettingsStandardColors",
+                                                                        key="'background:' + color",
+                                                                    ):
+                                                                        html.Button(
+                                                                            "",
+                                                                            classes="catnip-plot-settings-color-swatch",
+                                                                            raw_attrs=[
+                                                                                'type="button"',
+                                                                                ':title="color"',
+                                                                                ':style="{ backgroundColor: color, boxShadow: ((plotSettingsBackgroundColor || \'\').toLowerCase() === color.toLowerCase()) ? \'0 0 0 2px #111\' : \'none\' }"',
+                                                                            ],
+                                                                            click=(ctrl.update_plot_background_color, "[color]"),
+                                                                        )
+                                                                html.Div("More colors...", classes="text-caption catnip-plot-settings-more-colors")
+                                                                vuetify.VColorPicker(
+                                                                    hide_header=True,
+                                                                    hide_inputs=False,
+                                                                    show_swatches=False,
+                                                                    width=220,
+                                                                    raw_attrs=[
+                                                                        ':model-value="plotSettingsBackgroundColor"',
+                                                                        ':modes="[\'hex\', \'rgb\', \'hsl\']"',
+                                                                    ],
+                                                                    update_modelValue=(ctrl.update_plot_background_color, "[$event]"),
+                                                                )
+                                            with html.Div(
+                                                classes="catnip-plot-settings-background-control",
+                                                raw_attrs=[':style="{ opacity: plotSettingsShowGrid ? 1 : 0.45 }"'],
+                                            ):
+                                                vuetify.VCheckbox(
+                                                    v_model=("plotSettingsShowGrid",),
+                                                    density="compact",
+                                                    hide_details=True,
+                                                    classes="catnip-plot-settings-toggle",
+                                                )
+                                                html.Span("Grid lines", class_="text-caption")
+                                                with html.Div(classes="catnip-plot-settings-color-menu"):
+                                                    html.Button(
+                                                        "",
+                                                        classes="catnip-plot-settings-current-color",
+                                                        raw_attrs=[
+                                                            'type="button"',
+                                                            ':disabled="!plotSettingsShowGrid"',
+                                                            ':title="\'Grid lines: \' + (plotSettingsGridColor || \'\')"',
+                                                            ':style="{ backgroundColor: plotSettingsGridColor || \'#e8e8e8\', cursor: plotSettingsShowGrid ? \'pointer\' : \'not-allowed\' }"',
+                                                        ],
+                                                    )
+                                                    with vuetify.VMenu(
+                                                        activator="parent",
+                                                        location="bottom end",
+                                                        close_on_content_click=False,
+                                                        raw_attrs=[':disabled="!plotSettingsShowGrid"'],
+                                                    ):
+                                                        with vuetify.VCard(classes="catnip-plot-settings-color-popup", elevation=4):
+                                                            with vuetify.VCardText(class_="pa-2"):
+                                                                html.Div("Standard Colors", classes="text-caption catnip-plot-settings-popup-title")
+                                                                with html.Div(classes="catnip-plot-settings-standard-colors"):
+                                                                    with vuetify.Template(
+                                                                        v_for="color in plotSettingsStandardColors",
+                                                                        key="'grid:' + color",
+                                                                    ):
+                                                                        html.Button(
+                                                                            "",
+                                                                            classes="catnip-plot-settings-color-swatch",
+                                                                            raw_attrs=[
+                                                                                'type="button"',
+                                                                                ':disabled="!plotSettingsShowGrid"',
+                                                                                ':title="color"',
+                                                                                ':style="{ backgroundColor: color, boxShadow: ((plotSettingsGridColor || \'\').toLowerCase() === color.toLowerCase()) ? \'0 0 0 2px #111\' : \'none\' }"',
+                                                                            ],
+                                                                            click=(ctrl.update_plot_grid_color, "[color]"),
+                                                                        )
+                                                                html.Div("More colors...", classes="text-caption catnip-plot-settings-more-colors")
+                                                                vuetify.VColorPicker(
+                                                                    hide_header=True,
+                                                                    hide_inputs=False,
+                                                                    show_swatches=False,
+                                                                    width=220,
+                                                                    raw_attrs=[
+                                                                        ':model-value="plotSettingsGridColor"',
+                                                                        ':modes="[\'hex\', \'rgb\', \'hsl\']"',
+                                                                        ':disabled="!plotSettingsShowGrid"',
+                                                                    ],
+                                                                    update_modelValue=(ctrl.update_plot_grid_color, "[$event]"),
+                                                                )
+                                            with html.Div(
+                                                classes="catnip-plot-settings-background-control",
+                                                raw_attrs=[':style="{ opacity: plotSettingsShowCursor ? 1 : 0.45 }"'],
+                                            ):
+                                                vuetify.VCheckbox(
+                                                    v_model=("plotSettingsShowCursor",),
+                                                    density="compact",
+                                                    hide_details=True,
+                                                    classes="catnip-plot-settings-toggle",
+                                                )
+                                                html.Span("Cursor", class_="text-caption")
+                                                with html.Div(classes="catnip-plot-settings-color-menu"):
+                                                    html.Button(
+                                                        "",
+                                                        classes="catnip-plot-settings-current-color",
+                                                        raw_attrs=[
+                                                            'type="button"',
+                                                            ':disabled="!plotSettingsShowCursor"',
+                                                            ':title="\'Cursor: \' + (plotSettingsCursorColor || \'\')"',
+                                                            ':style="{ backgroundColor: plotSettingsCursorColor || \'#111111\', cursor: plotSettingsShowCursor ? \'pointer\' : \'not-allowed\' }"',
+                                                        ],
+                                                    )
+                                                    with vuetify.VMenu(
+                                                        activator="parent",
+                                                        location="bottom end",
+                                                        close_on_content_click=False,
+                                                        raw_attrs=[':disabled="!plotSettingsShowCursor"'],
+                                                    ):
+                                                        with vuetify.VCard(classes="catnip-plot-settings-color-popup", elevation=4):
+                                                            with vuetify.VCardText(class_="pa-2"):
+                                                                html.Div("Standard Colors", classes="text-caption catnip-plot-settings-popup-title")
+                                                                with html.Div(classes="catnip-plot-settings-standard-colors"):
+                                                                    with vuetify.Template(
+                                                                        v_for="color in plotSettingsStandardColors",
+                                                                        key="'cursor:' + color",
+                                                                    ):
+                                                                        html.Button(
+                                                                            "",
+                                                                            classes="catnip-plot-settings-color-swatch",
+                                                                            raw_attrs=[
+                                                                                'type="button"',
+                                                                                ':disabled="!plotSettingsShowCursor"',
+                                                                                ':title="color"',
+                                                                                ':style="{ backgroundColor: color, boxShadow: ((plotSettingsCursorColor || \'\').toLowerCase() === color.toLowerCase()) ? \'0 0 0 2px #111\' : \'none\' }"',
+                                                                            ],
+                                                                            click=(ctrl.update_plot_cursor_color, "[color]"),
+                                                                        )
+                                                                html.Div("More colors...", classes="text-caption catnip-plot-settings-more-colors")
+                                                                vuetify.VColorPicker(
+                                                                    hide_header=True,
+                                                                    hide_inputs=False,
+                                                                    show_swatches=False,
+                                                                    width=220,
+                                                                    raw_attrs=[
+                                                                        ':model-value="plotSettingsCursorColor"',
+                                                                        ':modes="[\'hex\', \'rgb\', \'hsl\']"',
+                                                                        ':disabled="!plotSettingsShowCursor"',
+                                                                    ],
+                                                                    update_modelValue=(ctrl.update_plot_cursor_color, "[$event]"),
+                                                                )
+
+                                    html.Div("Axes", classes="catnip-plot-settings-section-title mt-3")
+                                    with html.Div(classes="catnip-plot-settings-section"):
+                                        with html.Div(classes="catnip-plot-settings-axis-list"):
+                                            with html.Div(classes="catnip-plot-settings-axis-row"):
+                                                html.Span("X:", classes="catnip-plot-settings-axis-label")
+                                                vuetify.VCheckbox(
+                                                    v_model=("plotSettingsXAuto",),
+                                                    label="Auto range",
+                                                    density="compact",
+                                                    hide_details=True,
+                                                )
+                                                vuetify.VTextField(
+                                                    v_model=("plotSettingsXMin",),
+                                                    label="Min",
+                                                    density="compact",
+                                                    hide_details=True,
+                                                    raw_attrs=[':disabled="plotSettingsXAuto"'],
+                                                )
+                                                vuetify.VTextField(
+                                                    v_model=("plotSettingsXMax",),
+                                                    label="Max",
+                                                    density="compact",
+                                                    hide_details=True,
+                                                    raw_attrs=[':disabled="plotSettingsXAuto"'],
+                                                )
+                                                html.Span("Scale", class_="text-caption")
+                                                with html.Select(
+                                                    v_model=("plotSettingsXScale",),
+                                                    classes="catnip-scalar-plot-policy",
+                                                ):
+                                                    html.Option("Linear", value="linear")
+                                                    html.Option("Log", value="log")
+
+                                            with html.Div(classes="catnip-plot-settings-axis-row"):
+                                                html.Span("Y:", classes="catnip-plot-settings-axis-label")
+                                                vuetify.VCheckbox(
+                                                    v_model=("plotSettingsYAuto",),
+                                                    label="Auto range",
+                                                    density="compact",
+                                                    hide_details=True,
+                                                )
+                                                vuetify.VTextField(
+                                                    v_model=("plotSettingsYMin",),
+                                                    label="Min",
+                                                    density="compact",
+                                                    hide_details=True,
+                                                    raw_attrs=[':disabled="plotSettingsYAuto"'],
+                                                )
+                                                vuetify.VTextField(
+                                                    v_model=("plotSettingsYMax",),
+                                                    label="Max",
+                                                    density="compact",
+                                                    hide_details=True,
+                                                    raw_attrs=[':disabled="plotSettingsYAuto"'],
+                                                )
+                                                html.Span("Scale", class_="text-caption")
+                                                with html.Select(
+                                                    v_model=("plotSettingsYScale",),
+                                                    classes="catnip-scalar-plot-policy",
+                                                ):
+                                                    html.Option("Linear", value="linear")
+                                                    html.Option("Log", value="log")
+
+                                    html.Div("Curves", classes="catnip-plot-settings-section-title mt-3")
+                                    with html.Div(classes="catnip-plot-settings-section"):
+                                        with html.Div(classes="catnip-plot-settings-curves-layout"):
+                                            with html.Div(classes="catnip-plot-settings-curve-controls"):
+                                                vuetify.VTextField(
+                                                    v_model=("plotSettingsLineWidth",),
+                                                    label="Line width",
+                                                    density="compact",
+                                                    hide_details=True,
+                                                    raw_attrs=['type="number"', 'min="0.5"', 'max="8"', 'step="0.5"'],
+                                                    style="max-width:160px;",
+                                                )
+                                            with html.Div(classes="catnip-plot-settings-color-list"):
+                                                with html.Div(v_if="!(plotSettingsSeriesRows || []).length", class_="text-caption"):
+                                                    html.Span("No series")
+                                                with vuetify.Template(v_for="row in plotSettingsSeriesRows", key="row.key"):
+                                                    with html.Div(classes="catnip-plot-settings-series-row"):
+                                                        with html.Div(classes="catnip-plot-settings-color-menu"):
+                                                            html.Button(
+                                                                "",
+                                                                classes="catnip-plot-settings-current-color",
+                                                                raw_attrs=[
+                                                                    'type="button"',
+                                                                    ':title="\'Color: \' + (row.color || \'\')"',
+                                                                    ':style="{ backgroundColor: row.color || \'#1565c0\' }"',
+                                                                ],
+                                                            )
+                                                            with vuetify.VMenu(
+                                                                activator="parent",
+                                                                location="bottom end",
+                                                                close_on_content_click=False,
+                                                            ):
+                                                                with vuetify.VCard(classes="catnip-plot-settings-color-popup", elevation=4):
+                                                                    with vuetify.VCardText(class_="pa-2"):
+                                                                        html.Div("Standard Colors", classes="text-caption catnip-plot-settings-popup-title")
+                                                                        with html.Div(classes="catnip-plot-settings-standard-colors"):
+                                                                            with vuetify.Template(
+                                                                                v_for="color in plotSettingsStandardColors",
+                                                                                key="row.key + ':' + color",
+                                                                            ):
+                                                                                html.Button(
+                                                                                    "",
+                                                                                    classes="catnip-plot-settings-color-swatch",
+                                                                                    raw_attrs=[
+                                                                                        'type="button"',
+                                                                                        ':title="color"',
+                                                                                        ':style="{ backgroundColor: color, boxShadow: ((row.color || \'\').toLowerCase() === color.toLowerCase()) ? \'0 0 0 2px #111\' : \'none\' }"',
+                                                                                    ],
+                                                                                    click=(ctrl.update_plot_series_color, "[row.key, color]"),
+                                                                                )
+                                                                        html.Div("More colors...", classes="text-caption catnip-plot-settings-more-colors")
+                                                                        vuetify.VColorPicker(
+                                                                            hide_header=True,
+                                                                            hide_inputs=False,
+                                                                            show_swatches=False,
+                                                                            width=220,
+                                                                            raw_attrs=[
+                                                                                ':model-value="row.color"',
+                                                                                ':modes="[\'hex\', \'rgb\', \'hsl\']"',
+                                                                            ],
+                                                                            update_modelValue=(ctrl.update_plot_series_color, "[row.key, $event]"),
+                                                                        )
+                                                        html.Div(
+                                                            "{{ row.label }}",
+                                                            class_="text-caption catnip-plot-settings-series-label",
+                                                        )
+                                                        with html.Select(
+                                                            classes="catnip-plot-settings-line-style",
+                                                            raw_attrs=[':value="row.line_style || \'solid\'"'],
+                                                            change=(ctrl.update_plot_series_line_style, "[row.key, $event.target.value]"),
+                                                        ):
+                                                            html.Option("Solid", value="solid")
+                                                            html.Option("Dash", value="dash")
+                                                            html.Option("Dot", value="dot")
+                                                            html.Option("Dash-dot", value="dash-dot")
+
+                                with vuetify.VCardActions():
+                                    vuetify.VSpacer()
+                                    vuetify.VBtn("Reset", variant="text", click=ctrl.reset_plot_settings)
+                                    vuetify.VBtn("Cancel", variant="text", click=ctrl.cancel_plot_settings)
+                                    vuetify.VBtn("Apply", variant="tonal", click=ctrl.apply_plot_settings)
+
             with html.Div(
                 id="catnip-context-menu",
                 v_show=("contextMenuVisible",),
@@ -1878,6 +2624,8 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                         html.Div("Sources...", classes="menu-item", click=ctrl.context_menu_cell_sources)
                     with vuetify.Template(v_if="contextMenuCellCanAddSource"):
                         html.Div("Add Source", classes="menu-item", click=ctrl.context_menu_cell_add_source)
+                    with vuetify.Template(v_if="contextMenuCellCanPlotSettings"):
+                        html.Div("Plot settings...", classes="menu-item", click=ctrl.context_menu_cell_plot_settings)
                     with vuetify.Template(v_if="(contextMenuCellVisualizationOptions || []).length"):
                         html.Div("Visualization Type", classes="menu-section")
                         with vuetify.Template(v_for="vis in contextMenuCellVisualizationOptions", key="vis"):

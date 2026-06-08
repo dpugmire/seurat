@@ -1,3 +1,5 @@
+import math
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from config import MAX_MOVIE_FRAMES, MOVIE_FPS
@@ -233,9 +235,320 @@ def attach_controllers(
             "file": "",
             "src": "",
             "media_type": "",
+            "plot": {},
+            "plot_settings": {},
             "status": "empty",
             "note": "",
         }
+
+    def plot_series_key(item: Dict[str, Any], index: int) -> str:
+        key = str(item.get("source_key", "") or "").strip()
+        if key:
+            return key
+        label = str(item.get("source_label", "") or "").strip()
+        return label or f"series:{index}"
+
+    def plot_series_label(item: Dict[str, Any], index: int) -> str:
+        label = str(item.get("source_label", "") or "").strip()
+        if label:
+            return label
+        key = str(item.get("source_key", "") or "").strip()
+        return key or f"Series {index + 1}"
+
+    def color_number(value: Any) -> Optional[float]:
+        try:
+            number = float(str(value).strip())
+        except Exception:
+            return None
+        return number if math.isfinite(number) else None
+
+    def format_color_number(value: float) -> str:
+        if abs(value - round(value)) < 1e-9:
+            return str(int(round(value)))
+        return f"{value:.6g}"
+
+    def clean_rgb_component(value: Any) -> Optional[str]:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        if text.endswith("%"):
+            number = color_number(text[:-1])
+            if number is None or number < 0 or number > 100:
+                return None
+            return f"{format_color_number(number)}%"
+        number = color_number(text)
+        if number is None or number < 0 or number > 255:
+            return None
+        return format_color_number(number)
+
+    def clean_hsl_hue(value: Any) -> Optional[str]:
+        text = str(value or "").strip().lower()
+        if text.endswith("deg"):
+            text = text[:-3].strip()
+        number = color_number(text)
+        if number is None:
+            return None
+        return format_color_number(number)
+
+    def clean_hsl_percent(value: Any) -> Optional[str]:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        if text.endswith("%"):
+            number = color_number(text[:-1])
+        else:
+            number = color_number(text)
+            if number is not None and 0 <= number <= 1:
+                number *= 100
+        if number is None or number < 0 or number > 100:
+            return None
+        return f"{format_color_number(number)}%"
+
+    def split_css_color_args(value: str) -> List[str]:
+        if "/" in value:
+            return []
+        if "," in value:
+            parts = [part.strip() for part in value.split(",")]
+        else:
+            parts = value.split()
+        return [part for part in parts if part]
+
+    def has_non_opaque_alpha(value: Dict[str, Any]) -> bool:
+        if "a" not in value:
+            return False
+        alpha = color_number(value.get("a"))
+        return alpha is not None and abs(alpha - 1.0) > 1e-9
+
+    def clean_plot_color(value: Any, fallback: str) -> str:
+        if isinstance(value, dict):
+            if has_non_opaque_alpha(value):
+                return fallback
+            if {"r", "g", "b"}.issubset(value.keys()):
+                r = clean_rgb_component(value.get("r"))
+                g = clean_rgb_component(value.get("g"))
+                b = clean_rgb_component(value.get("b"))
+                return f"rgb({r}, {g}, {b})" if r and g and b else fallback
+            if {"h", "s", "l"}.issubset(value.keys()):
+                h = clean_hsl_hue(value.get("h"))
+                s = clean_hsl_percent(value.get("s"))
+                lightness = clean_hsl_percent(value.get("l"))
+                return f"hsl({h}, {s}, {lightness})" if h and s and lightness else fallback
+            for field in ("hex", "css", "value"):
+                if field in value:
+                    return clean_plot_color(value.get(field), fallback)
+            return fallback
+
+        color = str(value or "").strip()
+        if re.fullmatch(r"#[0-9a-fA-F]{3}(?:[0-9a-fA-F]{3})?", color):
+            return color
+
+        rgb_match = re.fullmatch(r"rgb\((.*)\)", color, flags=re.IGNORECASE)
+        if rgb_match:
+            parts = split_css_color_args(rgb_match.group(1))
+            if len(parts) == 3:
+                r = clean_rgb_component(parts[0])
+                g = clean_rgb_component(parts[1])
+                b = clean_rgb_component(parts[2])
+                if r and g and b:
+                    return f"rgb({r}, {g}, {b})"
+
+        hsl_match = re.fullmatch(r"hsl\((.*)\)", color, flags=re.IGNORECASE)
+        if hsl_match:
+            parts = split_css_color_args(hsl_match.group(1))
+            if len(parts) == 3:
+                h = clean_hsl_hue(parts[0])
+                s = clean_hsl_percent(parts[1])
+                lightness = clean_hsl_percent(parts[2])
+                if h and s and lightness:
+                    return f"hsl({h}, {s}, {lightness})"
+
+        return fallback
+
+    def clean_line_style(value: Any, fallback: str = "solid") -> str:
+        style = str(value or "").strip().lower().replace("_", "-")
+        return style if style in {"solid", "dash", "dot", "dash-dot"} else fallback
+
+    def to_bool(value: Any, default: bool) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            text = value.strip().lower()
+            if text in {"true", "1", "yes", "on"}:
+                return True
+            if text in {"false", "0", "no", "off"}:
+                return False
+        return default
+
+    def finite_float(value: Any) -> Optional[float]:
+        if value is None:
+            return None
+        text = str(value).strip()
+        if not text:
+            return None
+        try:
+            number = float(text)
+        except Exception:
+            return None
+        return number if math.isfinite(number) else None
+
+    def plot_series(tile: Dict[str, Any]) -> List[Dict[str, Any]]:
+        plot = dict(tile.get("plot", {}) or {})
+        raw_series = plot.get("series", []) or []
+        return [dict(item or {}) for item in raw_series if isinstance(item, dict)]
+
+    def assign_plot_series_keys(tile: Dict[str, Any], source_keys: List[str]) -> Dict[str, Any]:
+        plot = dict(tile.get("plot", {}) or {})
+        raw_series = plot.get("series", []) or []
+        series: List[Dict[str, Any]] = []
+        for i, raw_item in enumerate(raw_series):
+            item = dict(raw_item or {})
+            if not str(item.get("source_key", "") or "").strip() and i < len(source_keys):
+                item["source_key"] = str(source_keys[i] or "")
+            series.append(item)
+        plot["series"] = series
+        tile["plot"] = plot
+        return tile
+
+    def normalize_plot_settings(
+        tile: Dict[str, Any],
+        raw_settings: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        raw = dict(raw_settings or {})
+        raw_colors = raw.get("series_colors", {})
+        raw_colors = raw_colors if isinstance(raw_colors, dict) else {}
+        raw_styles = raw.get("series_styles", {})
+        raw_styles = raw_styles if isinstance(raw_styles, dict) else {}
+        palette = (
+            "#1565c0",
+            "#c62828",
+            "#2e7d32",
+            "#ef6c00",
+            "#6a1b9a",
+            "#00838f",
+            "#ad1457",
+            "#5d4037",
+        )
+
+        series_colors: Dict[str, str] = {}
+        series_styles: Dict[str, Dict[str, str]] = {}
+        for i, item in enumerate(plot_series(tile)):
+            key = plot_series_key(item, i)
+            raw_style = raw_styles.get(key, {})
+            raw_style = raw_style if isinstance(raw_style, dict) else {}
+            fallback = str(item.get("color", "") or "") or palette[i % len(palette)]
+            color = clean_plot_color(raw_style.get("color", raw_colors.get(key, "")), fallback)
+            line_style = clean_line_style(raw_style.get("line_style", "solid"))
+            series_colors[key] = color
+            series_styles[key] = {
+                "color": color,
+                "line_style": line_style,
+            }
+
+        def scale_value(key: str) -> str:
+            value = str(raw.get(key, "linear") or "linear").strip().lower()
+            return value if value in {"linear", "log"} else "linear"
+
+        try:
+            line_width = float(raw.get("line_width", 2.5))
+        except Exception:
+            line_width = 2.5
+        if not math.isfinite(line_width):
+            line_width = 2.5
+        line_width = max(0.5, min(8.0, line_width))
+
+        return {
+            "x_auto": to_bool(raw.get("x_auto", True), True),
+            "x_min": finite_float(raw.get("x_min", None)),
+            "x_max": finite_float(raw.get("x_max", None)),
+            "x_scale": scale_value("x_scale"),
+            "y_auto": to_bool(raw.get("y_auto", True), True),
+            "y_min": finite_float(raw.get("y_min", None)),
+            "y_max": finite_float(raw.get("y_max", None)),
+            "y_scale": scale_value("y_scale"),
+            "series_colors": series_colors,
+            "series_styles": series_styles,
+            "line_width": line_width,
+            "show_grid": to_bool(raw.get("show_grid", True), True),
+            "show_cursor": to_bool(raw.get("show_cursor", True), True),
+            "background_color": clean_plot_color(raw.get("background_color", ""), "#ffffff"),
+            "grid_color": clean_plot_color(raw.get("grid_color", ""), "#e8e8e8"),
+            "cursor_color": clean_plot_color(raw.get("cursor_color", ""), "#111111"),
+        }
+
+    def existing_plot_settings(existing_cell: Dict[str, Any], variable_id: str) -> Dict[str, Any]:
+        if not isinstance(existing_cell, dict):
+            return {}
+        existing_var = str(existing_cell.get("variable_id", "") or existing_cell.get("variable_name", "") or "")
+        if existing_var != str(variable_id or ""):
+            return {}
+        if str(existing_cell.get("media_type", "") or "") != "plot1d":
+            return {}
+        settings = existing_cell.get("plot_settings", {})
+        return dict(settings or {}) if isinstance(settings, dict) else {}
+
+    def plot_series_rows_for_tile(tile: Dict[str, Any], settings: Dict[str, Any]) -> List[Dict[str, str]]:
+        colors = settings.get("series_colors", {})
+        colors = colors if isinstance(colors, dict) else {}
+        styles = settings.get("series_styles", {})
+        styles = styles if isinstance(styles, dict) else {}
+        rows: List[Dict[str, str]] = []
+        for i, item in enumerate(plot_series(tile)):
+            key = plot_series_key(item, i)
+            style = styles.get(key, {})
+            style = style if isinstance(style, dict) else {}
+            rows.append(
+                {
+                    "key": key,
+                    "label": plot_series_label(item, i),
+                    "color": clean_plot_color(style.get("color", colors.get(key, "")), str(item.get("color", "") or "#1565c0")),
+                    "line_style": clean_line_style(style.get("line_style", "solid")),
+                }
+            )
+        return rows
+
+    def axis_has_positive_data(tile: Dict[str, Any], axis: str) -> bool:
+        field = "x" if axis == "x" else "y"
+        for item in plot_series(tile):
+            values = item.get(field, []) or []
+            for raw_value in values:
+                value = finite_float(raw_value)
+                if value is not None and value > 0:
+                    return True
+        return False
+
+    def settings_value_text(value: Any) -> str:
+        number = finite_float(value)
+        return "" if number is None else f"{number:.12g}"
+
+    def load_plot_settings_dialog(idx: int, reset: bool = False) -> None:
+        cells = normalize_grid_cells(state.gridCells)
+        if not is_valid_grid_index(idx):
+            return
+        cell = dict(cells[idx] or {})
+        if str(cell.get("media_type", "") or "") != "plot1d":
+            return
+
+        raw_settings = {} if reset else dict(cell.get("plot_settings", {}) or {})
+        settings = normalize_plot_settings(cell, raw_settings)
+        state.plotSettingsCellIndex = idx
+        state.plotSettingsTitle = str(cell.get("variable_name", "") or f"Cell {idx + 1}")
+        state.plotSettingsStatus = ""
+        state.plotSettingsXAuto = bool(settings.get("x_auto", True))
+        state.plotSettingsXMin = settings_value_text(settings.get("x_min", None))
+        state.plotSettingsXMax = settings_value_text(settings.get("x_max", None))
+        state.plotSettingsXScale = str(settings.get("x_scale", "linear") or "linear")
+        state.plotSettingsYAuto = bool(settings.get("y_auto", True))
+        state.plotSettingsYMin = settings_value_text(settings.get("y_min", None))
+        state.plotSettingsYMax = settings_value_text(settings.get("y_max", None))
+        state.plotSettingsYScale = str(settings.get("y_scale", "linear") or "linear")
+        state.plotSettingsLineWidth = float(settings.get("line_width", 2.5) or 2.5)
+        state.plotSettingsShowGrid = bool(settings.get("show_grid", True))
+        state.plotSettingsShowCursor = bool(settings.get("show_cursor", True))
+        state.plotSettingsBackgroundColor = clean_plot_color(settings.get("background_color", ""), "#ffffff")
+        state.plotSettingsGridColor = clean_plot_color(settings.get("grid_color", ""), "#e8e8e8")
+        state.plotSettingsCursorColor = clean_plot_color(settings.get("cursor_color", ""), "#111111")
+        state.plotSettingsSeriesRows = plot_series_rows_for_tile(cell, settings)
+        state.showPlotSettingsModal = True
 
     def clear_context_menu_state() -> None:
         state.contextMenuVisible = False
@@ -245,6 +558,7 @@ def attach_controllers(
         state.contextMenuCellIndex = -1
         state.contextMenuCellHasVariable = False
         state.contextMenuCellCanAddSource = False
+        state.contextMenuCellCanPlotSettings = False
         state.contextMenuCellVisualizationOptions = []
         state.contextMenuCellSelectedVisualization = ""
 
@@ -484,8 +798,12 @@ def attach_controllers(
             state.scalarPlotStatus = f"Scalar plot generation failed: {type(e).__name__}: {e}"
 
         cells = normalize_grid_cells(state.gridCells)
+        prior_settings = existing_plot_settings(cells[idx], variable_id)
         if tile:
             tile.update({k: v for k, v in source_fields.items() if v})
+            source_key = str(source_fields.get("_source_key", "") or "")
+            assign_plot_series_keys(tile, [source_key] if source_key else [])
+            tile["plot_settings"] = normalize_plot_settings(tile, prior_settings)
             tile["visualization_name"] = str(tile.get("visualization_name", "") or GENERATED_SCALAR_PLOT_VIS)
             tile["selected_visualization"] = str(tile.get("selected_visualization", "") or GENERATED_SCALAR_PLOT_VIS)
             tile["visualization_options"] = [GENERATED_SCALAR_PLOT_VIS]
@@ -540,12 +858,15 @@ def attach_controllers(
             state.scalarPlotStatus = f"Scalar plot generation failed: {type(e).__name__}: {e}"
 
         cells = normalize_grid_cells(state.gridCells)
+        prior_settings = existing_plot_settings(cells[idx], variable_id)
         if tile:
             first_fields = source_fields_list[0]
             tile.update({k: v for k, v in first_fields.items() if v and k != "_source_key"})
             tile["_source_key"] = source_keys[0] if source_keys else str(first_fields.get("_source_key", "") or "")
             tile["_source_keys"] = source_keys
             tile["_source_fields_list"] = source_fields_list
+            assign_plot_series_keys(tile, source_keys)
+            tile["plot_settings"] = normalize_plot_settings(tile, prior_settings)
             tile["visualization_name"] = GENERATED_SCALAR_PLOT_VIS
             tile["selected_visualization"] = GENERATED_SCALAR_PLOT_VIS
             tile["visualization_options"] = [GENERATED_SCALAR_PLOT_VIS]
@@ -669,6 +990,8 @@ def attach_controllers(
                     tile["visualization_name"] = GENERATED_SCALAR_PLOT_VIS
                     tile["selected_visualization"] = GENERATED_SCALAR_PLOT_VIS
                     tile["visualization_options"] = [GENERATED_SCALAR_PLOT_VIS]
+                    assign_plot_series_keys(tile, source_keys)
+                    tile["plot_settings"] = normalize_plot_settings(tile, existing_plot_settings(c, var_id))
                     updated.append(tile)
                 except Exception as e:
                     err_cell = no_visualization_grid_cell(var_id, f"{type(e).__name__}: {e}")
@@ -1318,6 +1641,7 @@ def attach_controllers(
         can_add_source = has_var and (
             visualization_name == GENERATED_SCALAR_PLOT_VIS or selected_vis == GENERATED_SCALAR_PLOT_VIS
         )
+        can_plot_settings = has_var and str(cell.get("media_type", "") or "") == "plot1d"
 
         state.contextMenuKind = "cell"
         state.contextMenuItem = label
@@ -1325,6 +1649,7 @@ def attach_controllers(
         state.contextMenuCellIndex = idx
         state.contextMenuCellHasVariable = has_var
         state.contextMenuCellCanAddSource = can_add_source
+        state.contextMenuCellCanPlotSettings = can_plot_settings
         state.contextMenuCellVisualizationOptions = vis_opts
         state.contextMenuCellSelectedVisualization = selected_vis
         state.contextMenuX = px
@@ -1420,6 +1745,26 @@ def attach_controllers(
         state.showSourcesModal = True
         hide_context_menu()
 
+    @ctrl.add("context_menu_cell_plot_settings")
+    def context_menu_cell_plot_settings(**_):
+        try:
+            idx = int(state.contextMenuCellIndex)
+        except Exception:
+            idx = -1
+        if not is_valid_grid_index(idx):
+            hide_context_menu()
+            return
+
+        cells = normalize_grid_cells(state.gridCells)
+        cell = dict(cells[idx] or {})
+        if str(cell.get("media_type", "") or "") != "plot1d":
+            hide_context_menu()
+            return
+
+        state.activeGridCell = idx
+        load_plot_settings_dialog(idx)
+        hide_context_menu()
+
     @ctrl.add("context_menu_cell_pick_visualization")
     def context_menu_cell_pick_visualization(value: str = "", **_):
         try:
@@ -1465,6 +1810,184 @@ def attach_controllers(
             source_fields=source_fields,
             sync_selection=sync_selection,
         )
+
+    @ctrl.add("cancel_plot_settings")
+    def cancel_plot_settings(**_):
+        state.showPlotSettingsModal = False
+        state.plotSettingsCellIndex = -1
+        state.plotSettingsStatus = ""
+
+    @ctrl.add("reset_plot_settings")
+    def reset_plot_settings(**_):
+        try:
+            idx = int(state.plotSettingsCellIndex)
+        except Exception:
+            idx = -1
+        if is_valid_grid_index(idx):
+            load_plot_settings_dialog(idx, reset=True)
+
+    @ctrl.add("update_plot_background_color")
+    def update_plot_background_color(color: str, **_):
+        state.plotSettingsBackgroundColor = clean_plot_color(
+            color,
+            str(state.plotSettingsBackgroundColor or "#ffffff"),
+        )
+
+    @ctrl.add("update_plot_grid_color")
+    def update_plot_grid_color(color: str, **_):
+        state.plotSettingsGridColor = clean_plot_color(
+            color,
+            str(state.plotSettingsGridColor or "#e8e8e8"),
+        )
+
+    @ctrl.add("update_plot_cursor_color")
+    def update_plot_cursor_color(color: str, **_):
+        state.plotSettingsCursorColor = clean_plot_color(
+            color,
+            str(state.plotSettingsCursorColor or "#111111"),
+        )
+
+    @ctrl.add("update_plot_series_color")
+    def update_plot_series_color(key: str, color: str, **_):
+        target_key = str(key or "")
+        rows = []
+        for raw_row in state.plotSettingsSeriesRows or []:
+            row = dict(raw_row or {})
+            if str(row.get("key", "") or "") == target_key:
+                row["color"] = clean_plot_color(color, str(row.get("color", "") or "#1565c0"))
+            rows.append(row)
+        state.plotSettingsSeriesRows = rows
+
+    @ctrl.add("update_plot_series_line_style")
+    def update_plot_series_line_style(key: str, line_style: str, **_):
+        target_key = str(key or "")
+        rows = []
+        for raw_row in state.plotSettingsSeriesRows or []:
+            row = dict(raw_row or {})
+            if str(row.get("key", "") or "") == target_key:
+                row["line_style"] = clean_line_style(line_style)
+            rows.append(row)
+        state.plotSettingsSeriesRows = rows
+
+    @ctrl.add("apply_plot_settings")
+    def apply_plot_settings(**_):
+        try:
+            idx = int(state.plotSettingsCellIndex)
+        except Exception:
+            idx = -1
+        if not is_valid_grid_index(idx):
+            state.plotSettingsStatus = "No plot cell selected."
+            return
+
+        cells = normalize_grid_cells(state.gridCells)
+        cell = dict(cells[idx] or {})
+        if str(cell.get("media_type", "") or "") != "plot1d":
+            state.plotSettingsStatus = "Selected cell is not a 1D plot."
+            return
+
+        x_auto = bool(state.plotSettingsXAuto)
+        y_auto = bool(state.plotSettingsYAuto)
+        x_min = finite_float(state.plotSettingsXMin)
+        x_max = finite_float(state.plotSettingsXMax)
+        y_min = finite_float(state.plotSettingsYMin)
+        y_max = finite_float(state.plotSettingsYMax)
+        x_scale = str(state.plotSettingsXScale or "linear").strip().lower()
+        y_scale = str(state.plotSettingsYScale or "linear").strip().lower()
+        if x_scale not in {"linear", "log"}:
+            x_scale = "linear"
+        if y_scale not in {"linear", "log"}:
+            y_scale = "linear"
+
+        if not x_auto:
+            if x_min is None or x_max is None:
+                state.plotSettingsStatus = "Manual X range requires min and max values."
+                return
+            if x_min >= x_max:
+                state.plotSettingsStatus = "Manual X range must have min < max."
+                return
+        if not y_auto:
+            if y_min is None or y_max is None:
+                state.plotSettingsStatus = "Manual Y range requires min and max values."
+                return
+            if y_min >= y_max:
+                state.plotSettingsStatus = "Manual Y range must have min < max."
+                return
+
+        if x_scale == "log":
+            if not axis_has_positive_data(cell, "x"):
+                state.plotSettingsStatus = "X log scale requires positive X values."
+                return
+            if not x_auto and (x_min is None or x_max is None or x_min <= 0 or x_max <= 0):
+                state.plotSettingsStatus = "Manual X log range must be positive."
+                return
+        if y_scale == "log":
+            if not axis_has_positive_data(cell, "y"):
+                state.plotSettingsStatus = "Y log scale requires positive Y values."
+                return
+            if not y_auto and (y_min is None or y_max is None or y_min <= 0 or y_max <= 0):
+                state.plotSettingsStatus = "Manual Y log range must be positive."
+                return
+
+        line_width = finite_float(state.plotSettingsLineWidth)
+        if line_width is None:
+            state.plotSettingsStatus = "Line width must be a number."
+            return
+        line_width = max(0.5, min(8.0, line_width))
+        background_color = clean_plot_color(state.plotSettingsBackgroundColor, "#ffffff")
+        grid_color = clean_plot_color(state.plotSettingsGridColor, "#e8e8e8")
+        cursor_color = clean_plot_color(state.plotSettingsCursorColor, "#111111")
+
+        series_colors: Dict[str, str] = {}
+        series_styles: Dict[str, Dict[str, str]] = {}
+        current_settings = normalize_plot_settings(cell, cell.get("plot_settings", {}))
+        current_colors = current_settings.get("series_colors", {})
+        current_colors = current_colors if isinstance(current_colors, dict) else {}
+        current_styles = current_settings.get("series_styles", {})
+        current_styles = current_styles if isinstance(current_styles, dict) else {}
+        for row in state.plotSettingsSeriesRows or []:
+            item = dict(row or {})
+            key = str(item.get("key", "") or "")
+            if not key:
+                continue
+            current_style = current_styles.get(key, {})
+            current_style = current_style if isinstance(current_style, dict) else {}
+            color = clean_plot_color(
+                item.get("color", ""),
+                str(current_style.get("color", "") or current_colors.get(key, "") or "#1565c0"),
+            )
+            line_style = clean_line_style(item.get("line_style", current_style.get("line_style", "solid")))
+            series_colors[key] = color
+            series_styles[key] = {
+                "color": color,
+                "line_style": line_style,
+            }
+
+        cell["plot_settings"] = normalize_plot_settings(
+            cell,
+            {
+                "x_auto": x_auto,
+                "x_min": None if x_auto else x_min,
+                "x_max": None if x_auto else x_max,
+                "x_scale": x_scale,
+                "y_auto": y_auto,
+                "y_min": None if y_auto else y_min,
+                "y_max": None if y_auto else y_max,
+                "y_scale": y_scale,
+                "series_colors": series_colors,
+                "series_styles": series_styles,
+                "line_width": line_width,
+                "show_grid": bool(state.plotSettingsShowGrid),
+                "show_cursor": bool(state.plotSettingsShowCursor),
+                "background_color": background_color,
+                "grid_color": grid_color,
+                "cursor_color": cursor_color,
+            },
+        )
+        cells[idx] = cell
+        state.gridCells = cells
+        state.activeGridCell = idx
+        state.plotSettingsStatus = ""
+        state.showPlotSettingsModal = False
 
     @ctrl.add("toggle_sources")
     def toggle_sources(**_):
