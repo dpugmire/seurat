@@ -1,4 +1,3 @@
-pymongo
 trame
 trame-vuetify
 adios2

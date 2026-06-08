@@ -1,26 +1,24 @@
 import os, io, struct, re, json, sqlite3
 import argparse
 from pathlib import Path
-from pymongo import MongoClient
 from adios2 import FileReader
 
 import numpy as np
 from PIL import Image
-from bson.binary import Binary
 from typing import Optional, Any, Dict, List, Pattern
 
-MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
-MONGO_DB = os.getenv("MONGO_DB", "catnip_campaigns")
-MONGO_COLLECTION = os.getenv("MONGO_COLLECTION", "campaign_entries")
+from sqlite_store import open_sqlite_collection
 
 
-def get_collection():
-    client = MongoClient(MONGO_URI)
-    return client[MONGO_DB][MONGO_COLLECTION]
+DEFAULT_CAMPAIGN_PATH = os.getenv("CAMPAIGN_PATH", "kh.aca")
 
 
-def clear_collection():
-    get_collection().delete_many({})
+def get_collection(campaign_path: Optional[str] = None):
+    return open_sqlite_collection(campaign_path or DEFAULT_CAMPAIGN_PATH)
+
+
+def clear_collection(campaign_path: Optional[str] = None):
+    get_collection(campaign_path).delete_many({})
 
 
 def _to_simple_string(input: str) -> str:
@@ -1106,7 +1104,7 @@ def parse_campaign(
                             "source_dataset": record_source_dataset,
                             "visualization_roles": record["roles"],
                             "visualization_source_dataset": record_source_dataset,
-                            "image_bytes": Binary(png_bytes),
+                            "image_bytes": png_bytes,
                         }
                     )
                     collection.insert_one(document)
@@ -1184,16 +1182,16 @@ def main():
     args = ap.parse_args()
 
     if args.clear:
-        clear_collection()
+        clear_collection(args.campaign)
 
-    collection = get_collection()
+    collection = get_collection(args.campaign)
     parse_campaign(
         args.campaign,
         collection,
         image_association_schema_path=args.image_association_schema,
     )
 
-    coll = get_collection()
+    coll = get_collection(args.campaign)
     print("Inserted docs:", coll.count_documents({"campaign_path": args.campaign}))
     print("Distinct variable_name:", len(coll.distinct("variable_name")))
 
