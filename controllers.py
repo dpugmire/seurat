@@ -622,6 +622,39 @@ def attach_controllers(
         state.activeGridCell = active if 0 <= active < rows * cols else -1
         clear_context_menu_state()
 
+    @ctrl.add("set_grid_cell_size")
+    def set_grid_cell_size(size: int, **_):
+        min_size = clamp_int(getattr(state, "gridMinCellSize", 160), 160, 80, 1000)
+        max_size = clamp_int(getattr(state, "gridMaxCellSize", 520), 520, min_size, 1600)
+        state.gridCellSize = clamp_int(size, 300, min_size, max_size)
+
+    @ctrl.add("set_grid_layout_size")
+    def set_grid_layout_size(rows: int, cols: int, **_):
+        old_rows, old_cols = grid_dimensions()
+        new_rows = clamp_int(rows, old_rows, GRID_MIN_ROWS, GRID_MAX_ROWS)
+        new_cols = clamp_int(cols, old_cols, GRID_MIN_COLS, GRID_MAX_COLS)
+        if new_rows == old_rows and new_cols == old_cols:
+            return
+
+        old_cells = normalize_grid_cells(state.gridCells, old_rows, old_cols)
+        new_cells: List[Dict[str, Any]] = []
+        for row in range(new_rows):
+            for col in range(new_cols):
+                if row < old_rows and col < old_cols:
+                    new_cells.append(old_cells[row * old_cols + col])
+                else:
+                    new_cells.append(empty_grid_cell())
+
+        active = active_grid_index(old_rows * old_cols)
+        new_active = -1
+        if active >= 0:
+            active_row = active // old_cols
+            active_col = active % old_cols
+            if active_row < new_rows and active_col < new_cols:
+                new_active = active_row * new_cols + active_col
+
+        set_grid_layout(new_rows, new_cols, new_cells, new_active)
+
     def choose_visualization_default(vis_names: List[str], preferred_vis: str = "") -> str:
         preferred = str(preferred_vis or "").strip()
         if preferred and preferred in vis_names:
@@ -636,9 +669,9 @@ def attach_controllers(
         return str(labels.get(item_id, "") or item_id)
 
     def normalize_scalar_plot_policy() -> str:
-        policy = str(state.scalarPlotPolicy or "ask").strip().lower()
+        policy = str(state.scalarPlotPolicy or "always").strip().lower()
         if policy not in {"ask", "always", "never"}:
-            policy = "ask"
+            policy = "always"
         state.scalarPlotPolicy = policy
         return policy
 
