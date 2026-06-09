@@ -44,10 +44,15 @@ def init_state(state, db) -> None:
     state.showSourcesModal = False
     state.sourceDialogMode = "single"
     state.sourceDialogCellIndex = -1
+    state.sourceRowsAll = []
     state.sourceRows = []
+    state.sourceFilterDraftText = ""
+    state.sourceFilterText = ""
+    state.sourceFilterError = ""
     state.sourceSortField = SOURCE_FIELDS[0]
     state.sourceSortAsc = True
     state.selectedSourceKeys = []
+    state.sourceDialogInitialSelectedSourceKeys = []
     state.selectedSourceLabel = "All sources"
 
     state.movieTiles = []
@@ -159,10 +164,15 @@ def clear_details(state) -> None:
     state.showSourcesModal = False
     state.sourceDialogMode = "single"
     state.sourceDialogCellIndex = -1
+    state.sourceRowsAll = []
     state.sourceRows = []
+    state.sourceFilterDraftText = ""
+    state.sourceFilterText = ""
+    state.sourceFilterError = ""
     state.sourceSortField = SOURCE_FIELDS[0]
     state.sourceSortAsc = True
     state.selectedSourceKeys = []
+    state.sourceDialogInitialSelectedSourceKeys = []
     state.selectedSourceLabel = "All sources"
 
 

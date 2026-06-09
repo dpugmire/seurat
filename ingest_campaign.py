@@ -885,6 +885,7 @@ def parse_campaign(
     image_assoc_matched = 0
     image_assoc_unmatched = 0
     visualization_api_matched = 0
+    skipped_non_visual_data = 0
     # Load the visualization API once from SQLite metadata, then use it while
     # walking ADIOS variables. Older campaigns without these tables fall back to
     # schema or legacy path parsing.
@@ -906,16 +907,21 @@ def parse_campaign(
                 var_type = _to_simple_string(attrs_dict[type_key]["Value"])
             if loc_key in attrs_dict:
                 var_location = _to_simple_string(attrs_dict[loc_key]["Value"])
+            var_type = str(var_type or "variable").strip().lower()
 
             if var_type == "variable":
                 var, file, varpath, producer, casename = extract_file_var(varname)
-            else:
+                source_dataset = varpath
+            elif var_type == "image":
                 var, file, varpath, producer, casename = extract_file_var_img(varname)
+                source_dataset = _source_dataset_from_path(varpath)
+            else:
+                skipped_non_visual_data += 1
+                continue
 
             physical_var = str(var or "")
             var = _map_physical_to_logical_name(physical_var, image_assoc_schema)
             metadata = varinfo
-            source_dataset = _source_dataset_from_path(varpath)
 
             #print('Var: ', var, 'varpath: ', varpath)
             ## check if it's a statistical variable (e.g. ends with "_stats") and if so, include min/max in the document for easier querying
@@ -1167,6 +1173,8 @@ def parse_campaign(
             f"matched={visualization_api_matched}",
             f"available={len(visualization_api_index)}",
         )
+    if skipped_non_visual_data:
+        print("Skipped non-visual datasets:", skipped_non_visual_data)
 
     print(collection.distinct("campaign_path"))
     print(collection.count_documents({}))

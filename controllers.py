@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from config import MAX_MOVIE_FRAMES, MOVIE_FPS
 from db import GENERATED_SCALAR_PLOT_VIS
-from query_parser import and_filter, python_query_to_mongo
+from query_parser import and_filter, python_query_to_mongo, python_source_filter_matches
 from state_init import clear_right_panes, fmt
 
 
@@ -45,11 +45,19 @@ def attach_controllers(
         state.dbOk = db.ok
         state.dbStatus = "Connected" if db.ok else f"DB error: {db.last_error}"
 
-    def source_row_keys() -> List[str]:
-        return [str(r.get("_key", "")) for r in (state.sourceRows or []) if str(r.get("_key", ""))]
+    def all_source_rows() -> List[Dict[str, Any]]:
+        return list(state.sourceRowsAll or state.sourceRows or [])
+
+    def source_row_keys(rows: Optional[List[Dict[str, Any]]] = None) -> List[str]:
+        source_rows = all_source_rows() if rows is None else rows
+        return [str(r.get("_key", "")) for r in source_rows if str(r.get("_key", ""))]
+
+    def visible_source_row_keys() -> List[str]:
+        return source_row_keys(list(state.sourceRows or []))
 
     def update_selected_source_label():
-        total = len(state.sourceRows or [])
+        total = len(all_source_rows())
+        shown = len(state.sourceRows or [])
         selected = len(state.selectedSourceKeys or [])
         if total <= 0:
             state.selectedSourceLabel = "No sources"
@@ -57,6 +65,8 @@ def attach_controllers(
             state.selectedSourceLabel = "No sources selected"
         else:
             state.selectedSourceLabel = f"{selected} of {total} selected"
+        if total > 0 and shown != total:
+            state.selectedSourceLabel = f"{state.selectedSourceLabel} · {shown} shown"
 
     def select_source_key(key: str):
         k = str(key or "")
@@ -64,7 +74,7 @@ def attach_controllers(
         update_selected_source_label()
 
     def select_first_source():
-        keys = source_row_keys()
+        keys = visible_source_row_keys()
         select_source_key(keys[0] if keys else "")
 
     def source_filter_from_row(row: Dict[str, str]) -> Dict[str, str]:
@@ -92,7 +102,7 @@ def attach_controllers(
         k = str(key or "")
         if not k:
             return {}
-        return next((r for r in (state.sourceRows or []) if str(r.get("_key", "")) == k), {})
+        return next((r for r in all_source_rows() if str(r.get("_key", "")) == k), {})
 
     def source_fields_from_row(row: Dict[str, str]) -> Dict[str, str]:
         if not row:
@@ -199,7 +209,7 @@ def attach_controllers(
         producer = str(cell.get("producer", "") or "")
         casename = str(cell.get("casename", "") or "")
         file_name = str(cell.get("file", "") or "")
-        for row in state.sourceRows or []:
+        for row in all_source_rows():
             if source_dataset and str(row.get("source_dataset", "") or "") == source_dataset:
                 return row
             if (
@@ -216,7 +226,7 @@ def attach_controllers(
             return {}
 
         selected = set(state.selectedSourceKeys or [])
-        row = next((r for r in (state.sourceRows or []) if str(r.get("_key", "")) in selected), None)
+        row = next((r for r in all_source_rows() if str(r.get("_key", "")) in selected), None)
         return source_filter_from_row(row) if row else {}
 
     def empty_grid_cell() -> Dict[str, Any]:
@@ -408,6 +418,88 @@ def attach_controllers(
         plot["series"] = series
         tile["plot"] = plot
         return tile
+
+    def source_name_for_row(row: Dict[str, Any]) -> str:
+        source_dataset = str(row.get("source_dataset", "") or "")
+        if source_dataset:
+            return source_dataset
+        parts = [
+            str(row.get("producer", "") or ""),
+            str(row.get("casename", "") or ""),
+            str(row.get("file", "") or ""),
+        ]
+        return "/".join(part for part in parts if part)
+
+    def source_filter_number(value: Any) -> Optional[float]:
+        if value is None:
+            return None
+        text = str(value).strip()
+        if not text or text.lower() == "n/a":
+            return None
+        try:
+            numeric = float(text)
+        except Exception:
+            return None
+        return numeric if math.isfinite(numeric) else None
+
+    def source_filter_values(row: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "sourceName": source_name_for_row(row),
+            "source_dataset": str(row.get("source_dataset", "") or ""),
+            "producer": str(row.get("producer", "") or ""),
+            "casename": str(row.get("casename", "") or ""),
+            "file": str(row.get("file", "") or ""),
+            "min": source_filter_number(row.get("min_value", row.get("min", None))),
+            "max": source_filter_number(row.get("max_value", row.get("max", None))),
+        }
+
+    def source_sort_key(row: Dict[str, Any], field: str, selected_keys: set):
+        if field == "show":
+            key = str(row.get("_key", ""))
+            # Ascending puts the active source first.
+            return (0 if key in selected_keys else 1, key)
+
+        value = row.get(field, "")
+        if field in ("min", "max"):
+            numeric = source_filter_number(row.get(f"{field}_value", value))
+            if numeric is not None:
+                return ("__num__", numeric)
+
+        if value is None:
+            return ("__str__", "")
+        return ("__str__", str(value).lower())
+
+    def sorted_source_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        field = str(state.sourceSortField or "")
+        if not field:
+            return list(rows)
+        selected_keys = set(state.selectedSourceKeys or [])
+        asc = bool(state.sourceSortAsc)
+        return sorted(
+            rows,
+            key=lambda row: source_sort_key(row, field, selected_keys),
+            reverse=(not asc),
+        )
+
+    def apply_source_filter_and_sort():
+        rows = all_source_rows()
+        expr = str(state.sourceFilterText or "").strip()
+        if expr:
+            try:
+                rows = [
+                    row
+                    for row in rows
+                    if python_source_filter_matches(expr, source_filter_values(row))
+                ]
+                state.sourceFilterError = ""
+            except Exception as e:
+                state.sourceFilterError = f"{type(e).__name__}: {e}"
+                rows = all_source_rows()
+        else:
+            state.sourceFilterError = ""
+
+        state.sourceRows = sorted_source_rows(rows)
+        update_selected_source_label()
 
     def normalize_plot_settings(
         tile: Dict[str, Any],
@@ -1062,30 +1154,7 @@ def attach_controllers(
             state.sourceSortField = field
             state.sourceSortAsc = True
 
-        asc = bool(state.sourceSortAsc)
-        rows = list(state.sourceRows or [])
-        selected_keys = set(state.selectedSourceKeys or [])
-
-        def keyfn(row: Dict[str, str]):
-            if field == "show":
-                key = str(row.get("_key", ""))
-                # Ascending puts the active source first.
-                return (0 if key in selected_keys else 1, key)
-
-            v = row.get(field, "")
-            if v is None:
-                return ("__str__", "")
-            s = str(v)
-
-            if field in ("min", "max"):
-                try:
-                    return ("__num__", float(s))
-                except Exception:
-                    return ("__str__", s.lower())
-
-            return ("__str__", s.lower())
-
-        state.sourceRows = sorted(rows, key=keyfn, reverse=(not asc))
+        state.sourceRows = sorted_source_rows(list(state.sourceRows or []))
 
     def refresh_after_variable_catalog_change():
         refresh_variable_list()
@@ -1135,8 +1204,9 @@ def attach_controllers(
         state.detailsMedianMax = fmt(summary.get("median_max", None))
 
         rows = summary.get("sources", []) or []
-        state.sourceRows = [
-            {
+        source_rows_all: List[Dict[str, Any]] = []
+        for r in rows:
+            row = {
                 "source_dataset": r.get("source_dataset", ""),
                 "variable_id": r.get("variable_id", ""),
                 "variable_path": r.get("variable_path", ""),
@@ -1145,6 +1215,8 @@ def attach_controllers(
                 "file": r.get("file", ""),
                 "min": fmt(r.get("min", None)),
                 "max": fmt(r.get("max", None)),
+                "min_value": r.get("min", None),
+                "max_value": r.get("max", None),
                 "_key": (
                     "|".join(
                         str(r.get(key, "") or "")
@@ -1154,11 +1226,11 @@ def attach_controllers(
                     or f"{r.get('producer', '')}|{r.get('casename', '')}|{r.get('file', '')}"
                 ),
             }
-            for r in rows
-        ]
+            row["sourceName"] = source_name_for_row(row)
+            source_rows_all.append(row)
 
-        if state.sourceSortField:
-            sort_sources(state.sourceSortField, toggle=False)
+        state.sourceRowsAll = source_rows_all
+        apply_source_filter_and_sort()
 
         all_keys = source_row_keys()
         allow_multi_sources = str(state.sourceDialogMode or "single") == "add"
@@ -1187,8 +1259,7 @@ def attach_controllers(
                 state.movieStatus = "No sources selected"
                 return
 
-            selected_set = set(state.selectedSourceKeys or [])
-            selected_rows = [r for r in (state.sourceRows or []) if str(r.get("_key", "")) in selected_set]
+            selected_rows = source_rows_for_keys(normalize_source_keys(state.selectedSourceKeys or []))
 
             tiles: List[Dict[str, str]] = []
             new_tile_map: Dict[str, str] = {}
@@ -1746,6 +1817,7 @@ def attach_controllers(
             source_keys = source_keys_from_cell(cell)
             preferred_key = source_keys[0] if source_keys else str(cell.get("_source_key", "") or "")
             update_selected_var_panels(var, preferred_source_key=preferred_key)
+            state.sourceDialogInitialSelectedSourceKeys = normalize_source_keys(state.selectedSourceKeys or [])
             state.showSourcesModal = True
         hide_context_menu()
 
@@ -1774,7 +1846,9 @@ def attach_controllers(
         state.sourceDialogCellIndex = idx
         state.selectedVar = var
         state.draggedVar = var
+        state.sourceDialogInitialSelectedSourceKeys = source_keys
         update_selected_var_panels(var, preferred_source_keys=source_keys)
+        state.sourceDialogInitialSelectedSourceKeys = normalize_source_keys(state.selectedSourceKeys or source_keys)
         state.showSourcesModal = True
         hide_context_menu()
 
@@ -2028,27 +2102,28 @@ def attach_controllers(
         state.showSourcesModal = opening
         if opening:
             state.sourceDialogMode = "single"
+            state.sourceDialogInitialSelectedSourceKeys = normalize_source_keys(state.selectedSourceKeys or [])
             try:
                 idx = int(state.activeGridCell)
             except Exception:
                 idx = -1
             state.sourceDialogCellIndex = idx if is_valid_grid_index(idx) else -1
 
-    @ctrl.add("clear_source_filter")
-    def clear_source_filter(**_):
-        select_first_source()
-        update_selected_var_panels(state.selectedVar)
-
-    @ctrl.add("toggle_add_source")
-    def toggle_add_source(key: str, **_):
-        k = str(key or "").strip()
-        if not k:
-            return
-
+    @ctrl.add("cancel_source_dialog")
+    def cancel_source_dialog(**_):
         valid_keys = source_row_keys()
-        if k not in valid_keys:
-            return
+        restored = [
+            key
+            for key in normalize_source_keys(state.sourceDialogInitialSelectedSourceKeys or [])
+            if key in valid_keys
+        ]
+        state.selectedSourceKeys = restored
+        update_selected_source_label()
+        state.showSourcesModal = False
 
+    @ctrl.add("apply_source_dialog")
+    def apply_source_dialog(**_):
+        mode = str(state.sourceDialogMode or "single")
         var_id = str(state.detailsSelectedVarId or state.selectedVar or "").strip()
         try:
             idx = int(state.sourceDialogCellIndex)
@@ -2060,23 +2135,33 @@ def attach_controllers(
             except Exception:
                 idx = -1
 
-        selected = [key for key in normalize_source_keys(state.selectedSourceKeys or []) if key in valid_keys]
-        if not selected and is_valid_grid_index(idx):
-            cells = normalize_grid_cells(state.gridCells)
-            selected = [key for key in source_keys_from_cell(cells[idx]) if key in valid_keys]
+        valid_keys = source_row_keys()
+        selected = [
+            key
+            for key in normalize_source_keys(state.selectedSourceKeys or [])
+            if key in valid_keys
+        ]
 
-        if k in selected:
-            if len(selected) > 1:
-                selected = [key for key in selected if key != k]
-        else:
-            selected.append(k)
-        selected_set = set(selected)
-        selected = [key for key in valid_keys if key in selected_set]
+        if mode == "add":
+            sync_add_source_selection_to_cell(var_id, idx, selected)
+        elif selected:
+            commit_single_source_selection(selected[0], idx)
 
-        state.sourceDialogMode = "add"
-        state.selectedSourceKeys = selected
-        update_selected_source_label()
+        state.sourceDialogInitialSelectedSourceKeys = selected
+        state.showSourcesModal = False
 
+    @ctrl.add("clear_source_filter")
+    def clear_source_filter(**_):
+        select_first_source()
+        update_selected_var_panels(state.selectedVar)
+
+    @ctrl.add("apply_source_dialog_filter")
+    def apply_source_dialog_filter(**_):
+        state.sourceFilterText = str(state.sourceFilterDraftText or "").strip()
+        state.sourceFilterError = ""
+        apply_source_filter_and_sort()
+
+    def sync_add_source_selection_to_cell(var_id: str, idx: int, selected: List[str]) -> None:
         if not var_id or not is_valid_grid_index(idx):
             return
 
@@ -2099,18 +2184,70 @@ def attach_controllers(
             )
             update_selected_var_panels(var_id, preferred_source_keys=selected)
 
-    @ctrl.add("select_source")
-    def select_source(key: str, **_):
+    @ctrl.add("toggle_add_source")
+    def toggle_add_source(key: str, **_):
+        k = str(key or "").strip()
+        if not k:
+            return
+
+        valid_keys = source_row_keys()
+        if k not in valid_keys:
+            return
+
+        selected = [key for key in normalize_source_keys(state.selectedSourceKeys or []) if key in valid_keys]
+
+        if k in selected:
+            selected = [key for key in selected if key != k]
+        else:
+            selected.append(k)
+        selected_set = set(selected)
+        selected = [key for key in valid_keys if key in selected_set]
+
+        state.sourceDialogMode = "add"
+        state.selectedSourceKeys = selected
+        update_selected_source_label()
+
+    @ctrl.add("select_all_sources")
+    def select_all_sources(**_):
+        visible_keys = visible_source_row_keys()
+        if not visible_keys:
+            return
+
+        valid_keys = source_row_keys()
+        selected = [
+            key
+            for key in normalize_source_keys(state.selectedSourceKeys or [])
+            if key in valid_keys
+        ]
+        selected_set = set(selected).union(visible_keys)
+        selected = [key for key in valid_keys if key in selected_set]
+
+        state.sourceDialogMode = "add"
+        state.selectedSourceKeys = selected
+        update_selected_source_label()
+
+    @ctrl.add("clear_all_sources")
+    def clear_all_sources(**_):
+        state.sourceDialogMode = "add"
+        state.selectedSourceKeys = []
+        update_selected_source_label()
+
+    def commit_single_source_selection(key: str, idx: int = -1) -> None:
         row = source_row_for_key(key)
         state.sourceDialogMode = "single"
         select_source_key(key)
-        state.showSourcesModal = True
 
         var_id = str(state.detailsSelectedVarId or state.selectedVar or "").strip()
-        try:
-            idx = int(state.activeGridCell)
-        except Exception:
-            idx = -1
+        if not is_valid_grid_index(idx):
+            try:
+                idx = int(state.sourceDialogCellIndex)
+            except Exception:
+                idx = -1
+        if not is_valid_grid_index(idx):
+            try:
+                idx = int(state.activeGridCell)
+            except Exception:
+                idx = -1
 
         if row and var_id and is_valid_grid_index(idx):
             cells = normalize_grid_cells(state.gridCells)
@@ -2135,12 +2272,18 @@ def attach_controllers(
 
         update_selected_var_panels(var_id, preferred_source_key=str(key or ""))
 
+    @ctrl.add("select_source")
+    def select_source(key: str, **_):
+        commit_single_source_selection(key)
+        state.showSourcesModal = True
+
     @ctrl.add("source_dialog_select")
     def source_dialog_select(key: str, **_):
         if str(state.sourceDialogMode or "single") == "add":
             toggle_add_source(key)
         else:
-            select_source(key)
+            state.sourceDialogMode = "single"
+            select_source_key(key)
 
     @ctrl.add("toggle_source_visibility")
     def toggle_source_visibility(key: str, **_):

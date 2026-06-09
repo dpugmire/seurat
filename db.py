@@ -28,6 +28,16 @@ def to_float(value: Any) -> Optional[float]:
             return None
 
 
+def valid_extrema(fmin: Optional[float], fmax: Optional[float]) -> Tuple[Optional[float], Optional[float]]:
+    if fmin is None or fmax is None:
+        return None, None
+    if not math.isfinite(fmin) or not math.isfinite(fmax):
+        return None, None
+    if fmin > fmax:
+        return None, None
+    return fmin, fmax
+
+
 class CampaignDb:
     def __init__(self, collection):
         self.collection = collection
@@ -264,7 +274,7 @@ class CampaignDb:
 
         ordered = []
         if groups["Scalars"]:
-            ordered.append({"name": "Scalars", "variables": groups["Scalars"]})
+            ordered.append({"name": "0D", "variables": groups["Scalars"]})
         if groups["2D"]:
             ordered.append({"name": "2D", "variables": groups["2D"]})
         return ordered
@@ -890,6 +900,7 @@ class CampaignDb:
                     fmin = to_float(raw_min) if fmin is None else fmin
                     fmax = to_float(raw_max) if fmax is None else fmax
 
+                fmin, fmax = valid_extrema(fmin, fmax)
                 if (fmin is not None) and (fmax is not None):
                     mins.append(fmin)
                     maxs.append(fmax)

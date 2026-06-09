@@ -2283,10 +2283,52 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                             "{{ detailsSelectedVar ? (((sourceDialogMode === 'add') ? 'Add Source: ' : 'Sources: ') + detailsSelectedVar) : 'Sources' }}"
                                         )
                                         vuetify.VSpacer()
-                                        vuetify.VBtn("Close", variant="text", size="small", click=ctrl.toggle_sources)
+                                        vuetify.VBtn("Close", variant="text", size="small", click=ctrl.cancel_source_dialog)
 
                                 with vuetify.VCardText():
                                     with vuetify.Template(v_if="detailsSelectedVar"):
+                                        with html.Div(
+                                            style=(
+                                                "display:flex;"
+                                                "align-items:center;"
+                                                "gap:8px;"
+                                                "margin-bottom:8px;"
+                                            )
+                                        ):
+                                            html.Span(
+                                                "Sources:",
+                                                class_="text-caption",
+                                                style="white-space:nowrap;",
+                                            )
+                                            vuetify.VTextField(
+                                                v_model=("sourceFilterDraftText",),
+                                                placeholder='e.g. "F0.0179" in sourceName',
+                                                density="compact",
+                                                hide_details=True,
+                                                variant="outlined",
+                                                style="max-width:620px; min-width:360px;",
+                                            )
+                                            vuetify.VBtn(
+                                                "Filter",
+                                                variant="tonal",
+                                                size="small",
+                                                click=ctrl.apply_source_dialog_filter,
+                                            )
+                                            with vuetify.Template(v_if="sourceDialogMode === 'add'"):
+                                                vuetify.VBtn(
+                                                    "Select All",
+                                                    variant="tonal",
+                                                    size="small",
+                                                    click=ctrl.select_all_sources,
+                                                )
+                                                vuetify.VBtn(
+                                                    "Clear All",
+                                                    variant="text",
+                                                    size="small",
+                                                    click=ctrl.clear_all_sources,
+                                                )
+                                        with vuetify.Template(v_if="sourceFilterError"):
+                                            html.Div("{{ sourceFilterError }}", class_="text-caption mb-2", style="color:#b00020;")
                                         html.Div(
                                             "{{ ((sourceDialogMode === 'add') ? 'Selected sources: ' : 'Selected source: ') + selectedSourceLabel }}",
                                             class_="text-caption mb-2",
@@ -2387,6 +2429,10 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                             html.Td("{{ r.max }}", style="white-space:nowrap;")
                                         with vuetify.Template(v_if="!detailsSelectedVar"):
                                             html.Div("Select a variable first.", class_="text-caption")
+                                with vuetify.VCardActions():
+                                    vuetify.VSpacer()
+                                    vuetify.VBtn("Cancel", variant="text", click=ctrl.cancel_source_dialog)
+                                    vuetify.VBtn("Apply", variant="tonal", click=ctrl.apply_source_dialog)
 
                         with vuetify.VDialog(v_model=("showScalarPlotDialog",), max_width="560"):
                             with vuetify.VCard():
