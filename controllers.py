@@ -233,6 +233,7 @@ def attach_controllers(
         return {
             "variable_id": "",
             "variable_name": "",
+            "display_title": "",
             "visualization_name": "",
             "selected_visualization": "",
             "visualization_options": [],
@@ -452,6 +453,44 @@ def attach_controllers(
             "min": source_filter_number(row.get("min_value", row.get("min", None))),
             "max": source_filter_number(row.get("max_value", row.get("max", None))),
         }
+
+    def valid_title_extrema(fmin: Any, fmax: Any) -> Tuple[Optional[float], Optional[float]]:
+        min_value = finite_float(fmin)
+        max_value = finite_float(fmax)
+        if min_value is None or max_value is None or min_value > max_value:
+            return None, None
+        return min_value, max_value
+
+    def source_extrema_for_title(variable_id: str, source_filter: Dict[str, Any]) -> Tuple[Optional[float], Optional[float]]:
+        var_id = str(variable_id or "").strip()
+        if not var_id or not source_filter:
+            return None, None
+
+        qf = state.queryFilter or None
+        extra_filter = and_filter(qf, source_filter) if qf else source_filter
+        summary = db.variable_min_max_summary(var_id, extra_filter=extra_filter)
+        return valid_title_extrema(
+            summary.get("global_min", None),
+            summary.get("global_max", None),
+        )
+
+    def update_2d_display_title(cell: Dict[str, Any], variable_id: str, label: str) -> None:
+        media_type = str(cell.get("media_type", "") or "")
+        if media_type not in {"image", "video"}:
+            cell["display_title"] = str(label or "")
+            return
+
+        fmin, fmax = valid_title_extrema(cell.get("min", None), cell.get("max", None))
+        if fmin is None or fmax is None:
+            fmin, fmax = source_extrema_for_title(
+                variable_id,
+                source_filter_from_cell(cell),
+            )
+
+        if fmin is None or fmax is None:
+            cell["display_title"] = str(label or "")
+        else:
+            cell["display_title"] = f"{label} [{fmt(fmin)}, {fmt(fmax)}]"
 
     def source_sort_key(row: Dict[str, Any], field: str, selected_keys: set):
         if field == "show":
@@ -886,6 +925,7 @@ def attach_controllers(
         cell["visualization_name"] = selected_vis
         cell["selected_visualization"] = selected_vis
         cell["visualization_options"] = vis_names
+        update_2d_display_title(cell, var_id, label)
         return cell
 
     def no_visualization_grid_cell(variable_id: str, note: str) -> Dict[str, Any]:

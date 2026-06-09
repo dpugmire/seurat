@@ -2120,7 +2120,7 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                     ),
                                                 ):
                                                     html.Div(
-                                                        "{{ tile.variable_name || 'variable' }}",
+                                                        "{{ tile.display_title || tile.variable_name || 'variable' }}",
                                                         style="flex:1 1 auto; min-width:0; font-size:0.9rem; font-weight:400; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;",
                                                     )
                                                     html.Button(
@@ -2803,7 +2803,7 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                 with html.Div(v_if="contextMenuKind === 'cell'"):
                     html.Div("Select Cell", classes="menu-item", click=ctrl.context_menu_cell_select)
                     html.Div("Clear Cell", classes="menu-item danger", click=ctrl.context_menu_cell_clear)
-                    with vuetify.Template(v_if="contextMenuCellHasVariable"):
+                    with vuetify.Template(v_if="contextMenuCellHasVariable && !contextMenuCellCanPlotSettings"):
                         html.Div("Sources...", classes="menu-item", click=ctrl.context_menu_cell_sources)
                     with vuetify.Template(v_if="contextMenuCellCanAddSource"):
                         html.Div("Add Source", classes="menu-item", click=ctrl.context_menu_cell_add_source)

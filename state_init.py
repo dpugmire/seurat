@@ -115,6 +115,7 @@ def init_state(state, db) -> None:
         {
             "variable_name": "",
             "variable_id": "",
+            "display_title": "",
             "visualization_name": "",
             "selected_visualization": "",
             "visualization_options": [],
