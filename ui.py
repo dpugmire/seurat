@@ -285,13 +285,33 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
           return document.createElementNS("http://www.w3.org/2000/svg", name);
         }
 
+        function trimPlotNumberText(text) {
+          let out = String(text || "");
+          if ((out.indexOf("e") >= 0) || (out.indexOf("E") >= 0)) return out;
+          while ((out.indexOf(".") >= 0) && out.endsWith("0")) {
+            out = out.slice(0, -1);
+          }
+          if (out.endsWith(".")) out = out.slice(0, -1);
+          return out;
+        }
+
         function formatPlotTick(value) {
           const n = Number(value);
           if (!Number.isFinite(n)) return "";
           const abs = Math.abs(n);
           if ((abs >= 10000) || (abs > 0 && abs < 0.001)) return n.toExponential(2);
           const text = n.toPrecision(3);
-          return text.indexOf(".") >= 0 ? text.replace(/\.?0+$/, "") : text;
+          return trimPlotNumberText(text);
+        }
+
+        function formatPlotHoverValue(value) {
+          const n = Number(value);
+          if (!Number.isFinite(n)) return "";
+          const abs = Math.abs(n);
+          const text = ((abs >= 10000) || (abs > 0 && abs < 0.001))
+            ? n.toExponential(4)
+            : n.toPrecision(6);
+          return trimPlotNumberText(text);
         }
 
         function parsePlotData(el) {
@@ -580,6 +600,7 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
             svg.appendChild(yTick);
           }
 
+          const hoverSeries = [];
           for (let i = 0; i < series.length; i += 1) {
             const item = series[i] || {};
             const xs = Array.isArray(item.x) ? item.x : [];
@@ -587,6 +608,12 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
             const n = Math.min(xs.length, ys.length);
             let d = "";
             let moveNext = true;
+            const seriesKey = plotSeriesKey(item, i);
+            const seriesStyle = (settings.series_styles && settings.series_styles[seriesKey]) || {};
+            const lineStyle = normalizeLineStyle(seriesStyle.line_style || "solid");
+            const color = String(seriesStyle.color || settings.series_colors[seriesKey] || item.color || "#1565c0");
+            const sourceLabel = String(item.source_label || item.source_key || ("Series " + (i + 1))).trim();
+            const points = [];
             for (let j = 0; j < n; j += 1) {
               const xv = Number(xs[j]);
               const yv = Number(ys[j]);
@@ -600,6 +627,7 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                 moveNext = true;
                 continue;
               }
+              points.push({ x: xv, y: yv, px, py, sourceLabel, color });
               d += (moveNext ? " M " : " L ") + px.toFixed(2) + " " + py.toFixed(2);
               moveNext = false;
             }
@@ -607,10 +635,7 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
             const path = createSvgNode("path");
             path.setAttribute("d", d);
             path.setAttribute("fill", "none");
-            const seriesKey = plotSeriesKey(item, i);
-            const seriesStyle = (settings.series_styles && settings.series_styles[seriesKey]) || {};
-            const lineStyle = normalizeLineStyle(seriesStyle.line_style || "solid");
-            path.setAttribute("stroke", String(seriesStyle.color || settings.series_colors[seriesKey] || item.color || "#1565c0"));
+            path.setAttribute("stroke", color);
             path.setAttribute("stroke-width", String(settings.line_width));
             const dashArray = lineStyleDashArray(lineStyle, settings.line_width);
             if (dashArray) {
@@ -619,6 +644,8 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
             path.setAttribute("stroke-linejoin", "round");
             path.setAttribute("stroke-linecap", "round");
             svg.appendChild(path);
+            points.sort(function(a, b) { return a.px - b.px; });
+            hoverSeries.push({ points, sourceLabel, color });
           }
 
           let cursor = null;
@@ -647,13 +674,46 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
             svg.appendChild(label);
           }
 
+          const hoverGroup = createSvgNode("g");
+          hoverGroup.setAttribute("display", "none");
+          hoverGroup.setAttribute("pointer-events", "none");
+
+          const hoverLine = createSvgNode("line");
+          hoverLine.setAttribute("y1", String(pad.top));
+          hoverLine.setAttribute("y2", String(pad.top + plotH));
+          hoverLine.setAttribute("stroke", "#4a4a4a");
+          hoverLine.setAttribute("stroke-width", "1");
+          hoverLine.setAttribute("stroke-dasharray", "3 3");
+          hoverLine.setAttribute("opacity", "0.75");
+          hoverGroup.appendChild(hoverLine);
+
+          const hoverPoint = createSvgNode("circle");
+          hoverPoint.setAttribute("r", "4");
+          hoverPoint.setAttribute("fill", "#ffffff");
+          hoverPoint.setAttribute("stroke-width", "2");
+          hoverGroup.appendChild(hoverPoint);
+          svg.appendChild(hoverGroup);
+
+          const hoverTip = document.createElement("div");
+          hoverTip.className = "catnip-plot-hover-tip";
+          hoverTip.style.display = "none";
+          el.appendChild(hoverTip);
+
           el.__catnipPlotMeta = {
             xMin: xAxis.min,
             xMax: xAxis.max,
             dataXMin,
             dataXMax,
             sx,
+            pad,
+            plotW,
+            plotH,
             cursor,
+            hoverSeries,
+            hoverGroup,
+            hoverLine,
+            hoverPoint,
+            hoverTip,
           };
         }
 
@@ -726,6 +786,155 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
           }
         }
 
+        function hidePlotHover(el) {
+          const meta = el && el.__catnipPlotMeta;
+          if (!meta) return;
+          if (meta.hoverGroup) meta.hoverGroup.setAttribute("display", "none");
+          if (meta.hoverTip) meta.hoverTip.style.display = "none";
+        }
+
+        function hideAllPlotHovers() {
+          for (const el of getGridPlots()) {
+            hidePlotHover(el);
+          }
+        }
+
+        function nearestPointInSeries(points, x, y) {
+          if (!points || !points.length) return null;
+          let lo = 0;
+          let hi = points.length;
+          while (lo < hi) {
+            const mid = Math.floor((lo + hi) / 2);
+            if (points[mid].px < x) lo = mid + 1;
+            else hi = mid;
+          }
+
+          let best = null;
+          const start = Math.max(0, lo - 4);
+          const end = Math.min(points.length - 1, lo + 4);
+          for (let i = start; i <= end; i += 1) {
+            const p = points[i];
+            const dx = p.px - x;
+            const dy = p.py - y;
+            const score = (dx * dx) + (dy * dy);
+            if (!best || score < best.score) {
+              best = { point: p, score };
+            }
+          }
+          return best;
+        }
+
+        function nearestPlotHoverPoint(meta, x, y) {
+          let best = null;
+          for (const item of (meta.hoverSeries || [])) {
+            const candidate = nearestPointInSeries(item.points || [], x, y);
+            if (candidate && (!best || candidate.score < best.score)) {
+              best = candidate;
+            }
+          }
+          return best ? best.point : null;
+        }
+
+        function updatePlotHover(el, event) {
+          if (!el || !event) return;
+          renderPlot1d(el);
+          const meta = el.__catnipPlotMeta;
+          const shiftActive = !!(event.shiftKey || window.__catnipPlotShiftDown);
+          if (!meta || !meta.hoverGroup || !meta.hoverTip || !shiftActive) {
+            hidePlotHover(el);
+            return;
+          }
+
+          const rect = el.getBoundingClientRect();
+          const x = Number(event.clientX) - rect.left;
+          const y = Number(event.clientY) - rect.top;
+          const left = meta.pad.left;
+          const right = meta.pad.left + meta.plotW;
+          const top = meta.pad.top;
+          const bottom = meta.pad.top + meta.plotH;
+          if (!Number.isFinite(x) || !Number.isFinite(y) || x < left || x > right || y < top || y > bottom) {
+            hidePlotHover(el);
+            return;
+          }
+
+          const point = nearestPlotHoverPoint(meta, x, y);
+          if (!point) {
+            hidePlotHover(el);
+            return;
+          }
+
+          meta.hoverLine.setAttribute("x1", String(point.px));
+          meta.hoverLine.setAttribute("x2", String(point.px));
+          meta.hoverPoint.setAttribute("cx", String(point.px));
+          meta.hoverPoint.setAttribute("cy", String(point.py));
+          meta.hoverPoint.setAttribute("stroke", point.color || "#1565c0");
+          meta.hoverGroup.removeAttribute("display");
+
+          const lines = [];
+          if ((meta.hoverSeries || []).length > 1 && point.sourceLabel) {
+            lines.push(point.sourceLabel);
+          }
+          lines.push("x: " + formatPlotHoverValue(point.x));
+          lines.push("y: " + formatPlotHoverValue(point.y));
+          meta.hoverTip.textContent = lines.join("\\n");
+          meta.hoverTip.style.display = "block";
+          meta.hoverTip.style.left = "0px";
+          meta.hoverTip.style.top = "0px";
+          meta.hoverTip.style.borderColor = point.color || "#1565c0";
+
+          const tipW = meta.hoverTip.offsetWidth || 90;
+          const tipH = meta.hoverTip.offsetHeight || 42;
+          let tipX = point.px + 8;
+          let tipY = point.py - tipH - 8;
+          if (tipX + tipW > rect.width - 4) tipX = point.px - tipW - 8;
+          if (tipY < 4) tipY = point.py + 8;
+          if (tipY + tipH > rect.height - 4) tipY = rect.height - tipH - 4;
+          if (tipX < 4) tipX = 4;
+          meta.hoverTip.style.left = String(Math.round(tipX)) + "px";
+          meta.hoverTip.style.top = String(Math.round(tipY)) + "px";
+        }
+
+        function setupPlotHoverHandlers() {
+          if (window.__catnipPlotHoverHandlersInit) return;
+          window.__catnipPlotHoverHandlersInit = true;
+          window.__catnipPlotShiftDown = false;
+
+          document.addEventListener("keydown", function(e) {
+            if (e && e.key === "Shift") {
+              window.__catnipPlotShiftDown = true;
+            }
+          });
+          document.addEventListener("keyup", function(e) {
+            if (e && e.key === "Shift") {
+              window.__catnipPlotShiftDown = false;
+              hideAllPlotHovers();
+            }
+          });
+          window.addEventListener("blur", function() {
+            window.__catnipPlotShiftDown = false;
+            hideAllPlotHovers();
+          });
+          document.addEventListener("pointermove", function(e) {
+            const target = e && e.target;
+            const el = target && target.closest ? target.closest(".catnip-plot1d") : null;
+            if (!el) return;
+            const shiftActive = !!(e.shiftKey || window.__catnipPlotShiftDown);
+            if (!shiftActive) {
+              hidePlotHover(el);
+              return;
+            }
+            updatePlotHover(el, e);
+          });
+          document.addEventListener("pointerout", function(e) {
+            const target = e && e.target;
+            const el = target && target.closest ? target.closest(".catnip-plot1d") : null;
+            if (!el) return;
+            if (!e.relatedTarget || !el.contains(e.relatedTarget)) {
+              hidePlotHover(el);
+            }
+          });
+        }
+
         function scheduleRenderAllPlot1d() {
           if (window.__catnipPlotRenderTimer) {
             clearTimeout(window.__catnipPlotRenderTimer);
@@ -737,6 +946,7 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
         }
 
         function setupPlot1dObserver() {
+          setupPlotHoverHandlers();
           if (window.__catnipPlotObserverInit) return;
           window.__catnipPlotObserverInit = true;
           const observer = new MutationObserver(function() {
@@ -1331,6 +1541,21 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                 }
                 .catnip-plot1d svg {
                   font-family: Arial, Helvetica, sans-serif;
+                }
+                .catnip-plot-hover-tip {
+                  position: absolute;
+                  z-index: 5;
+                  max-width: 180px;
+                  padding: 4px 6px;
+                  background: rgba(255, 255, 255, 0.92);
+                  border: 1px solid #1565c0;
+                  border-radius: 3px;
+                  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
+                  color: #111;
+                  font-size: 11px;
+                  line-height: 1.25;
+                  white-space: pre;
+                  pointer-events: none;
                 }
                 .catnip-plot-legend {
                   position: absolute;
