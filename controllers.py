@@ -711,6 +711,30 @@ def attach_controllers(
         state.gridMaxCols = GRID_MAX_COLS
         return rows, cols
 
+    def normalize_grid_sizing() -> None:
+        mode = str(getattr(state, "gridSizingMode", "static") or "static").strip().lower()
+        state.gridSizingMode = "fit" if mode == "fit" else "static"
+        state.gridMinCellSize = clamp_int(getattr(state, "gridMinCellSize", 80), 80, 40, 1000)
+        state.gridMaxCellSize = clamp_int(getattr(state, "gridMaxCellSize", 5000), 5000, state.gridMinCellSize, 10000)
+        state.gridCellSize = clamp_int(
+            getattr(state, "gridCellSize", 300),
+            300,
+            state.gridMinCellSize,
+            state.gridMaxCellSize,
+        )
+        state.gridMaxFitMinCellSize = clamp_int(
+            getattr(state, "gridMaxFitMinCellSize", 5000),
+            5000,
+            state.gridMinCellSize,
+            10000,
+        )
+        state.gridFitMinCellSize = clamp_int(
+            getattr(state, "gridFitMinCellSize", 180),
+            180,
+            state.gridMinCellSize,
+            state.gridMaxFitMinCellSize,
+        )
+
     def grid_cell_count() -> int:
         rows, cols = grid_dimensions()
         return rows * cols
@@ -755,9 +779,23 @@ def attach_controllers(
 
     @ctrl.add("set_grid_cell_size")
     def set_grid_cell_size(size: int, **_):
-        min_size = clamp_int(getattr(state, "gridMinCellSize", 160), 160, 80, 1000)
-        max_size = clamp_int(getattr(state, "gridMaxCellSize", 520), 520, min_size, 1600)
-        state.gridCellSize = clamp_int(size, 300, min_size, max_size)
+        normalize_grid_sizing()
+        state.gridCellSize = clamp_int(size, 300, state.gridMinCellSize, state.gridMaxCellSize)
+
+    @ctrl.add("set_grid_fit_min_cell_size")
+    def set_grid_fit_min_cell_size(size: int, **_):
+        normalize_grid_sizing()
+        state.gridFitMinCellSize = clamp_int(
+            size,
+            180,
+            state.gridMinCellSize,
+            state.gridMaxFitMinCellSize,
+        )
+
+    @ctrl.add("set_grid_sizing_mode")
+    def set_grid_sizing_mode(mode: str, **_):
+        state.gridSizingMode = "fit" if str(mode or "").strip().lower() == "fit" else "static"
+        normalize_grid_sizing()
 
     @ctrl.add("set_grid_layout_size")
     def set_grid_layout_size(rows: int, cols: int, **_):

@@ -1755,53 +1755,99 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                   font-weight: 600;
                   margin-bottom: 8px;
                 }
-                .catnip-grid-size-controls {
+                .catnip-grid-sizing-mode {
+                  display: grid;
+                  grid-template-columns: 1fr 1fr;
+                  gap: 4px;
+                  margin-bottom: 10px;
+                }
+                .catnip-grid-sizing-mode-btn {
+                  height: 26px;
+                  border: 1px solid #9d9d9d;
+                  border-radius: 3px;
+                  background: #fff;
+                  color: #222;
+                  font-size: 12px;
+                  cursor: pointer;
+                }
+                .catnip-grid-sizing-mode-btn.active {
+                  background: #dbeafe;
+                  border-color: #1976d2;
+                  color: #0d47a1;
+                  font-weight: 600;
+                }
+                .catnip-grid-sizing-section-label {
+                  color: #555;
+                  font-size: 11px;
+                  line-height: 1;
+                  margin-bottom: 6px;
+                }
+                .catnip-size-stepper {
                   display: flex;
                   align-items: center;
                   gap: 6px;
-                  width: 240px;
-                  min-height: 24px;
+                  min-height: 28px;
                 }
-                .catnip-grid-size-slider {
-                  flex: 1 1 auto;
-                  min-width: 120px;
-                  margin: 0;
-                }
-                .catnip-grid-size-slider.v-input {
-                  margin: 0;
-                  padding: 0;
-                }
-                .catnip-grid-size-slider .v-input__control {
-                  min-height: 24px;
-                }
-                .catnip-grid-size-slider .v-input__details {
-                  display: none;
-                }
-                .catnip-grid-size-slider .v-slider {
-                  margin: 0;
-                  min-height: 24px;
-                }
-                .catnip-grid-size-slider .v-slider__container {
-                  height: 24px;
-                }
-                .catnip-grid-size-label {
-                  min-width: 48px;
+                .catnip-size-stepper-input {
+                  width: 74px;
+                  height: 26px;
+                  border: 1px solid #9d9d9d;
+                  border-radius: 3px;
+                  padding: 0 5px;
+                  font-size: 12px;
                   text-align: right;
+                  box-sizing: border-box;
+                }
+                .catnip-size-stepper-unit {
                   color: #555;
+                  font-size: 12px;
+                  min-width: 16px;
                 }
-                .catnip-cell-size-popover {
-                  width: 272px;
-                }
-                .catnip-cell-size-presets {
+                .catnip-grid-size-trigger {
+                  width: 100%;
+                  height: 28px;
                   display: flex;
-                  gap: 6px;
-                  margin-top: 8px;
+                  align-items: center;
+                  justify-content: space-between;
+                  gap: 8px;
+                  border: 1px solid #9d9d9d;
+                  border-radius: 3px;
+                  background: #fff;
+                  color: #222;
+                  font-size: 12px;
+                  padding: 0 8px;
+                  cursor: pointer;
                 }
-                .catnip-grid-layout-popover {
+                .catnip-grid-size-trigger:hover {
+                  background: #f2f2f2;
+                }
+                .catnip-grid-size-trigger-label {
+                  color: #333;
+                  font-weight: 500;
+                }
+                .catnip-grid-size-trigger-value {
+                  color: #111;
+                  font-variant-numeric: tabular-nums;
+                }
+                .catnip-grid-size-popover {
                   width: 226px;
                 }
                 .catnip-settings-popover {
-                  width: 240px;
+                  width: 300px;
+                }
+                .catnip-settings-section {
+                  padding-top: 2px;
+                }
+                .catnip-settings-section + .catnip-settings-section {
+                  margin-top: 12px;
+                  padding-top: 10px;
+                  border-top: 1px solid #e0e0e0;
+                }
+                .catnip-settings-section-title {
+                  color: #333;
+                  font-size: 12px;
+                  font-weight: 600;
+                  margin-bottom: 8px;
                 }
                 .catnip-settings-row {
                   display: grid;
@@ -2200,89 +2246,6 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                     with html.Div(classes="catnip-grid-layout-controls"):
                                         with html.Div(classes="catnip-toolbar-menu"):
                                             html.Button(
-                                                "⇲ {{ gridCellSize + 'px' }} ▾",
-                                                classes="catnip-toolbar-menu-btn",
-                                                raw_attrs=[
-                                                    'type="button"',
-                                                ],
-                                                title="Cell size",
-                                            )
-                                            with vuetify.VMenu(
-                                                activator="parent",
-                                                location="bottom end",
-                                                close_on_content_click=False,
-                                            ):
-                                                with vuetify.VCard(classes="catnip-cell-size-popover", elevation=4):
-                                                    with vuetify.VCardText(class_="pa-2"):
-                                                        html.Div("Cell Size", classes="catnip-toolbar-popover-title")
-                                                        with html.Div(classes="catnip-grid-size-controls"):
-                                                            vuetify.VSlider(
-                                                                v_model=("gridCellSize",),
-                                                                min=160,
-                                                                max=520,
-                                                                step=10,
-                                                                density="compact",
-                                                                hide_details=True,
-                                                                class_="catnip-grid-size-slider",
-                                                                title="Grid cell size",
-                                                            )
-                                                            html.Span(
-                                                                "{{ gridCellSize + 'px' }}",
-                                                                class_="text-caption catnip-grid-size-label",
-                                                            )
-                                                        with html.Div(classes="catnip-cell-size-presets"):
-                                                            html.Button("250", classes="catnip-grid-layout-btn", click=(ctrl.set_grid_cell_size, "[250]"), raw_attrs=['type="button"'], title="250 px cells")
-                                                            html.Button("300", classes="catnip-grid-layout-btn", click=(ctrl.set_grid_cell_size, "[300]"), raw_attrs=['type="button"'], title="Medium cells")
-                                                            html.Button("350", classes="catnip-grid-layout-btn", click=(ctrl.set_grid_cell_size, "[350]"), raw_attrs=['type="button"'], title="350 px cells")
-                                                            html.Button("400", classes="catnip-grid-layout-btn", click=(ctrl.set_grid_cell_size, "[400]"), raw_attrs=['type="button"'], title="400 px cells")
-                                                            html.Button("450", classes="catnip-grid-layout-btn", click=(ctrl.set_grid_cell_size, "[450]"), raw_attrs=['type="button"'], title="450 px cells")
-                                                            html.Button("500", classes="catnip-grid-layout-btn", click=(ctrl.set_grid_cell_size, "[500]"), raw_attrs=['type="button"'], title="500 px cells")
-                                        with html.Div(classes="catnip-toolbar-menu"):
-                                            html.Button(
-                                                "▦ {{ gridRows + 'x' + gridCols }} ▾",
-                                                classes="catnip-toolbar-menu-btn",
-                                                raw_attrs=[
-                                                    'type="button"',
-                                                ],
-                                                title="Grid layout",
-                                            )
-                                            with vuetify.VMenu(
-                                                activator="parent",
-                                                location="bottom end",
-                                                close_on_content_click=False,
-                                            ):
-                                                with vuetify.VCard(classes="catnip-grid-layout-popover", elevation=4):
-                                                    with vuetify.VCardText(class_="pa-2"):
-                                                        html.Div("Grid Layout", classes="catnip-toolbar-popover-title")
-                                                        with html.Div(classes="catnip-grid-picker"):
-                                                            for picker_row in range(1, 9):
-                                                                for picker_col in range(1, 9):
-                                                                    html.Button(
-                                                                        "",
-                                                                        classes="catnip-grid-picker-cell",
-                                                                        click=(ctrl.set_grid_layout_size, f"[{picker_row}, {picker_col}]"),
-                                                                        raw_attrs=[
-                                                                            'type="button"',
-                                                                            f'title="{picker_row} x {picker_col}"',
-                                                                            f':class="{{ selected: gridRows >= {picker_row} && gridCols >= {picker_col}, current: gridRows === {picker_row} && gridCols === {picker_col} }}"',
-                                                                        ],
-                                                                    )
-                                                        html.Div(
-                                                            "{{ gridRows + ' x ' + gridCols }}",
-                                                            class_="text-caption catnip-grid-picker-label",
-                                                        )
-                                                        with html.Div(classes="catnip-grid-layout-stepper"):
-                                                            html.Span("Rows", class_="text-caption catnip-grid-layout-stepper-label")
-                                                            html.Button("-", classes="catnip-grid-layout-btn", click=ctrl.delete_grid_row, raw_attrs=['type="button"', ':disabled="gridRows <= gridMinRows"'], title="Delete active row or last row")
-                                                            html.Span("{{ gridRows }}", class_="text-caption text-center")
-                                                            html.Button("+", classes="catnip-grid-layout-btn", click=ctrl.add_grid_row, raw_attrs=['type="button"', ':disabled="gridRows >= gridMaxRows"'], title="Add row")
-                                                        with html.Div(classes="catnip-grid-layout-stepper"):
-                                                            html.Span("Cols", class_="text-caption catnip-grid-layout-stepper-label")
-                                                            html.Button("-", classes="catnip-grid-layout-btn", click=ctrl.delete_grid_column, raw_attrs=['type="button"', ':disabled="gridCols <= gridMinCols"'], title="Delete active column or last column")
-                                                            html.Span("{{ gridCols }}", class_="text-caption text-center")
-                                                            html.Button("+", classes="catnip-grid-layout-btn", click=ctrl.add_grid_column, raw_attrs=['type="button"', ':disabled="gridCols >= gridMaxCols"'], title="Add column")
-                                        with html.Div(classes="catnip-toolbar-menu"):
-                                            html.Button(
                                                 "⚙",
                                                 classes="catnip-toolbar-menu-btn catnip-toolbar-icon-btn",
                                                 raw_attrs=[
@@ -2299,31 +2262,164 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                 with vuetify.VCard(classes="catnip-settings-popover", elevation=4):
                                                     with vuetify.VCardText(class_="pa-2"):
                                                         html.Div("Settings", classes="catnip-toolbar-popover-title")
-                                                        with html.Div(classes="catnip-settings-row"):
-                                                            html.Span("Scalar plots", class_="text-caption")
-                                                            with html.Select(
-                                                                v_model=("scalarPlotPolicy",),
-                                                                classes="catnip-scalar-plot-policy",
-                                                                title="Generated scalar plot behavior",
-                                                            ):
-                                                                html.Option("Ask", value="ask")
-                                                                html.Option("Generate", value="always")
-                                                                html.Option("Never", value="never")
+                                                        with html.Div(classes="catnip-settings-section"):
+                                                            html.Div("Layout", classes="catnip-settings-section-title")
+                                                            with html.Div(classes="catnip-grid-sizing-mode"):
+                                                                html.Button(
+                                                                    "Static",
+                                                                    classes="catnip-grid-sizing-mode-btn",
+                                                                    click=(ctrl.set_grid_sizing_mode, "['static']"),
+                                                                    raw_attrs=[
+                                                                        'type="button"',
+                                                                        ':class="{ active: gridSizingMode !== \'fit\' }"',
+                                                                    ],
+                                                                    title="Use fixed-size cells",
+                                                                )
+                                                                html.Button(
+                                                                    "Fit window",
+                                                                    classes="catnip-grid-sizing-mode-btn",
+                                                                    click=(ctrl.set_grid_sizing_mode, "['fit']"),
+                                                                    raw_attrs=[
+                                                                        'type="button"',
+                                                                        ':class="{ active: gridSizingMode === \'fit\' }"',
+                                                                    ],
+                                                                    title="Resize cells to fill the grid viewport",
+                                                                )
+                                                            with vuetify.Template(v_if="gridSizingMode !== 'fit'"):
+                                                                html.Div("Cell size", classes="catnip-grid-sizing-section-label")
+                                                                with html.Div(classes="catnip-size-stepper"):
+                                                                    html.Button(
+                                                                        "-",
+                                                                        classes="catnip-grid-layout-btn",
+                                                                        click=(ctrl.set_grid_cell_size, "[Number(gridCellSize || 300) - 10]"),
+                                                                        raw_attrs=['type="button"'],
+                                                                        title="Decrease cell size",
+                                                                    )
+                                                                    html.Input(
+                                                                        v_model=("gridCellSize",),
+                                                                        classes="catnip-size-stepper-input",
+                                                                        change=(ctrl.set_grid_cell_size, "[$event.target.value]"),
+                                                                        raw_attrs=[
+                                                                            'type="number"',
+                                                                            ':min="gridMinCellSize"',
+                                                                            ':max="gridMaxCellSize"',
+                                                                            'step="10"',
+                                                                            'aria-label="Cell size"',
+                                                                        ],
+                                                                    )
+                                                                    html.Button(
+                                                                        "+",
+                                                                        classes="catnip-grid-layout-btn",
+                                                                        click=(ctrl.set_grid_cell_size, "[Number(gridCellSize || 300) + 10]"),
+                                                                        raw_attrs=['type="button"'],
+                                                                        title="Increase cell size",
+                                                                    )
+                                                                    html.Span("px", classes="catnip-size-stepper-unit")
+                                                            with vuetify.Template(v_if="gridSizingMode === 'fit'"):
+                                                                html.Div("Minimum cell size", classes="catnip-grid-sizing-section-label")
+                                                                with html.Div(classes="catnip-size-stepper"):
+                                                                    html.Button(
+                                                                        "-",
+                                                                        classes="catnip-grid-layout-btn",
+                                                                        click=(ctrl.set_grid_fit_min_cell_size, "[Number(gridFitMinCellSize || 180) - 10]"),
+                                                                        raw_attrs=['type="button"'],
+                                                                        title="Decrease minimum cell size",
+                                                                    )
+                                                                    html.Input(
+                                                                        v_model=("gridFitMinCellSize",),
+                                                                        classes="catnip-size-stepper-input",
+                                                                        change=(ctrl.set_grid_fit_min_cell_size, "[$event.target.value]"),
+                                                                        raw_attrs=[
+                                                                            'type="number"',
+                                                                            ':min="gridMinCellSize"',
+                                                                            ':max="gridMaxFitMinCellSize"',
+                                                                            'step="10"',
+                                                                            'aria-label="Minimum cell size"',
+                                                                        ],
+                                                                    )
+                                                                    html.Button(
+                                                                        "+",
+                                                                        classes="catnip-grid-layout-btn",
+                                                                        click=(ctrl.set_grid_fit_min_cell_size, "[Number(gridFitMinCellSize || 180) + 10]"),
+                                                                        raw_attrs=['type="button"'],
+                                                                        title="Increase minimum cell size",
+                                                                    )
+                                                                    html.Span("px", classes="catnip-size-stepper-unit")
+                                                            with html.Div(classes="catnip-toolbar-menu", style="margin-top:10px; width:100%;"):
+                                                                with html.Button(
+                                                                    classes="catnip-grid-size-trigger",
+                                                                    raw_attrs=['type="button"'],
+                                                                    title="Grid size",
+                                                                ):
+                                                                    html.Span("Grid size", classes="catnip-grid-size-trigger-label")
+                                                                    html.Span("{{ gridRows + ' x ' + gridCols + ' ▾' }}", classes="catnip-grid-size-trigger-value")
+                                                                with vuetify.VMenu(
+                                                                    activator="parent",
+                                                                    location="bottom start",
+                                                                    close_on_content_click=False,
+                                                                ):
+                                                                    with vuetify.VCard(classes="catnip-grid-size-popover", elevation=4):
+                                                                        with vuetify.VCardText(class_="pa-2"):
+                                                                            html.Div("Grid size", classes="catnip-toolbar-popover-title")
+                                                                            with html.Div(classes="catnip-grid-picker"):
+                                                                                for picker_row in range(1, 9):
+                                                                                    for picker_col in range(1, 9):
+                                                                                        html.Button(
+                                                                                            "",
+                                                                                            classes="catnip-grid-picker-cell",
+                                                                                            click=(ctrl.set_grid_layout_size, f"[{picker_row}, {picker_col}]"),
+                                                                                            raw_attrs=[
+                                                                                                'type="button"',
+                                                                                                f'title="{picker_row} x {picker_col}"',
+                                                                                                f':class="{{ selected: gridRows >= {picker_row} && gridCols >= {picker_col}, current: gridRows === {picker_row} && gridCols === {picker_col} }}"',
+                                                                                            ],
+                                                                                        )
+                                                                            html.Div(
+                                                                                "{{ gridRows + ' x ' + gridCols }}",
+                                                                                class_="text-caption catnip-grid-picker-label",
+                                                                            )
+                                                                            with html.Div(classes="catnip-grid-layout-stepper"):
+                                                                                html.Span("Rows", class_="text-caption catnip-grid-layout-stepper-label")
+                                                                                html.Button("-", classes="catnip-grid-layout-btn", click=ctrl.delete_grid_row, raw_attrs=['type="button"', ':disabled="gridRows <= gridMinRows"'], title="Delete active row or last row")
+                                                                                html.Span("{{ gridRows }}", class_="text-caption text-center")
+                                                                                html.Button("+", classes="catnip-grid-layout-btn", click=ctrl.add_grid_row, raw_attrs=['type="button"', ':disabled="gridRows >= gridMaxRows"'], title="Add row")
+                                                                            with html.Div(classes="catnip-grid-layout-stepper"):
+                                                                                html.Span("Cols", class_="text-caption catnip-grid-layout-stepper-label")
+                                                                                html.Button("-", classes="catnip-grid-layout-btn", click=ctrl.delete_grid_column, raw_attrs=['type="button"', ':disabled="gridCols <= gridMinCols"'], title="Delete active column or last column")
+                                                                                html.Span("{{ gridCols }}", class_="text-caption text-center")
+                                                                                html.Button("+", classes="catnip-grid-layout-btn", click=ctrl.add_grid_column, raw_attrs=['type="button"', ':disabled="gridCols >= gridMaxCols"'], title="Add column")
+                                                        with html.Div(classes="catnip-settings-section"):
+                                                            html.Div("Scalar plots", classes="catnip-settings-section-title")
+                                                            with html.Div(classes="catnip-settings-row"):
+                                                                html.Span("Create curves", class_="text-caption")
+                                                                with html.Select(
+                                                                    v_model=("scalarPlotPolicy",),
+                                                                    classes="catnip-scalar-plot-policy",
+                                                                    title="Generated scalar plot behavior",
+                                                                ):
+                                                                    html.Option("Ask", value="ask")
+                                                                    html.Option("Generate", value="always")
+                                                                    html.Option("Never", value="never")
                                 with vuetify.Template(v_if="scalarPlotStatus"):
                                     html.Div("{{ scalarPlotStatus }}", class_="text-caption mb-2", style="color:#8a4b00;")
                                 with html.Div(
                                     style=(
                                         "('display:grid;'"
-                                        " + 'grid-template-columns:repeat(' + gridCols + ', ' + Number(gridCellSize || 300) + 'px);'"
+                                        " + ((gridSizingMode === 'fit')"
+                                        " ? ('grid-template-columns:repeat(' + gridCols + ', minmax(' + Number(gridFitMinCellSize || 180) + 'px, 1fr));'"
+                                        " + 'grid-template-rows:repeat(' + gridRows + ', minmax(' + (Number(gridFitMinCellSize || 180) + 32) + 'px, 1fr));'"
+                                        " + 'justify-content:stretch;'"
+                                        " + 'align-content:stretch;')"
+                                        " : ('grid-template-columns:repeat(' + gridCols + ', ' + Number(gridCellSize || 300) + 'px);'"
                                         " + 'grid-template-rows:repeat(' + gridRows + ', ' + (Number(gridCellSize || 300) + 32) + 'px);'"
+                                        " + 'justify-content:center;'"
+                                        " + 'align-content:start;'))"
                                         " + 'flex:1 1 auto;'"
                                         " + 'min-height:0;'"
                                         " + 'overflow:auto;'"
                                         " + 'width:100%;'"
                                         " + 'box-sizing:border-box;'"
                                         " + 'margin:4px 0 0 0;'"
-                                        " + 'justify-content:center;'"
-                                        " + 'align-content:start;'"
                                         " + 'border:1px solid #cfcfcf;')",
                                     ),
                                 ):
@@ -2340,10 +2436,13 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                 ':draggable="!!(tile && tile.variable_name)"',
                                             ],
                                             style=(
-                                                "('width:' + Number(gridCellSize || 300) + 'px; height:' + (Number(gridCellSize || 300) + 32) + 'px; overflow:hidden; cursor:pointer; display:flex; flex-direction:column; position:relative; box-sizing:border-box; border-left:1px solid #cfcfcf; border-top:1px solid #cfcfcf;'"
+                                                "((gridSizingMode === 'fit')"
+                                                " ? ('width:100%; height:100%; min-width:' + Number(gridFitMinCellSize || 180) + 'px; min-height:' + (Number(gridFitMinCellSize || 180) + 32) + 'px;')"
+                                                " : ('width:' + Number(gridCellSize || 300) + 'px; height:' + (Number(gridCellSize || 300) + 32) + 'px;'))"
+                                                " + 'overflow:hidden; cursor:pointer; display:flex; flex-direction:column; position:relative; box-sizing:border-box; border-left:1px solid #cfcfcf; border-top:1px solid #cfcfcf;'"
                                                 " + (((i % gridCols) === (gridCols - 1)) ? 'border-right:1px solid #cfcfcf;' : '')"
                                                 " + ((i >= ((gridRows - 1) * gridCols)) ? 'border-bottom:1px solid #cfcfcf;' : '')"
-                                                " + ((activeGridCell === i) ? 'background:#e7f0ff; outline:3px solid #0d47a1; outline-offset:-3px; z-index:2;' : ''))",
+                                                " + ((activeGridCell === i) ? 'background:#e7f0ff; outline:3px solid #0d47a1; outline-offset:-3px; z-index:2;' : '')",
                                             ),
                                         ):
                                             with vuetify.Template(v_if="tile && tile.variable_name"):
@@ -2384,11 +2483,7 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                     )
 
                                                 with html.Div(
-                                                    style=(
-                                                        "('width:' + Number(gridCellSize || 300) + 'px;'"
-                                                        " + 'height:' + Number(gridCellSize || 300) + 'px;'"
-                                                        " + 'background:#111; position:relative;')",
-                                                    ),
+                                                    style="width:100%; flex:1 1 auto; min-height:0; background:#111; position:relative; overflow:hidden;",
                                                 ):
                                                     with vuetify.Template(v_if="tile.media_type === 'plot1d'"):
                                                         html.Div(
@@ -2468,13 +2563,13 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                                 "{{ tile.note ? tile.note : 'No movie src' }}",
                                                                 class_="text-caption",
                                                                 style=(
-                                                                    "('height:' + Number(gridCellSize || 300) + 'px;"
                                                                     "display:flex;"
+                                                                    "height:100%;"
                                                                     "align-items:center;"
                                                                     "justify-content:center;"
                                                                     "text-align:center;"
                                                                     "padding:8px;"
-                                                                    "color:#ddd;')"
+                                                                    "color:#ddd;"
                                                                 ),
                                                             )
                                             with vuetify.Template(v_if="!(tile && tile.variable_name)"):

@@ -108,9 +108,12 @@ def init_state(state, db) -> None:
     state.gridMinCols = 1
     state.gridMaxRows = 8
     state.gridMaxCols = 8
+    state.gridSizingMode = "static"
     state.gridCellSize = 300
-    state.gridMinCellSize = 160
-    state.gridMaxCellSize = 520
+    state.gridMinCellSize = 80
+    state.gridMaxCellSize = 5000
+    state.gridFitMinCellSize = 180
+    state.gridMaxFitMinCellSize = 5000
     state.gridCells = [
         {
             "variable_name": "",
