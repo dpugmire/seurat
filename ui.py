@@ -687,6 +687,15 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
           hoverLine.setAttribute("opacity", "0.75");
           hoverGroup.appendChild(hoverLine);
 
+          const hoverYLine = createSvgNode("line");
+          hoverYLine.setAttribute("x1", String(pad.left));
+          hoverYLine.setAttribute("x2", String(pad.left + plotW));
+          hoverYLine.setAttribute("stroke", "#4a4a4a");
+          hoverYLine.setAttribute("stroke-width", "1");
+          hoverYLine.setAttribute("stroke-dasharray", "3 3");
+          hoverYLine.setAttribute("opacity", "0.75");
+          hoverGroup.appendChild(hoverYLine);
+
           const hoverPoint = createSvgNode("circle");
           hoverPoint.setAttribute("r", "4");
           hoverPoint.setAttribute("fill", "#ffffff");
@@ -712,6 +721,7 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
             hoverSeries,
             hoverGroup,
             hoverLine,
+            hoverYLine,
             hoverPoint,
             hoverTip,
           };
@@ -865,6 +875,10 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
 
           meta.hoverLine.setAttribute("x1", String(point.px));
           meta.hoverLine.setAttribute("x2", String(point.px));
+          if (meta.hoverYLine) {
+            meta.hoverYLine.setAttribute("y1", String(point.py));
+            meta.hoverYLine.setAttribute("y2", String(point.py));
+          }
           meta.hoverPoint.setAttribute("cx", String(point.px));
           meta.hoverPoint.setAttribute("cy", String(point.py));
           meta.hoverPoint.setAttribute("stroke", point.color || "#1565c0");
