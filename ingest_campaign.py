@@ -1066,7 +1066,7 @@ def parse_campaign(
                 }
 
                 if visualization_api_entry is not None:
-                    # Preserve the raw API metadata in Mongo so downstream UI or
+                    # Preserve the raw API metadata so downstream UI or
                     # debugging code can inspect the original sequence/item
                     # relationship without reopening the ACA SQLite database.
                     base_document.update(

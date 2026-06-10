@@ -1,12 +1,15 @@
 # Seurat
 
 This is a small Trame (Vue3) application for viewing ADIOS campaign data.
-On startup, it reads a `.aca` campaign file. It puts the data into a Mongo DB and provides a UI to browse variables, view min/max summaries, filter with a simple query language, and preview image sequences as short videos.
+On startup, it reads a `.aca` campaign file into a Seurat SQLite sidecar DB and
+provides a UI to browse variables, view min/max summaries, filter with a simple
+query language, and preview image sequences as short videos.
 
 High-level structure:
 
-- `app.py`: entrypoint; connects to Mongo, boots Trame, wires controllers/UI.
-- `ingest_campaign.py`: reads a `.aca` file via ADIOS2 and writes documents to Mongo.
+- `app.py`: entrypoint; opens the SQLite sidecar, boots Trame, wires controllers/UI.
+- `ingest_campaign.py`: reads a `.aca` file via ADIOS2 and writes documents to the sidecar.
+- `sqlite_store.py`: lightweight SQLite collection adapter used by the viewer.
 - `db.py`: data access helpers for summaries and movie tiles.
 - `controllers.py`: Trame callbacks (querying, selection, ingest-on-start).
 - `ui.py`: Vuetify3 UI layout.
@@ -15,8 +18,7 @@ High-level structure:
 
 Requirements (at minimum):
 
-- MongoDB running locally (or set `MONGO_URI`).
-- Python deps: `pymongo`, `trame`, `trame-vuetify`, `adios2`, `numpy`, `Pillow`.
+- Python deps: `trame`, `trame-vuetify`, `adios2`, `numpy`, `Pillow`.
 - Optional for schema-driven image associations: `pyyaml`.
 - `ffmpeg` available on PATH for movie preview tiles.
 
@@ -29,14 +31,18 @@ python -m pip install -e ".[schema]"
 Example:
 
 ```bash
-export MONGO_URI="mongodb://localhost:27017"
-export MONGO_DB="catnip_campaigns"
-export MONGO_COLLECTION="campaign_entries"
-
 python app.py campaign.aca
 
 # Optional: pass image association schema text/YAML
 python app.py campaign.aca --image-association-schema image_variable_map.yaml
+```
+
+By default, Seurat stores its viewer sidecar DB under `~/.cache/seurat` using a
+filename derived from the resolved campaign path. Override the location with:
+
+```bash
+export SEURAT_CACHE_DIR=/path/to/cache-dir
+export SEURAT_SQLITE_DB=/path/to/viewer-cache.sqlite
 ```
 
 Visualization association notes:
@@ -64,4 +70,6 @@ physical_to_logical:
       replace: "\\1"
 ```
 
-The app will drop and re-ingest the collection each time it starts.
+Phase 1 note: the app currently drops and re-ingests the sidecar each time it
+starts. The next phase should make the sidecar metadata-only and skip ingest
+when the ACA file is unchanged.

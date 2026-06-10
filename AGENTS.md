@@ -27,12 +27,11 @@ python -m pip install -e ".[schema]"
 The `schema` extra installs `PyYAML`, which is only needed for YAML image
 association schemas.
 
-## External Services And Tools
+## External Tools
 
-The app needs MongoDB and `ffmpeg` in addition to the Python packages.
+The app needs `ffmpeg` in addition to the Python packages.
 
-- MongoDB must be reachable through `MONGO_URI`; local default is
-  `mongodb://localhost:27017`.
+- Seurat uses a local SQLite sidecar DB for viewer state/cache data.
 - `ffmpeg` must be available on `PATH` for movie preview tiles.
 - ADIOS2 must be importable as Python package `adios2`.
 
@@ -40,33 +39,33 @@ Useful checks:
 
 ```bash
 command -v ffmpeg
-python -c "import adios2, numpy, pymongo, trame; from PIL import Image"
+python -c "import adios2, numpy, sqlite3, trame; from PIL import Image"
 ```
 
 On macOS with Homebrew, one possible local setup is:
 
 ```bash
-brew install ffmpeg mongodb-community
-brew services start mongodb-community
+brew install ffmpeg
 ```
-
-Use whatever MongoDB installation method is appropriate for the machine.
 
 ## Runtime Configuration
 
 The defaults are defined in `config.py`:
 
 ```bash
-export MONGO_URI="mongodb://localhost:27017"
-export MONGO_DB="catnip_campaigns"
-export MONGO_COLLECTION="campaign_entries"
+export SEURAT_CACHE_DIR="~/.cache/seurat"
+export SEURAT_SQLITE_DB=""
 export MOVIE_FPS="2"
 export MAX_MOVIE_FRAMES="240"
 ```
 
-Important: `app.py` drops and re-ingests the configured Mongo collection each
-time the server starts. Do not point `MONGO_COLLECTION` at data that should be
-preserved.
+`SEURAT_CACHE_DIR` controls the default sidecar DB directory. `SEURAT_SQLITE_DB`
+can point at a specific sidecar DB file or a directory where the generated
+sidecar DB should be stored.
+
+Phase 1 note: `app.py` still drops and re-ingests the Seurat sidecar each time
+the server starts. Do not point `SEURAT_SQLITE_DB` at data that should be
+preserved outside the viewer cache.
 
 ## Run The App
 
@@ -110,5 +109,5 @@ python -m py_compile app.py ingest_campaign.py db.py controllers.py ui.py
 python -m pip check
 ```
 
-If MongoDB, ADIOS2, or `ffmpeg` are unavailable in the environment, state that
-explicitly and report which verification was skipped.
+If ADIOS2 or `ffmpeg` are unavailable in the environment, state that explicitly
+and report which verification was skipped.
