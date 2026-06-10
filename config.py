@@ -1,8 +1,7 @@
 import os
 
-MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
-MONGO_DB = os.getenv("MONGO_DB", "catnip_campaigns")
-MONGO_COLLECTION = os.getenv("MONGO_COLLECTION", "campaign_entries")
+SEURAT_SQLITE_DB = os.getenv("SEURAT_SQLITE_DB", "")
+SEURAT_CACHE_DIR = os.getenv("SEURAT_CACHE_DIR", "~/.cache/seurat")
 
 CAMPAIGN_PATH = os.getenv("CAMPAIGN_PATH", "kh.aca")
 

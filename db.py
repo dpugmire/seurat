@@ -1,12 +1,12 @@
 import io
 import math
 import statistics
+from contextlib import ExitStack
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 from adios2 import FileReader
 from PIL import Image, ImageDraw, ImageFont
-from pymongo.errors import PyMongoError
 
 from media_utils import frames_to_mp4_bytes, mp4_bytes_to_data_uri, png_bytes_to_data_uri
 from query_parser import and_filter
@@ -14,6 +14,7 @@ from query_parser import and_filter
 
 GENERATED_SCALAR_PLOT_VIS = "generated_timeseries"
 GENERATED_SCALAR_PLOT_VERSION = 3
+_PNG_SIG = b"\x89PNG\r\n\x1a\n"
 
 
 def to_float(value: Any) -> Optional[float]:
@@ -36,6 +37,47 @@ def valid_extrema(fmin: Optional[float], fmax: Optional[float]) -> Tuple[Optiona
     if fmin > fmax:
         return None, None
     return fmin, fmax
+
+
+def adios_image_to_png_bytes(img: Any) -> bytes:
+    """
+    Convert an ADIOS image variable payload to PNG bytes.
+
+    hpc-campaign image entries may already be encoded PNG byte arrays, or they
+    may be pixel arrays. The viewer keeps the sidecar metadata-only and performs
+    this conversion only for frames that are actually displayed.
+    """
+    if img is None:
+        raise ValueError("img is None")
+
+    arr = np.asarray(img)
+    if arr.ndim == 1:
+        if arr.dtype != np.uint8:
+            arr = arr.astype(np.uint8, copy=False)
+        data = arr.tobytes()
+        if not data.startswith(_PNG_SIG):
+            raise ValueError(
+                f"1D image payload does not look like PNG bytes. "
+                f"len={len(data)} first8={data[:8]!r}"
+            )
+        return data
+
+    if arr.dtype != np.uint8:
+        arr = np.clip(arr, 0, 255).astype(np.uint8)
+
+    if arr.ndim == 2:
+        mode = "L"
+    elif arr.ndim == 3 and arr.shape[2] == 3:
+        mode = "RGB"
+    elif arr.ndim == 3 and arr.shape[2] == 4:
+        mode = "RGBA"
+    else:
+        raise ValueError(f"Unexpected image array shape: {arr.shape}, dtype={arr.dtype}")
+
+    pil = Image.fromarray(arr, mode=mode)
+    buf = io.BytesIO()
+    pil.save(buf, format="PNG")
+    return buf.getvalue()
 
 
 class CampaignDb:
@@ -237,7 +279,7 @@ class CampaignDb:
 
             variables.sort(key=lambda item: (item["name"].lower(), item["label"].lower(), item["id"]))
             return variables
-        except PyMongoError as e:
+        except Exception as e:
             self.last_error = f"{type(e).__name__}: {e}"
             self.ok = False
             return []
@@ -348,7 +390,7 @@ class CampaignDb:
             names = [n for n in names if isinstance(n, str) and n]
             names.sort()
             return names
-        except PyMongoError as e:
+        except Exception as e:
             self.last_error = f"{type(e).__name__}: {e}"
             self.ok = False
             return []
@@ -383,7 +425,7 @@ class CampaignDb:
 
         try:
             doc = self.collection.find_one(query, proj, sort=[("source_dataset", 1), ("_id", 1)])
-        except PyMongoError as e:
+        except Exception as e:
             self.last_error = f"{type(e).__name__}: {e}"
             self.ok = False
             return {}
@@ -987,7 +1029,13 @@ class CampaignDb:
 
         query = and_filter(base_query, extra_filter)
 
-        proj = {"_id": 1, "image_bytes": 1, "frame_index": 1}
+        proj = {
+            "_id": 1,
+            "campaign_path": 1,
+            "variable_path": 1,
+            "image_bytes": 1,
+            "frame_index": 1,
+        }
 
         try:
             total = int(self.collection.count_documents(query))
@@ -996,13 +1044,35 @@ class CampaignDb:
                 .sort([("frame_index", 1), ("_id", 1)])
                 .limit(int(limit_frames))
             )
+            docs = list(cursor)
 
             frames: List[bytes] = []
-            for doc in cursor:
-                img = doc.get("image_bytes", None)
-                if img:
+            with ExitStack() as stack:
+                readers: Dict[str, Any] = {}
+                for doc in docs:
+                    img = doc.get("image_bytes", None)
+                    if img:
+                        try:
+                            frames.append(bytes(img))
+                        except Exception:
+                            continue
+                        continue
+
+                    campaign_path = str(
+                        doc.get("campaign_path", "")
+                        or getattr(self.collection, "campaign_path", "")
+                        or ""
+                    ).strip()
+                    variable_path = str(doc.get("variable_path", "") or "").strip()
+                    if not campaign_path or not variable_path:
+                        continue
+
                     try:
-                        frames.append(bytes(img))
+                        reader = readers.get(campaign_path)
+                        if reader is None:
+                            reader = stack.enter_context(FileReader(campaign_path))
+                            readers[campaign_path] = reader
+                        frames.append(adios_image_to_png_bytes(reader.read(variable_path)))
                     except Exception:
                         continue
 
