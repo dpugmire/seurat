@@ -248,6 +248,11 @@ def attach_controllers(
             "media_type": "",
             "plot": {},
             "plot_settings": {},
+            "grid_row": 1,
+            "grid_col": 1,
+            "row_span": 1,
+            "col_span": 1,
+            "grid_hidden": False,
             "status": "empty",
             "note": "",
         }
@@ -700,6 +705,13 @@ def attach_controllers(
             ivalue = default
         return max(minimum, min(maximum, ivalue))
 
+    GRID_LAYOUT_FIELDS = ("grid_row", "grid_col", "row_span", "col_span", "grid_hidden")
+
+    def normalize_grid_layout_mode() -> str:
+        mode = str(getattr(state, "gridLayoutMode", "uniform") or "uniform").strip().lower()
+        state.gridLayoutMode = "spanning" if mode == "spanning" else "uniform"
+        return state.gridLayoutMode
+
     def grid_dimensions() -> Tuple[int, int]:
         rows = clamp_int(getattr(state, "gridRows", 3), 3, GRID_MIN_ROWS, GRID_MAX_ROWS)
         cols = clamp_int(getattr(state, "gridCols", 3), 3, GRID_MIN_COLS, GRID_MAX_COLS)
@@ -710,6 +722,126 @@ def attach_controllers(
         state.gridMaxRows = GRID_MAX_ROWS
         state.gridMaxCols = GRID_MAX_COLS
         return rows, cols
+
+    def default_grid_geometry(index: int, cols: int) -> Dict[str, Any]:
+        safe_cols = max(1, int(cols or 1))
+        return {
+            "grid_row": (index // safe_cols) + 1,
+            "grid_col": (index % safe_cols) + 1,
+            "row_span": 1,
+            "col_span": 1,
+            "grid_hidden": False,
+        }
+
+    def merge_grid_geometry(cell: Dict[str, Any], index: int, rows: int, cols: int) -> Dict[str, Any]:
+        base = dict(cell or {})
+        defaults = default_grid_geometry(index, cols)
+        row = clamp_int(base.get("grid_row", defaults["grid_row"]), defaults["grid_row"], 1, rows)
+        col = clamp_int(base.get("grid_col", defaults["grid_col"]), defaults["grid_col"], 1, cols)
+        base["grid_row"] = row
+        base["grid_col"] = col
+        base["row_span"] = clamp_int(base.get("row_span", 1), 1, 1, max(1, rows - row + 1))
+        base["col_span"] = clamp_int(base.get("col_span", 1), 1, 1, max(1, cols - col + 1))
+        base["grid_hidden"] = bool(base.get("grid_hidden", False))
+        return base
+
+    def cell_has_content(cell: Dict[str, Any]) -> bool:
+        if str(cell.get("variable_id", "") or cell.get("variable_name", "") or "").strip():
+            return True
+        if str(cell.get("src", "") or cell.get("media_type", "") or "").strip():
+            return True
+        if cell.get("plot"):
+            return True
+        return str(cell.get("status", "") or "") not in {"", "empty"}
+
+    def preserve_grid_geometry(cell: Dict[str, Any], existing: Dict[str, Any]) -> Dict[str, Any]:
+        merged = dict(cell or {})
+        if isinstance(existing, dict):
+            for field in GRID_LAYOUT_FIELDS:
+                if field in existing:
+                    merged[field] = existing[field]
+        return merged
+
+    def assign_cell(cells: List[Dict[str, Any]], idx: int, cell: Dict[str, Any]) -> None:
+        cells[idx] = preserve_grid_geometry(cell, cells[idx] if 0 <= idx < len(cells) else {})
+
+    def empty_grid_cell_like(existing: Dict[str, Any]) -> Dict[str, Any]:
+        return preserve_grid_geometry(empty_grid_cell(), existing)
+
+    def area_slots(row: int, col: int, row_span: int, col_span: int, cols: int) -> List[int]:
+        return [
+            (r - 1) * cols + (c - 1)
+            for r in range(row, row + row_span)
+            for c in range(col, col + col_span)
+        ]
+
+    def empty_cell_at(index: int, cols: int, hidden: bool = False) -> Dict[str, Any]:
+        cell = empty_grid_cell()
+        cell.update(default_grid_geometry(index, cols))
+        cell["grid_hidden"] = bool(hidden)
+        return cell
+
+    def rebuild_spanning_cells(raw_cells: List[Dict[str, Any]], rows: int, cols: int) -> List[Dict[str, Any]]:
+        count = rows * cols
+        merged: List[Dict[str, Any]] = []
+        for i, item in enumerate(raw_cells or []):
+            base = empty_grid_cell()
+            if isinstance(item, dict):
+                base.update(item)
+            merged.append(merge_grid_geometry(base, i, rows, cols))
+        while len(merged) < count:
+            merged.append(empty_cell_at(len(merged), cols))
+
+        cells = [empty_cell_at(i, cols) for i in range(count)]
+        occupied: set[int] = set()
+
+        def first_open_area(row_span: int, col_span: int) -> Optional[Tuple[int, int]]:
+            for row in range(1, rows - row_span + 2):
+                for col in range(1, cols - col_span + 2):
+                    slots = area_slots(row, col, row_span, col_span, cols)
+                    if all(slot not in occupied for slot in slots):
+                        return row, col
+            return None
+
+        def place(cell: Dict[str, Any], row: int, col: int, row_span: int, col_span: int) -> None:
+            anchor = (row - 1) * cols + (col - 1)
+            item = dict(cell or {})
+            item["grid_row"] = row
+            item["grid_col"] = col
+            item["row_span"] = row_span
+            item["col_span"] = col_span
+            item["grid_hidden"] = False
+            cells[anchor] = item
+            for slot in area_slots(row, col, row_span, col_span, cols):
+                occupied.add(slot)
+                if slot != anchor:
+                    cells[slot] = empty_cell_at(slot, cols, hidden=True)
+
+        anchors = [
+            cell
+            for cell in merged
+            if not bool(cell.get("grid_hidden", False))
+            and (
+                cell_has_content(cell)
+                or int(cell.get("row_span", 1) or 1) > 1
+                or int(cell.get("col_span", 1) or 1) > 1
+            )
+        ]
+
+        for cell in anchors:
+            row = clamp_int(cell.get("grid_row", 1), 1, 1, rows)
+            col = clamp_int(cell.get("grid_col", 1), 1, 1, cols)
+            row_span = clamp_int(cell.get("row_span", 1), 1, 1, max(1, rows - row + 1))
+            col_span = clamp_int(cell.get("col_span", 1), 1, 1, max(1, cols - col + 1))
+            slots = area_slots(row, col, row_span, col_span, cols)
+            if any(slot in occupied for slot in slots):
+                open_area = first_open_area(row_span, col_span)
+                if open_area is None:
+                    continue
+                row, col = open_area
+            place(cell, row, col, row_span, col_span)
+
+        return cells
 
     def normalize_grid_sizing() -> None:
         mode = str(getattr(state, "gridSizingMode", "static") or "static").strip().lower()
@@ -756,15 +888,23 @@ def attach_controllers(
             rows, cols = grid_dimensions()
 
         count = rows * cols
-        items = list(raw_cells or [])[:count]
+        mode = normalize_grid_layout_mode()
+        raw_items = list(raw_cells or [])
+        items = raw_items if mode == "spanning" else raw_items[:count]
         cells: List[Dict[str, Any]] = []
-        for item in items:
+        for i, item in enumerate(items):
             base = empty_grid_cell()
             if isinstance(item, dict):
                 base.update(item)
+            if mode == "uniform":
+                base.update(default_grid_geometry(i, cols))
+            else:
+                base = merge_grid_geometry(base, i, rows, cols)
             cells.append(base)
         while len(cells) < count:
-            cells.append(empty_grid_cell())
+            cells.append(empty_cell_at(len(cells), cols))
+        if mode == "spanning":
+            return rebuild_spanning_cells(cells, rows, cols)
         return cells
 
     def set_grid_layout(rows: int, cols: int, cells: List[Dict[str, Any]], active: int) -> None:
@@ -773,9 +913,17 @@ def attach_controllers(
         cells = normalize_grid_cells(cells, rows, cols)
         state.gridRows = rows
         state.gridCols = cols
-        state.gridCells = cells
+        state.gridCells = normalize_grid_cells(cells)
         state.activeGridCell = active if 0 <= active < rows * cols else -1
         clear_context_menu_state()
+
+    @ctrl.add("set_grid_layout_mode")
+    def set_grid_layout_mode(mode: str, **_):
+        state.gridLayoutMode = "spanning" if str(mode or "").strip().lower() == "spanning" else "uniform"
+        rows, cols = grid_dimensions()
+        active = active_grid_index(rows * cols)
+        state.gridCells = normalize_grid_cells(state.gridCells, rows, cols)
+        state.activeGridCell = active if 0 <= active < rows * cols else -1
 
     @ctrl.add("set_grid_cell_size")
     def set_grid_cell_size(size: int, **_):
@@ -803,6 +951,19 @@ def attach_controllers(
         new_rows = clamp_int(rows, old_rows, GRID_MIN_ROWS, GRID_MAX_ROWS)
         new_cols = clamp_int(cols, old_cols, GRID_MIN_COLS, GRID_MAX_COLS)
         if new_rows == old_rows and new_cols == old_cols:
+            return
+
+        if normalize_grid_layout_mode() == "spanning":
+            old_cells = normalize_grid_cells(state.gridCells, old_rows, old_cols)
+            active = active_grid_index(old_rows * old_cols)
+            new_active = -1
+            if active >= 0:
+                active_cell = old_cells[active]
+                row = clamp_int(active_cell.get("grid_row", 1), 1, 1, old_rows)
+                col = clamp_int(active_cell.get("grid_col", 1), 1, 1, old_cols)
+                if row <= new_rows and col <= new_cols:
+                    new_active = (row - 1) * new_cols + (col - 1)
+            set_grid_layout(new_rows, new_cols, old_cells, new_active)
             return
 
         old_cells = normalize_grid_cells(state.gridCells, old_rows, old_cols)
@@ -1010,15 +1171,19 @@ def attach_controllers(
             tile["visualization_name"] = str(tile.get("visualization_name", "") or GENERATED_SCALAR_PLOT_VIS)
             tile["selected_visualization"] = str(tile.get("selected_visualization", "") or GENERATED_SCALAR_PLOT_VIS)
             tile["visualization_options"] = [GENERATED_SCALAR_PLOT_VIS]
-            cells[idx] = tile
+            assign_cell(cells, idx, tile)
             state.scalarPlotStatus = ""
         else:
-            cells[idx] = no_visualization_grid_cell(
-                variable_id,
-                "Could not generate scalar plot for this source",
+            assign_cell(
+                cells,
+                idx,
+                no_visualization_grid_cell(
+                    variable_id,
+                    "Could not generate scalar plot for this source",
+                ),
             )
 
-        state.gridCells = cells
+        state.gridCells = normalize_grid_cells(cells)
         state.activeGridCell = idx
         if sync_selection:
             state.selectedVar = variable_id
@@ -1073,12 +1238,16 @@ def attach_controllers(
             tile["visualization_name"] = GENERATED_SCALAR_PLOT_VIS
             tile["selected_visualization"] = GENERATED_SCALAR_PLOT_VIS
             tile["visualization_options"] = [GENERATED_SCALAR_PLOT_VIS]
-            cells[idx] = tile
+            assign_cell(cells, idx, tile)
             state.scalarPlotStatus = ""
         else:
-            cells[idx] = no_visualization_grid_cell(
-                variable_id,
-                "Could not generate scalar plot for the selected sources",
+            assign_cell(
+                cells,
+                idx,
+                no_visualization_grid_cell(
+                    variable_id,
+                    "Could not generate scalar plot for the selected sources",
+                ),
             )
 
         state.gridCells = cells
@@ -1119,8 +1288,8 @@ def attach_controllers(
         if policy == "never":
             cells = normalize_grid_cells(state.gridCells)
             note = "No saved visualization; scalar plot generation is disabled"
-            cells[cell_index] = no_visualization_grid_cell(variable_id, note)
-            state.gridCells = cells
+            assign_cell(cells, cell_index, no_visualization_grid_cell(variable_id, note))
+            state.gridCells = normalize_grid_cells(cells)
             state.scalarPlotStatus = note
             return True
 
@@ -1154,7 +1323,7 @@ def attach_controllers(
         for c in cells:
             var_id = str(c.get("variable_id", "") or c.get("variable_name", "") or "").strip()
             if not var_id:
-                updated.append(empty_grid_cell())
+                updated.append(empty_grid_cell_like(c))
                 continue
 
             if str(c.get("visualization_name", "") or "") == GENERATED_SCALAR_PLOT_VIS:
@@ -1195,24 +1364,29 @@ def attach_controllers(
                     tile["visualization_options"] = [GENERATED_SCALAR_PLOT_VIS]
                     assign_plot_series_keys(tile, source_keys)
                     tile["plot_settings"] = normalize_plot_settings(tile, existing_plot_settings(c, var_id))
-                    updated.append(tile)
+                    updated.append(preserve_grid_geometry(tile, c))
                 except Exception as e:
                     err_cell = no_visualization_grid_cell(var_id, f"{type(e).__name__}: {e}")
-                    updated.append(err_cell)
+                    updated.append(preserve_grid_geometry(err_cell, c))
                 continue
 
             preferred_vis = str(c.get("selected_visualization", "") or "")
             try:
-                updated.append(build_grid_cell_for_variable(var_id, preferred_vis=preferred_vis, existing_cell=c))
+                updated.append(
+                    preserve_grid_geometry(
+                        build_grid_cell_for_variable(var_id, preferred_vis=preferred_vis, existing_cell=c),
+                        c,
+                    )
+                )
             except Exception as e:
                 err_cell = empty_grid_cell()
                 err_cell["variable_id"] = var_id
                 err_cell["variable_name"] = variable_label(var_id)
                 err_cell["status"] = "error"
                 err_cell["note"] = f"{type(e).__name__}: {e}"
-                updated.append(err_cell)
+                updated.append(preserve_grid_geometry(err_cell, c))
 
-        state.gridCells = updated
+        state.gridCells = normalize_grid_cells(updated)
 
         try:
             idx = int(state.activeGridCell)
@@ -1480,16 +1654,16 @@ def attach_controllers(
             return
 
         try:
-            cells[target] = build_grid_cell_for_variable(var, source_row=source_row or None)
+            assign_cell(cells, target, build_grid_cell_for_variable(var, source_row=source_row or None))
         except Exception as e:
             err_cell = empty_grid_cell()
             err_cell["variable_id"] = var
             err_cell["variable_name"] = variable_label(var)
             err_cell["status"] = "error"
             err_cell["note"] = f"{type(e).__name__}: {e}"
-            cells[target] = err_cell
+            assign_cell(cells, target, err_cell)
 
-        state.gridCells = cells
+        state.gridCells = normalize_grid_cells(cells)
         state.activeGridCell = target
         state.selectedVar = var
         state.draggedVar = var
@@ -1534,15 +1708,15 @@ def attach_controllers(
             return
 
         try:
-            cells[idx] = build_grid_cell_for_variable(selected, source_row=source_row or None)
+            assign_cell(cells, idx, build_grid_cell_for_variable(selected, source_row=source_row or None))
         except Exception as e:
             err_cell = empty_grid_cell()
             err_cell["variable_id"] = selected
             err_cell["variable_name"] = variable_label(selected)
             err_cell["status"] = "error"
             err_cell["note"] = f"{type(e).__name__}: {e}"
-            cells[idx] = err_cell
-        state.gridCells = cells
+            assign_cell(cells, idx, err_cell)
+        state.gridCells = normalize_grid_cells(cells)
 
     @ctrl.add("clear_grid_cell")
     def clear_grid_cell(cell_index: int, **_):
@@ -1554,8 +1728,8 @@ def attach_controllers(
             return
 
         cells = normalize_grid_cells(state.gridCells)
-        cells[idx] = empty_grid_cell()
-        state.gridCells = cells
+        assign_cell(cells, idx, empty_grid_cell())
+        state.gridCells = normalize_grid_cells(cells)
 
     @ctrl.add("move_grid_cell")
     def move_grid_cell(from_index: int, to_index: int, **_):
@@ -1575,9 +1749,9 @@ def attach_controllers(
             return
 
         # Move + overwrite: destination takes source tile, source is cleared.
-        cells[dst] = source
-        cells[src] = empty_grid_cell()
-        state.gridCells = cells
+        assign_cell(cells, dst, source)
+        assign_cell(cells, src, empty_grid_cell())
+        state.gridCells = normalize_grid_cells(cells)
         state.activeGridCell = dst
 
     @ctrl.trigger("move_grid_cell_trigger")
@@ -1592,9 +1766,107 @@ def attach_controllers(
 
         cells = normalize_grid_cells(state.gridCells, rows, cols)
         active = active_grid_index(rows * cols)
+        if normalize_grid_layout_mode() == "spanning":
+            set_grid_layout(rows + 1, cols, cells, active)
+            return
+
         new_cells = list(cells)
         new_cells.extend(empty_grid_cell() for _ in range(cols))
         set_grid_layout(rows + 1, cols, new_cells, active)
+
+    def active_after_spanning_axis_removal(
+        cells: List[Dict[str, Any]],
+        active: int,
+        rows: int,
+        cols: int,
+        remove_row: Optional[int] = None,
+        remove_col: Optional[int] = None,
+    ) -> int:
+        if active < 0 or active >= len(cells):
+            return -1
+        cell = dict(cells[active] or {})
+        if bool(cell.get("grid_hidden", False)):
+            return -1
+
+        row = clamp_int(cell.get("grid_row", 1), 1, 1, rows)
+        col = clamp_int(cell.get("grid_col", 1), 1, 1, cols)
+        row_span = clamp_int(cell.get("row_span", 1), 1, 1, max(1, rows - row + 1))
+        col_span = clamp_int(cell.get("col_span", 1), 1, 1, max(1, cols - col + 1))
+
+        if remove_row is not None:
+            removed = remove_row + 1
+            if row > removed:
+                row -= 1
+            elif row <= removed < row + row_span:
+                row_span -= 1
+                if row_span < 1:
+                    return -1
+
+        if remove_col is not None:
+            removed = remove_col + 1
+            if col > removed:
+                col -= 1
+            elif col <= removed < col + col_span:
+                col_span -= 1
+                if col_span < 1:
+                    return -1
+
+        new_cols = cols - 1 if remove_col is not None else cols
+        new_rows = rows - 1 if remove_row is not None else rows
+        if row < 1 or col < 1 or row > new_rows or col > new_cols:
+            return -1
+        return (row - 1) * new_cols + (col - 1)
+
+    def remove_spanning_axis(
+        cells: List[Dict[str, Any]],
+        rows: int,
+        cols: int,
+        remove_row: Optional[int] = None,
+        remove_col: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        new_rows = rows - 1 if remove_row is not None else rows
+        new_cols = cols - 1 if remove_col is not None else cols
+        adjusted: List[Dict[str, Any]] = []
+
+        for raw_cell in cells:
+            cell = dict(raw_cell or {})
+            if bool(cell.get("grid_hidden", False)):
+                continue
+
+            row = clamp_int(cell.get("grid_row", 1), 1, 1, rows)
+            col = clamp_int(cell.get("grid_col", 1), 1, 1, cols)
+            row_span = clamp_int(cell.get("row_span", 1), 1, 1, max(1, rows - row + 1))
+            col_span = clamp_int(cell.get("col_span", 1), 1, 1, max(1, cols - col + 1))
+
+            if remove_row is not None:
+                removed = remove_row + 1
+                if row > removed:
+                    row -= 1
+                elif row <= removed < row + row_span:
+                    row_span -= 1
+                    if row_span < 1:
+                        continue
+
+            if remove_col is not None:
+                removed = remove_col + 1
+                if col > removed:
+                    col -= 1
+                elif col <= removed < col + col_span:
+                    col_span -= 1
+                    if col_span < 1:
+                        continue
+
+            if row < 1 or col < 1 or row > new_rows or col > new_cols:
+                continue
+
+            cell["grid_row"] = row
+            cell["grid_col"] = col
+            cell["row_span"] = min(row_span, max(1, new_rows - row + 1))
+            cell["col_span"] = min(col_span, max(1, new_cols - col + 1))
+            cell["grid_hidden"] = False
+            adjusted.append(cell)
+
+        return rebuild_spanning_cells(adjusted, new_rows, new_cols)
 
     @ctrl.add("delete_grid_row")
     def delete_grid_row(**_):
@@ -1605,6 +1877,22 @@ def attach_controllers(
         cells = normalize_grid_cells(state.gridCells, rows, cols)
         active = active_grid_index(rows * cols)
         remove_row = (active // cols) if active >= 0 else rows - 1
+
+        if normalize_grid_layout_mode() == "spanning":
+            new_active = active_after_spanning_axis_removal(
+                cells,
+                active,
+                rows,
+                cols,
+                remove_row=remove_row,
+            )
+            set_grid_layout(
+                rows - 1,
+                cols,
+                remove_spanning_axis(cells, rows, cols, remove_row=remove_row),
+                new_active,
+            )
+            return
 
         new_cells: List[Dict[str, Any]] = []
         for row in range(rows):
@@ -1631,6 +1919,10 @@ def attach_controllers(
 
         cells = normalize_grid_cells(state.gridCells, rows, cols)
         active = active_grid_index(rows * cols)
+        if normalize_grid_layout_mode() == "spanning":
+            set_grid_layout(rows, cols + 1, cells, active)
+            return
+
         new_cells: List[Dict[str, Any]] = []
         for row in range(rows):
             start = row * cols
@@ -1655,6 +1947,22 @@ def attach_controllers(
         active = active_grid_index(rows * cols)
         remove_col = (active % cols) if active >= 0 else cols - 1
 
+        if normalize_grid_layout_mode() == "spanning":
+            new_active = active_after_spanning_axis_removal(
+                cells,
+                active,
+                rows,
+                cols,
+                remove_col=remove_col,
+            )
+            set_grid_layout(
+                rows,
+                cols - 1,
+                remove_spanning_axis(cells, rows, cols, remove_col=remove_col),
+                new_active,
+            )
+            return
+
         new_cells: List[Dict[str, Any]] = []
         for row in range(rows):
             start = row * cols
@@ -1671,6 +1979,139 @@ def attach_controllers(
                 new_active = active_row * (cols - 1) + new_col
 
         set_grid_layout(rows, cols - 1, new_cells, new_active)
+
+    def can_place_span(
+        cells: List[Dict[str, Any]],
+        idx: int,
+        row: int,
+        col: int,
+        row_span: int,
+        col_span: int,
+        rows: int,
+        cols: int,
+    ) -> bool:
+        if row < 1 or col < 1 or row_span < 1 or col_span < 1:
+            return False
+        if row + row_span - 1 > rows or col + col_span - 1 > cols:
+            return False
+
+        requested = set(area_slots(row, col, row_span, col_span, cols))
+        for other_idx, raw_cell in enumerate(cells):
+            if other_idx == idx:
+                continue
+            cell = dict(raw_cell or {})
+            if bool(cell.get("grid_hidden", False)):
+                continue
+            other_row = clamp_int(cell.get("grid_row", 1), 1, 1, rows)
+            other_col = clamp_int(cell.get("grid_col", 1), 1, 1, cols)
+            other_row_span = clamp_int(cell.get("row_span", 1), 1, 1, max(1, rows - other_row + 1))
+            other_col_span = clamp_int(cell.get("col_span", 1), 1, 1, max(1, cols - other_col + 1))
+            if not cell_has_content(cell) and other_row_span == 1 and other_col_span == 1:
+                continue
+            other_slots = set(area_slots(other_row, other_col, other_row_span, other_col_span, cols))
+            if requested.intersection(other_slots):
+                return False
+        return True
+
+    def update_grid_cell_span(
+        cell_index: int,
+        row_span: Optional[int] = None,
+        col_span: Optional[int] = None,
+    ) -> bool:
+        try:
+            idx = int(cell_index)
+        except Exception:
+            return False
+        if not is_valid_grid_index(idx):
+            return False
+        if normalize_grid_layout_mode() != "spanning":
+            return False
+
+        rows, cols = grid_dimensions()
+        cells = normalize_grid_cells(state.gridCells, rows, cols)
+        cell = dict(cells[idx] or {})
+        if bool(cell.get("grid_hidden", False)):
+            return False
+
+        row = clamp_int(cell.get("grid_row", 1), 1, 1, rows)
+        col = clamp_int(cell.get("grid_col", 1), 1, 1, cols)
+        new_row_span = clamp_int(
+            row_span if row_span is not None else cell.get("row_span", 1),
+            1,
+            1,
+            max(1, rows - row + 1),
+        )
+        new_col_span = clamp_int(
+            col_span if col_span is not None else cell.get("col_span", 1),
+            1,
+            1,
+            max(1, cols - col + 1),
+        )
+        if not can_place_span(cells, idx, row, col, new_row_span, new_col_span, rows, cols):
+            return False
+
+        cell["row_span"] = new_row_span
+        cell["col_span"] = new_col_span
+        cells[idx] = cell
+        state.gridCells = rebuild_spanning_cells(cells, rows, cols)
+        state.activeGridCell = idx
+        return True
+
+    @ctrl.add("span_grid_cell_right")
+    def span_grid_cell_right(cell_index: int, **_):
+        rows, cols = grid_dimensions()
+        cells = normalize_grid_cells(state.gridCells, rows, cols)
+        try:
+            idx = int(cell_index)
+        except Exception:
+            return
+        if not is_valid_grid_index(idx):
+            return
+        cell = dict(cells[idx] or {})
+        update_grid_cell_span(idx, col_span=clamp_int(cell.get("col_span", 1), 1, 1, cols) + 1)
+
+    @ctrl.add("span_grid_cell_down")
+    def span_grid_cell_down(cell_index: int, **_):
+        rows, cols = grid_dimensions()
+        cells = normalize_grid_cells(state.gridCells, rows, cols)
+        try:
+            idx = int(cell_index)
+        except Exception:
+            return
+        if not is_valid_grid_index(idx):
+            return
+        cell = dict(cells[idx] or {})
+        update_grid_cell_span(idx, row_span=clamp_int(cell.get("row_span", 1), 1, 1, rows) + 1)
+
+    @ctrl.add("shrink_grid_cell_width")
+    def shrink_grid_cell_width(cell_index: int, **_):
+        rows, cols = grid_dimensions()
+        cells = normalize_grid_cells(state.gridCells, rows, cols)
+        try:
+            idx = int(cell_index)
+        except Exception:
+            return
+        if not is_valid_grid_index(idx):
+            return
+        cell = dict(cells[idx] or {})
+        update_grid_cell_span(idx, col_span=clamp_int(cell.get("col_span", 1), 1, 1, cols) - 1)
+
+    @ctrl.add("shrink_grid_cell_height")
+    def shrink_grid_cell_height(cell_index: int, **_):
+        rows, cols = grid_dimensions()
+        cells = normalize_grid_cells(state.gridCells, rows, cols)
+        try:
+            idx = int(cell_index)
+        except Exception:
+            return
+        if not is_valid_grid_index(idx):
+            return
+        cell = dict(cells[idx] or {})
+        update_grid_cell_span(idx, row_span=clamp_int(cell.get("row_span", 1), 1, 1, rows) - 1)
+
+    @ctrl.add("reset_grid_cell_span")
+    def reset_grid_cell_span(cell_index: int, **_):
+        update_grid_cell_span(cell_index, row_span=1, col_span=1)
 
     @ctrl.add("assign_var_to_grid_cell")
     def assign_var_to_grid_cell(cell_index: int, var_name: str, sync_selection: bool = True, **_):
@@ -1702,15 +2143,15 @@ def attach_controllers(
             return
 
         try:
-            cells[idx] = build_grid_cell_for_variable(var, source_row=source_row or None)
+            assign_cell(cells, idx, build_grid_cell_for_variable(var, source_row=source_row or None))
         except Exception as e:
             err_cell = empty_grid_cell()
             err_cell["variable_id"] = var
             err_cell["variable_name"] = variable_label(var)
             err_cell["status"] = "error"
             err_cell["note"] = f"{type(e).__name__}: {e}"
-            cells[idx] = err_cell
-        state.gridCells = cells
+            assign_cell(cells, idx, err_cell)
+        state.gridCells = normalize_grid_cells(cells)
         state.activeGridCell = idx
         if sync_selection:
             state.selectedVar = var
@@ -1743,16 +2184,16 @@ def attach_controllers(
         picked = str(picked or "")
 
         try:
-            cells[idx] = build_grid_cell_for_variable(var, preferred_vis=picked, existing_cell=cells[idx])
+            assign_cell(cells, idx, build_grid_cell_for_variable(var, preferred_vis=picked, existing_cell=cells[idx]))
         except Exception as e:
             err_cell = empty_grid_cell()
             err_cell["variable_id"] = var
             err_cell["variable_name"] = variable_label(var)
             err_cell["status"] = "error"
             err_cell["note"] = f"{type(e).__name__}: {e}"
-            cells[idx] = err_cell
+            assign_cell(cells, idx, err_cell)
 
-        state.gridCells = cells
+        state.gridCells = normalize_grid_cells(cells)
         state.activeGridCell = idx
         state.selectedVar = var
 
@@ -1871,6 +2312,48 @@ def attach_controllers(
             idx = -1
         if is_valid_grid_index(idx):
             set_active_grid_cell(idx, 0)
+        hide_context_menu()
+
+    def context_menu_cell_index() -> int:
+        try:
+            idx = int(state.contextMenuCellIndex)
+        except Exception:
+            return -1
+        return idx if is_valid_grid_index(idx) else -1
+
+    @ctrl.add("context_menu_cell_span_right")
+    def context_menu_cell_span_right(**_):
+        idx = context_menu_cell_index()
+        if idx >= 0:
+            span_grid_cell_right(idx)
+        hide_context_menu()
+
+    @ctrl.add("context_menu_cell_span_down")
+    def context_menu_cell_span_down(**_):
+        idx = context_menu_cell_index()
+        if idx >= 0:
+            span_grid_cell_down(idx)
+        hide_context_menu()
+
+    @ctrl.add("context_menu_cell_shrink_width")
+    def context_menu_cell_shrink_width(**_):
+        idx = context_menu_cell_index()
+        if idx >= 0:
+            shrink_grid_cell_width(idx)
+        hide_context_menu()
+
+    @ctrl.add("context_menu_cell_shrink_height")
+    def context_menu_cell_shrink_height(**_):
+        idx = context_menu_cell_index()
+        if idx >= 0:
+            shrink_grid_cell_height(idx)
+        hide_context_menu()
+
+    @ctrl.add("context_menu_cell_reset_span")
+    def context_menu_cell_reset_span(**_):
+        idx = context_menu_cell_index()
+        if idx >= 0:
+            reset_grid_cell_span(idx)
         hide_context_menu()
 
     @ctrl.add("context_menu_cell_sources")
@@ -2169,7 +2652,7 @@ def attach_controllers(
             },
         )
         cells[idx] = cell
-        state.gridCells = cells
+        state.gridCells = normalize_grid_cells(cells)
         state.activeGridCell = idx
         state.plotSettingsStatus = ""
         state.showPlotSettingsModal = False
@@ -2341,12 +2824,16 @@ def attach_controllers(
                         sync_selection=False,
                     )
                 else:
-                    cells[idx] = build_grid_cell_for_variable(
-                        var_id,
-                        preferred_vis=selected_vis,
-                        source_row=row,
+                    assign_cell(
+                        cells,
+                        idx,
+                        build_grid_cell_for_variable(
+                            var_id,
+                            preferred_vis=selected_vis,
+                            source_row=row,
+                        ),
                     )
-                    state.gridCells = cells
+                    state.gridCells = normalize_grid_cells(cells)
 
         update_selected_var_panels(var_id, preferred_source_key=str(key or ""))
 

@@ -2064,6 +2064,34 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                   background: #ffebee;
                   color: #c62828;
                 }
+                #catnip-context-menu .menu-submenu {
+                  position: relative;
+                }
+                #catnip-context-menu .menu-submenu-trigger {
+                  display: flex;
+                  align-items: center;
+                  justify-content: space-between;
+                  gap: 16px;
+                }
+                #catnip-context-menu .menu-submenu-arrow {
+                  color: #666;
+                  font-size: 11px;
+                }
+                #catnip-context-menu .menu-submenu-panel {
+                  display: none;
+                  position: absolute;
+                  top: -5px;
+                  left: 100%;
+                  min-width: 150px;
+                  padding: 4px 0;
+                  background: #fff;
+                  border: 1px solid #c9c9c9;
+                  border-radius: 4px;
+                  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.2);
+                }
+                #catnip-context-menu .menu-submenu:hover .menu-submenu-panel {
+                  display: block;
+                }
                 #catnip-context-menu .menu-section {
                   padding: 6px 12px 4px;
                   font-size: 11px;
@@ -2264,6 +2292,29 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                         html.Div("Settings", classes="catnip-toolbar-popover-title")
                                                         with html.Div(classes="catnip-settings-section"):
                                                             html.Div("Layout", classes="catnip-settings-section-title")
+                                                            html.Div("Cell layout", classes="catnip-grid-sizing-section-label")
+                                                            with html.Div(classes="catnip-grid-sizing-mode"):
+                                                                html.Button(
+                                                                    "Uniform",
+                                                                    classes="catnip-grid-sizing-mode-btn",
+                                                                    click=(ctrl.set_grid_layout_mode, "['uniform']"),
+                                                                    raw_attrs=[
+                                                                        'type="button"',
+                                                                        ':class="{ active: gridLayoutMode !== \'spanning\' }"',
+                                                                    ],
+                                                                    title="Use one cell per grid slot",
+                                                                )
+                                                                html.Button(
+                                                                    "Spanning",
+                                                                    classes="catnip-grid-sizing-mode-btn",
+                                                                    click=(ctrl.set_grid_layout_mode, "['spanning']"),
+                                                                    raw_attrs=[
+                                                                        'type="button"',
+                                                                        ':class="{ active: gridLayoutMode === \'spanning\' }"',
+                                                                    ],
+                                                                    title="Allow cells to span multiple rows or columns",
+                                                                )
+                                                            html.Div("Size mode", classes="catnip-grid-sizing-section-label")
                                                             with html.Div(classes="catnip-grid-sizing-mode"):
                                                                 html.Button(
                                                                     "Static",
@@ -2436,13 +2487,20 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                 ':draggable="!!(tile && tile.variable_name)"',
                                             ],
                                             style=(
-                                                "((gridSizingMode === 'fit')"
+                                                "((gridLayoutMode === 'spanning')"
+                                                " ? ('grid-row:' + Number((tile && tile.grid_row) || (Math.floor(i / gridCols) + 1)) + ' / span ' + Number((tile && tile.row_span) || 1) + ';grid-column:' + Number((tile && tile.grid_col) || ((i % gridCols) + 1)) + ' / span ' + Number((tile && tile.col_span) || 1) + ';')"
+                                                " : '')"
+                                                " + ((gridLayoutMode === 'spanning')"
+                                                " ? 'width:100%; height:100%; min-width:0; min-height:0;'"
+                                                " : ((gridSizingMode === 'fit')"
                                                 " ? ('width:100%; height:100%; min-width:' + Number(gridFitMinCellSize || 180) + 'px; min-height:' + (Number(gridFitMinCellSize || 180) + 32) + 'px;')"
-                                                " : ('width:' + Number(gridCellSize || 300) + 'px; height:' + (Number(gridCellSize || 300) + 32) + 'px;'))"
-                                                " + 'overflow:hidden; cursor:pointer; display:flex; flex-direction:column; position:relative; box-sizing:border-box; border-left:1px solid #cfcfcf; border-top:1px solid #cfcfcf;'"
+                                                " : ('width:' + Number(gridCellSize || 300) + 'px; height:' + (Number(gridCellSize || 300) + 32) + 'px;')))"
+                                                " + 'overflow:hidden; cursor:pointer; display:flex; flex-direction:column; position:relative; box-sizing:border-box;'"
+                                                " + ((gridLayoutMode === 'spanning') ? 'border:1px solid #cfcfcf;' : ('border-left:1px solid #cfcfcf; border-top:1px solid #cfcfcf;'"
                                                 " + (((i % gridCols) === (gridCols - 1)) ? 'border-right:1px solid #cfcfcf;' : '')"
-                                                " + ((i >= ((gridRows - 1) * gridCols)) ? 'border-bottom:1px solid #cfcfcf;' : '')"
-                                                " + ((activeGridCell === i) ? 'background:#e7f0ff; outline:3px solid #0d47a1; outline-offset:-3px; z-index:2;' : '')",
+                                                " + ((i >= ((gridRows - 1) * gridCols)) ? 'border-bottom:1px solid #cfcfcf;' : '')))"
+                                                " + ((activeGridCell === i) ? 'background:#e7f0ff; outline:3px solid #0d47a1; outline-offset:-3px; z-index:2;' : '')"
+                                                " + ((gridLayoutMode === 'spanning' && tile && tile.grid_hidden) ? 'display:none;' : '')",
                                             ),
                                         ):
                                             with vuetify.Template(v_if="tile && tile.variable_name"):
@@ -3137,6 +3195,17 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                 with html.Div(v_if="contextMenuKind === 'cell'"):
                     html.Div("Select Cell", classes="menu-item", click=ctrl.context_menu_cell_select)
                     html.Div("Clear Cell", classes="menu-item danger", click=ctrl.context_menu_cell_clear)
+                    with vuetify.Template(v_if="gridLayoutMode === 'spanning'"):
+                        with html.Div(classes="menu-submenu"):
+                            with html.Div(classes="menu-item menu-submenu-trigger"):
+                                html.Span("Span")
+                                html.Span("›", classes="menu-submenu-arrow")
+                            with html.Div(classes="menu-submenu-panel"):
+                                html.Div("Span right", classes="menu-item", click=ctrl.context_menu_cell_span_right)
+                                html.Div("Span down", classes="menu-item", click=ctrl.context_menu_cell_span_down)
+                                html.Div("Shrink width", classes="menu-item", click=ctrl.context_menu_cell_shrink_width)
+                                html.Div("Shrink height", classes="menu-item", click=ctrl.context_menu_cell_shrink_height)
+                                html.Div("Reset span", classes="menu-item", click=ctrl.context_menu_cell_reset_span)
                     with vuetify.Template(v_if="contextMenuCellHasVariable && !contextMenuCellCanPlotSettings"):
                         html.Div("Sources...", classes="menu-item", click=ctrl.context_menu_cell_sources)
                     with vuetify.Template(v_if="contextMenuCellCanAddSource"):

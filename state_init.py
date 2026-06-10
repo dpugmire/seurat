@@ -108,6 +108,7 @@ def init_state(state, db) -> None:
     state.gridMinCols = 1
     state.gridMaxRows = 8
     state.gridMaxCols = 8
+    state.gridLayoutMode = "uniform"
     state.gridSizingMode = "static"
     state.gridCellSize = 300
     state.gridMinCellSize = 80
@@ -133,6 +134,11 @@ def init_state(state, db) -> None:
             "media_type": "",
             "plot": {},
             "plot_settings": {},
+            "grid_row": 1,
+            "grid_col": 1,
+            "row_span": 1,
+            "col_span": 1,
+            "grid_hidden": False,
             "status": "empty",
             "note": "",
         }
