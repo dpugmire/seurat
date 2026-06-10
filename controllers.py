@@ -642,6 +642,13 @@ def attach_controllers(
             )
         return rows
 
+    def is_generated_plot1d_cell(cell: Dict[str, Any]) -> bool:
+        if str(cell.get("media_type", "") or "") != "plot1d":
+            return False
+        selected_vis = str(cell.get("selected_visualization", "") or cell.get("visualization_name", "") or "").strip()
+        visualization_name = str(cell.get("visualization_name", "") or selected_vis).strip()
+        return selected_vis == GENERATED_SCALAR_PLOT_VIS or visualization_name == GENERATED_SCALAR_PLOT_VIS
+
     def axis_has_positive_data(tile: Dict[str, Any], axis: str) -> bool:
         field = "x" if axis == "x" else "y"
         for item in plot_series(tile):
@@ -2258,12 +2265,9 @@ def attach_controllers(
             if vis and vis not in vis_opts:
                 vis_opts.append(vis)
         selected_vis = str(cell.get("selected_visualization", "") or cell.get("visualization_name", "") or "").strip()
-        visualization_name = str(cell.get("visualization_name", "") or selected_vis).strip()
         if selected_vis and selected_vis not in vis_opts:
             vis_opts.append(selected_vis)
-        can_add_source = has_var and (
-            visualization_name == GENERATED_SCALAR_PLOT_VIS or selected_vis == GENERATED_SCALAR_PLOT_VIS
-        )
+        can_add_source = has_var and is_generated_plot1d_cell(cell)
         can_plot_settings = has_var and str(cell.get("media_type", "") or "") == "plot1d"
 
         state.contextMenuKind = "cell"
@@ -2395,9 +2399,7 @@ def attach_controllers(
         cells = normalize_grid_cells(state.gridCells)
         cell = dict(cells[idx] or {})
         var = str(cell.get("variable_id", "") or cell.get("variable_name", "") or "").strip()
-        selected_vis = str(cell.get("selected_visualization", "") or cell.get("visualization_name", "") or "").strip()
-        visualization_name = str(cell.get("visualization_name", "") or selected_vis).strip()
-        if not var or (selected_vis != GENERATED_SCALAR_PLOT_VIS and visualization_name != GENERATED_SCALAR_PLOT_VIS):
+        if not var or not is_generated_plot1d_cell(cell):
             hide_context_menu()
             return
 
@@ -2662,13 +2664,23 @@ def attach_controllers(
         opening = not bool(state.showSourcesModal)
         state.showSourcesModal = opening
         if opening:
-            state.sourceDialogMode = "single"
-            state.sourceDialogInitialSelectedSourceKeys = normalize_source_keys(state.selectedSourceKeys or [])
             try:
                 idx = int(state.activeGridCell)
             except Exception:
                 idx = -1
             state.sourceDialogCellIndex = idx if is_valid_grid_index(idx) else -1
+            cells = normalize_grid_cells(state.gridCells)
+            cell = dict(cells[idx] or {}) if is_valid_grid_index(idx) else {}
+            cell_var = str(cell.get("variable_id", "") or cell.get("variable_name", "") or "").strip()
+            details_var = str(state.detailsSelectedVarId or state.selectedVar or "").strip()
+            if cell_var and cell_var == details_var and is_generated_plot1d_cell(cell):
+                source_keys = source_keys_from_cell(cell)
+                state.sourceDialogMode = "add"
+                update_selected_var_panels(cell_var, preferred_source_keys=source_keys)
+                state.sourceDialogInitialSelectedSourceKeys = normalize_source_keys(state.selectedSourceKeys or source_keys)
+            else:
+                state.sourceDialogMode = "single"
+                state.sourceDialogInitialSelectedSourceKeys = normalize_source_keys(state.selectedSourceKeys or [])
 
     @ctrl.add("cancel_source_dialog")
     def cancel_source_dialog(**_):

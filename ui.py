@@ -1696,8 +1696,13 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                   padding: 0 8px;
                 }
                 .catnip-vcr-btn {
-                  width: 28px;
+                  width: 34px;
+                  min-width: 34px;
                   padding: 0;
+                  font-family: Menlo, Consolas, monospace;
+                  font-weight: 600;
+                  letter-spacing: 0;
+                  white-space: nowrap;
                 }
                 .catnip-vcr-btn:hover,
                 .catnip-vcr-bar button[data-vcr-action]:hover,
