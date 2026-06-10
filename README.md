@@ -22,6 +22,10 @@ Requirements (at minimum):
 - Optional for schema-driven image associations: `pyyaml`.
 - `ffmpeg` available on PATH for movie preview tiles.
 
+Image sequence bytes are loaded lazily from the ACA file when a preview tile is
+built. The SQLite sidecar stores frame metadata and ADIOS variable paths, not
+copied image blobs.
+
 Install the Python dependencies from this repo:
 
 ```bash
@@ -70,6 +74,6 @@ physical_to_logical:
       replace: "\\1"
 ```
 
-Phase 1 note: the app currently drops and re-ingests the sidecar each time it
-starts. The next phase should make the sidecar metadata-only and skip ingest
-when the ACA file is unchanged.
+Current cache note: the app currently drops and re-ingests the sidecar each time
+it starts. The sidecar is metadata-only for image frames, but the next cache
+phase should skip ingest when the ACA file is unchanged.

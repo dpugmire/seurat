@@ -34,6 +34,9 @@ The app needs `ffmpeg` in addition to the Python packages.
 - Seurat uses a local SQLite sidecar DB for viewer state/cache data.
 - `ffmpeg` must be available on `PATH` for movie preview tiles.
 - ADIOS2 must be importable as Python package `adios2`.
+- Image sequence bytes are loaded lazily from the ACA file when preview tiles
+  are built. The SQLite sidecar should store frame metadata and ADIOS variable
+  paths, not copied image blobs.
 
 Useful checks:
 
@@ -63,9 +66,10 @@ export MAX_MOVIE_FRAMES="240"
 can point at a specific sidecar DB file or a directory where the generated
 sidecar DB should be stored.
 
-Phase 1 note: `app.py` still drops and re-ingests the Seurat sidecar each time
-the server starts. Do not point `SEURAT_SQLITE_DB` at data that should be
-preserved outside the viewer cache.
+Current cache note: `app.py` still drops and re-ingests the Seurat sidecar each
+time the server starts. Do not point `SEURAT_SQLITE_DB` at data that should be
+preserved outside the viewer cache. The next cache phase should skip ingest
+when the ACA file is unchanged.
 
 ## Run The App
 

@@ -1,10 +1,9 @@
-import os, io, struct, re, json, sqlite3
+import os, re, json, sqlite3
 import argparse
 from pathlib import Path
 from adios2 import FileReader
 
 import numpy as np
-from PIL import Image
 from typing import Optional, Any, Dict, List, Pattern
 
 from sqlite_store import open_sqlite_collection
@@ -759,63 +758,6 @@ def _source_dataset_from_path(varpath: str) -> str:
     return str(varpath or "").strip("/")
 
 
-def png_size(png_bytes: bytes) -> tuple[int, int]:
-    # assumes valid PNG
-    width, height = struct.unpack(">II", png_bytes[16:24])
-    return int(width), int(height)
-
-
-_PNG_SIG = b"\x89PNG\r\n\x1a\n"
-
-
-def array_to_png_bytes(img: np.ndarray) -> bytes:
-    """
-    Accepts either:
-      - Pixel arrays: (H,W), (H,W,3), (H,W,4) -> encodes to PNG
-      - Already-encoded PNG bytes: (N,) uint8/int8 -> returns bytes directly
-    """
-    if img is None:
-        raise ValueError("img is None")
-
-    # If ADIOS returns a scalar or list, normalize
-    img = np.asarray(img)
-
-    # Case A: 1D "byte stream" (likely already PNG bytes)
-    if img.ndim == 1:
-        if img.dtype != np.uint8:
-            img_u8 = img.astype(np.uint8, copy=False)
-        else:
-            img_u8 = img
-
-        data = img_u8.tobytes()
-
-        if not data.startswith(_PNG_SIG):
-            raise ValueError(
-                f"1D image payload does not look like PNG bytes. "
-                f"len={len(data)} first8={data[:8]!r}"
-            )
-
-        return data
-
-    # Case B: pixel arrays -> encode to PNG
-    if img.dtype != np.uint8:
-        img = np.clip(img, 0, 255).astype(np.uint8)
-
-    if img.ndim == 2:
-        mode = "L"
-    elif img.ndim == 3 and img.shape[2] == 3:
-        mode = "RGB"
-    elif img.ndim == 3 and img.shape[2] == 4:
-        mode = "RGBA"
-    else:
-        raise ValueError(f"Unexpected image array shape: {img.shape}, dtype={img.dtype}")
-
-    pil = Image.fromarray(img, mode=mode)
-    buf = io.BytesIO()
-    pil.save(buf, format="PNG")
-    return buf.getvalue()
-
-
 # Match ".../image.000450.png/..." and capture 000450
 _FRAME_RE = re.compile(r"(?:^|/)(?:image)\.(\d+)\.png(?:/|$)")
 
@@ -935,10 +877,6 @@ def parse_campaign(
                 continue
 
             if var_type == "image":
-                img_data = fr.read(varpath)
-                png_bytes = array_to_png_bytes(img_data)
-                img_width, img_height = png_size(png_bytes)
-
                 visualization_name = get_visualization_name(varname)
                 association_rule_id = ""
                 association_source = "legacy"
@@ -1059,8 +997,7 @@ def parse_campaign(
                     "metadata": metadata,
                     "movie_cache": 1,
                     "frame_index": int(frame_index) if frame_index is not None else 0,
-                    "image_width": img_width,
-                    "image_height": img_height,
+                    "image_storage": "aca",
                     "association_source": association_source,
                     "association_rule_id": association_rule_id,
                 }
@@ -1110,7 +1047,6 @@ def parse_campaign(
                             "source_dataset": record_source_dataset,
                             "visualization_roles": record["roles"],
                             "visualization_source_dataset": record_source_dataset,
-                            "image_bytes": png_bytes,
                         }
                     )
                     collection.insert_one(document)
