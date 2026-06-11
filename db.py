@@ -11,7 +11,7 @@ import numpy as np
 from adios2 import FileReader
 from PIL import Image, ImageDraw, ImageFont
 
-from media_utils import frames_to_mp4_bytes, mp4_bytes_to_data_uri, png_bytes_to_data_uri
+from media_utils import png_bytes_to_data_uri
 from query_parser import and_filter
 
 
@@ -1332,9 +1332,9 @@ class CampaignDb:
         extra_filter: Optional[Dict[str, Any]] = None,
         limit_frames: int = 240,
         scalar_field_options: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[List[bytes], int]:
+    ) -> Tuple[List[bytes], int, List[int]]:
         if not self.ok or not variable_id:
-            return ([], 0)
+            return ([], 0, [])
 
         base_query: Dict[str, Any] = {
             "variable_id": variable_id,
@@ -1372,13 +1372,22 @@ class CampaignDb:
             docs = list(cursor)
 
             frames: List[bytes] = []
+            frame_indices: List[int] = []
+
+            def append_frame(png_bytes: bytes, doc: Dict[str, Any]) -> None:
+                frames.append(png_bytes)
+                try:
+                    frame_indices.append(int(doc.get("frame_index", len(frame_indices))))
+                except Exception:
+                    frame_indices.append(len(frame_indices))
+
             with ExitStack() as stack:
                 readers: Dict[str, Any] = {}
                 for doc in docs:
                     img = doc.get("image_bytes", None)
                     if img:
                         try:
-                            frames.append(bytes(img))
+                            append_frame(bytes(img), doc)
                         except Exception:
                             continue
                         continue
@@ -1401,23 +1410,26 @@ class CampaignDb:
                             )
                             doc_metadata = dict(doc.get("scalar_field_metadata", {}) or {})
                             metadata = {**stored_metadata, **doc_metadata}
-                            frames.append(scalar_field_to_png_bytes(payload, metadata, scalar_field_options))
+                            append_frame(
+                                scalar_field_to_png_bytes(payload, metadata, scalar_field_options),
+                                doc,
+                            )
                             continue
 
                         reader = readers.get(campaign_path)
                         if reader is None:
                             reader = stack.enter_context(FileReader(campaign_path))
                             readers[campaign_path] = reader
-                        frames.append(adios_image_to_png_bytes(reader.read(variable_path)))
+                        append_frame(adios_image_to_png_bytes(reader.read(variable_path)), doc)
                     except Exception:
                         continue
 
-            return (frames, total)
+            return (frames, total, frame_indices)
 
         except Exception as e:
             self.last_error = f"{type(e).__name__}: {e}"
             self.ok = False
-            return ([], 0)
+            return ([], 0, [])
 
     def get_first_movie_tiles_for_variable(
         self,
@@ -1475,7 +1487,7 @@ class CampaignDb:
                     continue
                 seen.add(key)
 
-                frames, total = self.get_movie_frames_for_stream(
+                frames, total, frame_indices = self.get_movie_frames_for_stream(
                     variable_id,
                     visualization_name=vis,
                     producer=producer,
@@ -1491,23 +1503,22 @@ class CampaignDb:
                 media_type = "video"
                 status = "ok"
                 note = ""
+                frame_count = len(frames)
+                frame_sources: List[str] = []
 
                 if not frames:
                     status = "no-frames"
                     note = "no frames"
                 elif len(frames) == 1:
                     src = png_bytes_to_data_uri(frames[0])
+                    frame_sources = [src]
                     media_type = "image"
                     note = "1 frame (rendered as image)"
                 else:
-                    try:
-                        mp4 = frames_to_mp4_bytes(frames, fps=fps)
-                        src = mp4_bytes_to_data_uri(mp4)
-                        note = f"{len(frames)} of {total} frames" if total > len(frames) else f"{len(frames)} frames"
-                    except Exception as e:
-                        status = "build-failed"
-                        note = f"{type(e).__name__}: {e}"
-                        src = ""
+                    frame_sources = [png_bytes_to_data_uri(frame) for frame in frames]
+                    src = frame_sources[0] if frame_sources else ""
+                    media_type = "image_sequence"
+                    note = f"{len(frames)} of {total} frames" if total > len(frames) else f"{len(frames)} frames"
 
                 tiles.append(
                     {
@@ -1527,6 +1538,10 @@ class CampaignDb:
                         "media_type": media_type,
                         "status": status,
                         "note": note,
+                        "fps": int(fps),
+                        "frame_count": frame_count,
+                        "frame_indices": frame_indices,
+                        "frame_sources": frame_sources,
                     }
                 )
 

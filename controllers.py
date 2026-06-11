@@ -305,6 +305,10 @@ def attach_controllers(
             "file": "",
             "src": "",
             "media_type": "",
+            "fps": 0,
+            "frame_count": 0,
+            "frame_indices": [],
+            "frame_sources": [],
             "plot": {},
             "plot_settings": {},
             "grid_row": 1,
@@ -540,7 +544,7 @@ def attach_controllers(
 
     def update_2d_display_title(cell: Dict[str, Any], variable_id: str, label: str) -> None:
         media_type = str(cell.get("media_type", "") or "")
-        if media_type not in {"image", "video"}:
+        if media_type not in {"image", "image_sequence", "video"}:
             cell["display_title"] = str(label or "")
             return
 
@@ -1658,7 +1662,7 @@ def attach_controllers(
 
             selected_rows = source_rows_for_keys(normalize_source_keys(state.selectedSourceKeys or []))
 
-            tiles: List[Dict[str, str]] = []
+            tiles: List[Dict[str, Any]] = []
             new_tile_map: Dict[str, str] = {}
 
             for row in selected_rows:
@@ -1674,7 +1678,7 @@ def attach_controllers(
                 if selected_vis:
                     new_tile_map[source_key] = selected_vis
 
-                tile: Dict[str, str] = {
+                tile: Dict[str, Any] = {
                     "variable_id": var_id,
                     "variable_name": label,
                     "visualization_name": selected_vis,
@@ -1684,6 +1688,10 @@ def attach_controllers(
                     "file": row.get("file", ""),
                     "src": "",
                     "media_type": "video",
+                    "fps": 0,
+                    "frame_count": 0,
+                    "frame_indices": [],
+                    "frame_sources": [],
                     "status": "no-visualizations",
                     "note": "No visualization types for this source",
                 }

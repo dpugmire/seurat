@@ -240,6 +240,159 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
           return DEFAULT_FPS;
         }
 
+        function getVideoFrameCount(video) {
+          const count = Number(video && video.getAttribute && video.getAttribute("data-frame-count"));
+          return Number.isFinite(count) && count > 0 ? Math.floor(count) : null;
+        }
+
+        function getCommonVideoFrameCount(videos) {
+          let count = Infinity;
+          for (const v of (videos || [])) {
+            const frameCount = getVideoFrameCount(v);
+            if (frameCount !== null) {
+              count = Math.min(count, frameCount);
+            }
+          }
+          return Number.isFinite(count) ? count : null;
+        }
+
+        function parseVideoFrameIndices(video) {
+          const raw = String(video && video.getAttribute && video.getAttribute("data-frame-indices") || "");
+          if (!raw) return [];
+          const values = [];
+          for (const part of raw.split(",")) {
+            const value = Number(part);
+            if (Number.isFinite(value)) values.push(value);
+          }
+          return values;
+        }
+
+        function frameOrdinalFromTime(rawSeconds, videos) {
+          const fps = inferFpsForVideos(videos);
+          const count = getCommonVideoFrameCount(videos);
+          const rawOrdinal = Math.round(Math.max(0, Number(rawSeconds) || 0) * fps);
+          if (count !== null) {
+            return Math.max(0, Math.min(rawOrdinal, Math.max(0, count - 1)));
+          }
+          return Math.max(0, rawOrdinal);
+        }
+
+        function timeForFrameOrdinal(rawOrdinal, videos) {
+          const fps = inferFpsForVideos(videos);
+          const count = getCommonVideoFrameCount(videos);
+          let ordinal = Math.round(Number(rawOrdinal) || 0);
+          if (count !== null) {
+            ordinal = Math.max(0, Math.min(ordinal, Math.max(0, count - 1)));
+          } else {
+            ordinal = Math.max(0, ordinal);
+          }
+          return ordinal / fps;
+        }
+
+        function videoFrameLabel(rawOrdinal, videos) {
+          const ordinal = Math.max(0, Math.round(Number(rawOrdinal) || 0));
+          const firstVideo = (videos || [])[0];
+          const indices = parseVideoFrameIndices(firstVideo);
+          if (ordinal < indices.length) {
+            const value = indices[ordinal];
+            return Number.isInteger(value) ? String(value) : String(value);
+          }
+          return String(ordinal);
+        }
+
+        function getGridImageSequencesSafe() {
+          if (typeof getGridImageSequences === "function") {
+            return getGridImageSequences();
+          }
+          return Array.from(document.querySelectorAll('img[data-grid-image-sequence="1"]'));
+        }
+
+        function parseImageSequenceSources(el) {
+          const raw = String(el && el.getAttribute && el.getAttribute("data-frame-sources") || "[]");
+          try {
+            const sources = JSON.parse(raw);
+            return Array.isArray(sources) ? sources.filter(function(src) { return !!src; }) : [];
+          } catch (_err) {
+            return [];
+          }
+        }
+
+        function parseImageSequenceFrameIndices(el) {
+          const raw = String(el && el.getAttribute && el.getAttribute("data-frame-indices") || "");
+          if (!raw) return [];
+          const values = [];
+          for (const part of raw.split(",")) {
+            const value = Number(part);
+            if (Number.isFinite(value)) values.push(value);
+          }
+          return values;
+        }
+
+        function getImageSequenceFrameCount(el) {
+          const count = Number(el && el.getAttribute && el.getAttribute("data-frame-count"));
+          if (Number.isFinite(count) && count > 0) return Math.floor(count);
+          return parseImageSequenceSources(el).length || null;
+        }
+
+        function getCommonImageSequenceFrameCount(sequences) {
+          let count = Infinity;
+          for (const el of (sequences || [])) {
+            const frameCount = getImageSequenceFrameCount(el);
+            if (frameCount !== null) count = Math.min(count, frameCount);
+          }
+          return Number.isFinite(count) ? count : null;
+        }
+
+        function clampImageSequenceFrame(rawOrdinal, sequences) {
+          const count = getCommonImageSequenceFrameCount(sequences);
+          let ordinal = Math.round(Number(rawOrdinal) || 0);
+          ordinal = Math.max(0, ordinal);
+          if (count !== null) ordinal = Math.min(ordinal, Math.max(0, count - 1));
+          return ordinal;
+        }
+
+        function imageSequenceFrameLabel(rawOrdinal, sequences) {
+          const ordinal = clampImageSequenceFrame(rawOrdinal, sequences);
+          const firstSequence = (sequences || [])[0];
+          const indices = parseImageSequenceFrameIndices(firstSequence);
+          if (ordinal < indices.length) {
+            const value = indices[ordinal];
+            return Number.isInteger(value) ? String(value) : String(value);
+          }
+          return String(ordinal);
+        }
+
+        function inferFpsForImageSequences(sequences) {
+          const DEFAULT_FPS = 2.0;
+          for (const el of (sequences || [])) {
+            const fpsAttr = Number(el && el.getAttribute && el.getAttribute("data-fps"));
+            if (Number.isFinite(fpsAttr) && fpsAttr > 0) return fpsAttr;
+          }
+          return DEFAULT_FPS;
+        }
+
+        function setImageSequenceFrame(rawOrdinal, sequences) {
+          const ordinal = clampImageSequenceFrame(rawOrdinal, sequences);
+          for (const el of (sequences || [])) {
+            const sources = parseImageSequenceSources(el);
+            if (!sources.length) continue;
+            const idx = Math.max(0, Math.min(ordinal, sources.length - 1));
+            if (el.getAttribute("src") !== sources[idx]) {
+              el.setAttribute("src", sources[idx]);
+            }
+            el.setAttribute("data-current-frame", String(idx));
+          }
+          return ordinal;
+        }
+
+        function getReferenceImageSequenceFrame(sequences) {
+          for (const el of (sequences || [])) {
+            const value = Number(el && el.getAttribute && el.getAttribute("data-current-frame"));
+            if (Number.isFinite(value) && value >= 0) return Math.round(value);
+          }
+          return 0;
+        }
+
         function getVcrSliderFrameValue() {
           const slider = document.getElementById("catnip-vcr-step-slider");
           const raw = Number(slider && slider.value);
@@ -252,8 +405,12 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
         function getVcrSliderTimeValue(videos, plots) {
           videos = videos || [];
           plots = plots || (typeof getGridPlots === "function" ? getGridPlots() : []);
+          const sequences = getGridImageSequencesSafe();
+          if (sequences.length) {
+            return getVcrSliderFrameValue();
+          }
           if (videos.length) {
-            return getVcrSliderFrameValue() / inferFpsForVideos(videos);
+            return timeForFrameOrdinal(getVcrSliderFrameValue(), videos);
           }
 
           const slider = document.getElementById("catnip-vcr-step-slider");
@@ -271,6 +428,7 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
         function updateVcrTimeLabelFromSeconds(rawSeconds, videos, plots) {
           videos = videos || [];
           plots = plots || (typeof getGridPlots === "function" ? getGridPlots() : []);
+          const sequences = getGridImageSequencesSafe();
           const bounds = (typeof getMediaTimelineBounds === "function")
             ? getMediaTimelineBounds(videos, plots)
             : { start: 0, end: 0, usesVideos: !!(videos && videos.length) };
@@ -281,8 +439,12 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
             : (Number.isFinite(seconds) && seconds >= 0 ? seconds : 0);
           const fps = inferFpsForVideos(videos);
           if (label) {
-            if (videos && videos.length) {
-              label.textContent = "Time = " + (safeSeconds * fps).toFixed(6);
+            if (sequences.length) {
+              const ordinal = clampImageSequenceFrame(safeSeconds, sequences);
+              label.textContent = "Time = " + imageSequenceFrameLabel(ordinal, sequences);
+            } else if (videos && videos.length) {
+              const ordinal = frameOrdinalFromTime(safeSeconds, videos);
+              label.textContent = "Time = " + videoFrameLabel(ordinal, videos);
             } else {
               label.textContent = "Time = " + safeSeconds.toFixed(6);
             }
@@ -295,23 +457,34 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
           window.__catnipGridSyncTime = safeSeconds;
           if (!slider) return;
 
-          if (videos && videos.length) {
-            let minDuration = Infinity;
-            for (const v of (videos || [])) {
-              const d = Number(v && v.duration);
-              if (Number.isFinite(d) && d > 0) {
-                minDuration = Math.min(minDuration, d);
+          if (sequences.length) {
+            const count = getCommonImageSequenceFrameCount(sequences);
+            const maxFrames = count !== null ? Math.max(0, count - 1) : 0;
+            const frameValue = clampImageSequenceFrame(safeSeconds, sequences);
+            slider.min = "0";
+            slider.max = String(maxFrames);
+            slider.step = "1";
+            slider.value = String(Math.max(0, Math.min(frameValue, maxFrames)));
+          } else if (videos && videos.length) {
+            const count = getCommonVideoFrameCount(videos);
+            let maxFrames = count !== null ? Math.max(0, count - 1) : 1;
+            if (count === null) {
+              let minDuration = Infinity;
+              for (const v of (videos || [])) {
+                const d = Number(v && v.duration);
+                if (Number.isFinite(d) && d > 0) {
+                  minDuration = Math.min(minDuration, d);
+                }
               }
-            }
-            let maxFrames = 1;
-            if (Number.isFinite(minDuration)) {
-              maxFrames = Math.max(1, Math.round(Math.max(0, minDuration - 0.04) * fps));
+              if (Number.isFinite(minDuration)) {
+                maxFrames = Math.max(1, Math.round(Math.max(0, minDuration - 0.04) * fps));
+              }
             }
             slider.min = "0";
             slider.max = String(maxFrames);
             slider.step = "1";
 
-            const frameValue = Math.round(safeSeconds * fps);
+            const frameValue = frameOrdinalFromTime(safeSeconds, videos);
             const clamped = Math.max(0, Math.min(frameValue, maxFrames));
             slider.value = String(clamped);
           } else {
@@ -341,6 +514,10 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
           }
 
           function getCommonEndTime(vs) {
+            const count = getCommonVideoFrameCount(vs);
+            if (count !== null) {
+              return timeForFrameOrdinal(Math.max(0, count - 1), vs);
+            }
             let minDuration = Infinity;
             for (const v of vs) {
               const d = Number(v && v.duration);
@@ -546,6 +723,10 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
 
         function getGridVideos() {
           return Array.from(document.querySelectorAll('video[data-grid-video="1"]'));
+        }
+
+        function getGridImageSequences() {
+          return Array.from(document.querySelectorAll('img[data-grid-image-sequence="1"]'));
         }
 
         function isGridVideo(target) {
@@ -1031,15 +1212,19 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
         }
 
         function getMediaTimelineBounds(videos, plots) {
+          const sequenceCount = getCommonImageSequenceFrameCount(getGridImageSequences());
+          if (sequenceCount !== null) {
+            return { start: 0, end: Math.max(0, sequenceCount - 1), usesVideos: false, usesImageSequence: true };
+          }
           const videoEnd = getCommonEndTime(videos || []);
           if (videoEnd !== null) {
-            return { start: 0, end: videoEnd, usesVideos: true };
+            return { start: 0, end: videoEnd, usesVideos: true, usesImageSequence: false };
           }
           const plotBounds = getPlotTimelineBounds(plots || getGridPlots());
           if (plotBounds) {
-            return { start: plotBounds.start, end: plotBounds.end, usesVideos: false };
+            return { start: plotBounds.start, end: plotBounds.end, usesVideos: false, usesImageSequence: false };
           }
-          return { start: 0, end: 0, usesVideos: false };
+          return { start: 0, end: 0, usesVideos: false, usesImageSequence: false };
         }
 
         function clampTimeForMedia(rawTime, videos, plots) {
@@ -1057,7 +1242,7 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
           const bounds = getMediaTimelineBounds(videos || [], plots);
           const t = clampTimeForMedia(rawTime, videos || [], plots);
           const denom = Math.max(1e-12, bounds.end - bounds.start);
-          const progress = bounds.usesVideos ? ((t - bounds.start) / denom) : null;
+          const progress = (bounds.usesVideos || bounds.usesImageSequence) ? ((t - bounds.start) / denom) : null;
           for (const el of plots) {
             const meta = el.__catnipPlotMeta;
             if (!meta || !meta.cursor) continue;
@@ -1252,6 +1437,10 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
         }
 
         function getCommonEndTime(videos) {
+          const count = getCommonVideoFrameCount(videos);
+          if (count !== null) {
+            return timeForFrameOrdinal(Math.max(0, count - 1), videos);
+          }
           let minDuration = Infinity;
           for (const v of videos) {
             const d = Number(v && v.duration);
@@ -1336,9 +1525,12 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
         function syncGridVideosNow() {
           if (!gridVcrState.playing) {
             stopSyncTimer();
+            const sequencesNow = getGridImageSequences();
             const videosNow = getGridVideos();
             const plotsNow = getGridPlots();
-            if (videosNow.length) {
+            if (sequencesNow.length) {
+              updateVcrTimeLabelFromSeconds(getReferenceImageSequenceFrame(sequencesNow), videosNow, plotsNow);
+            } else if (videosNow.length) {
               updateVcrTimeLabelFromSeconds(getReferenceTime(videosNow), videosNow);
             } else if (plotsNow.length) {
               updateVcrTimeLabelFromSeconds(gridVcrState.syncTime, [], plotsNow);
@@ -1348,8 +1540,34 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
             return;
           }
 
+          const sequences = getGridImageSequences();
           const videos = getGridVideos();
           const plots = getGridPlots();
+          if (sequences.length) {
+            const count = getCommonImageSequenceFrameCount(sequences);
+            if (count === null || count <= 0) {
+              gridVcrState.playing = false;
+              stopSyncTimer();
+              updateVcrTimeLabelFromSeconds(0, videos, plots);
+              return;
+            }
+
+            const now = (window.performance && window.performance.now) ? window.performance.now() : Date.now();
+            const last = Number(gridVcrState.lastTickMs);
+            const dt = Number.isFinite(last) && last > 0 ? Math.max(0, (now - last) / 1000.0) : 0.16;
+            gridVcrState.lastTickMs = now;
+            const fps = inferFpsForImageSequences(sequences);
+            const nextPosition = Math.min(Math.max(0, count - 1), Number(gridVcrState.syncTime || 0) + dt * fps);
+            const nextFrame = setImageSequenceFrame(Math.floor(nextPosition + 1e-9), sequences);
+            gridVcrState.syncTime = nextPosition;
+            updateVcrTimeLabelFromSeconds(nextFrame, videos, plots);
+            if (nextPosition >= Math.max(0, count - 1)) {
+              gridVcrState.playing = false;
+              stopSyncTimer();
+            }
+            return;
+          }
+
           if (!videos.length) {
             if (!plots.length) {
               gridVcrState.playing = false;
@@ -1411,10 +1629,20 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
         }
 
         function seekAllVideosBy(deltaSeconds) {
+          const sequences = getGridImageSequences();
           const videos = getGridVideos();
           const plots = getGridPlots();
-          if (!videos.length && !plots.length) {
+          if (!sequences.length && !videos.length && !plots.length) {
             updateVcrTimeLabelFromSeconds(0, []);
+            return;
+          }
+          if (sequences.length) {
+            const next = setImageSequenceFrame(
+              getReferenceImageSequenceFrame(sequences) + Number(deltaSeconds || 0),
+              sequences
+            );
+            gridVcrState.syncTime = next;
+            updateVcrTimeLabelFromSeconds(next, videos, plots);
             return;
           }
           const base = clampTimeForMedia(
@@ -1435,21 +1663,65 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
         }
 
         function stepAllVideosByFrames(frameCount) {
+          const sequences = getGridImageSequences();
           const videos = getGridVideos();
           const plots = getGridPlots();
-          if (!videos.length && !plots.length) return;
+          if (!sequences.length && !videos.length && !plots.length) return;
+          if (sequences.length) {
+            const next = setImageSequenceFrame(
+              getReferenceImageSequenceFrame(sequences) + Number(frameCount || 0),
+              sequences
+            );
+            gridVcrState.syncTime = next;
+            updateVcrTimeLabelFromSeconds(next, videos, plots);
+            if (!gridVcrState.playing) pauseAllVideos(videos);
+            return;
+          }
+          if (videos.length) {
+            const count = getCommonVideoFrameCount(videos);
+            if (count !== null) {
+              const baseTime = clampTimeForMedia(
+                Number.isFinite(gridVcrState.syncTime) ? gridVcrState.syncTime : getReferenceTime(videos),
+                videos,
+                plots
+              );
+              const baseOrdinal = frameOrdinalFromTime(baseTime, videos);
+              const nextOrdinal = Math.max(
+                0,
+                Math.min(baseOrdinal + Number(frameCount || 0), Math.max(0, count - 1))
+              );
+              const next = setAllVideoTimes(videos, timeForFrameOrdinal(nextOrdinal, videos));
+              gridVcrState.syncTime = next;
+              updateVcrTimeLabelFromSeconds(next, videos, plots);
+              if (gridVcrState.playing) {
+                playAllVideos(videos);
+                gridVcrState.lastTickMs = (window.performance && window.performance.now) ? window.performance.now() : Date.now();
+                startSyncTimer();
+              } else {
+                pauseAllVideos(videos);
+              }
+              return;
+            }
+          }
           const frameStep = inferFrameStepSeconds(videos, plots);
           seekAllVideosBy(frameStep * Number(frameCount || 0));
         }
 
         function seekAllVideosToSlider() {
+          const sequences = getGridImageSequences();
           const videos = getGridVideos();
           const plots = getGridPlots();
-          if (!videos.length && !plots.length) {
+          if (!sequences.length && !videos.length && !plots.length) {
             updateVcrTimeLabelFromSeconds(0, []);
             return;
           }
           const targetSeconds = getVcrSliderTimeValue(videos, plots);
+          if (sequences.length) {
+            const frame = setImageSequenceFrame(targetSeconds, sequences);
+            gridVcrState.syncTime = frame;
+            updateVcrTimeLabelFromSeconds(frame, videos, plots);
+            return;
+          }
           const t = setAllVideoTimes(videos, targetSeconds);
           gridVcrState.syncTime = t;
           updateVcrTimeLabelFromSeconds(t, videos, plots);
@@ -1463,10 +1735,17 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
         }
 
         function setAllToStart() {
+          const sequences = getGridImageSequences();
           const videos = getGridVideos();
           const plots = getGridPlots();
-          if (!videos.length && !plots.length) {
+          if (!sequences.length && !videos.length && !plots.length) {
             updateVcrTimeLabelFromSeconds(0, []);
+            return;
+          }
+          if (sequences.length) {
+            const frame = setImageSequenceFrame(0, sequences);
+            gridVcrState.syncTime = frame;
+            updateVcrTimeLabelFromSeconds(frame, videos, plots);
             return;
           }
           const bounds = getMediaTimelineBounds(videos, plots);
@@ -1483,10 +1762,18 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
         }
 
         function setAllToEnd() {
+          const sequences = getGridImageSequences();
           const videos = getGridVideos();
           const plots = getGridPlots();
-          if (!videos.length && !plots.length) {
+          if (!sequences.length && !videos.length && !plots.length) {
             updateVcrTimeLabelFromSeconds(0, []);
+            return;
+          }
+          if (sequences.length) {
+            const count = getCommonImageSequenceFrameCount(sequences);
+            const frame = setImageSequenceFrame(count !== null ? Math.max(0, count - 1) : 0, sequences);
+            gridVcrState.syncTime = frame;
+            updateVcrTimeLabelFromSeconds(frame, videos, plots);
             return;
           }
           const bounds = getMediaTimelineBounds(videos, plots);
@@ -1504,10 +1791,23 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
         }
 
         function playAllFromSyncTime() {
+          const sequences = getGridImageSequences();
           const videos = getGridVideos();
           const plots = getGridPlots();
-          if (!videos.length && !plots.length) {
+          if (!sequences.length && !videos.length && !plots.length) {
             updateVcrTimeLabelFromSeconds(0, []);
+            return;
+          }
+          if (sequences.length) {
+            const frame = setImageSequenceFrame(
+              Number.isFinite(gridVcrState.syncTime) ? gridVcrState.syncTime : getReferenceImageSequenceFrame(sequences),
+              sequences
+            );
+            gridVcrState.syncTime = frame;
+            updateVcrTimeLabelFromSeconds(frame, videos, plots);
+            gridVcrState.playing = true;
+            gridVcrState.lastTickMs = (window.performance && window.performance.now) ? window.performance.now() : Date.now();
+            startSyncTimer();
             return;
           }
           const base = setAllVideoTimes(
@@ -1523,13 +1823,16 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
         }
 
         function pauseAllAtCurrentTime() {
+          const sequences = getGridImageSequences();
           const videos = getGridVideos();
           const plots = getGridPlots();
-          if (!videos.length && !plots.length) {
+          if (!sequences.length && !videos.length && !plots.length) {
             updateVcrTimeLabelFromSeconds(0, []);
             return;
           }
-          gridVcrState.syncTime = clampTimeForMedia(videos.length ? getReferenceTime(videos) : gridVcrState.syncTime, videos, plots);
+          gridVcrState.syncTime = sequences.length
+            ? getReferenceImageSequenceFrame(sequences)
+            : clampTimeForMedia(videos.length ? getReferenceTime(videos) : gridVcrState.syncTime, videos, plots);
           gridVcrState.playing = false;
           stopSyncTimer();
           pauseAllVideos(videos);
@@ -1537,15 +1840,21 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
         }
 
         function stopAllVideos() {
+          const sequences = getGridImageSequences();
           const videos = getGridVideos();
           const plots = getGridPlots();
-          if (!videos.length && !plots.length) {
+          if (!sequences.length && !videos.length && !plots.length) {
             updateVcrTimeLabelFromSeconds(0, []);
             return;
           }
           gridVcrState.playing = false;
           stopSyncTimer();
           pauseAllVideos(videos);
+          if (sequences.length) {
+            gridVcrState.syncTime = setImageSequenceFrame(0, sequences);
+            updateVcrTimeLabelFromSeconds(gridVcrState.syncTime, videos, plots);
+            return;
+          }
           const bounds = getMediaTimelineBounds(videos, plots);
           gridVcrState.syncTime = setAllVideoTimes(videos, bounds.start);
           updateVcrTimeLabelFromSeconds(gridVcrState.syncTime, videos, plots);
@@ -2549,16 +2858,6 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                             title="Pause all",
                                         )
                                         html.Button(
-                                            "⏹",
-                                            classes="catnip-vcr-btn",
-                                            raw_attrs=[
-                                                'type="button"',
-                                                'data-vcr-action="stop"',
-                                                "onclick=\"window.catnipGridVcr && window.catnipGridVcr('stop'); return false;\"",
-                                            ],
-                                            title="Stop and reset",
-                                        )
-                                        html.Button(
                                             ">>",
                                             classes="catnip-vcr-btn",
                                             raw_attrs=[
@@ -2734,6 +3033,26 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                                         )
                                                     with vuetify.Template(v_if="tile.media_type !== 'plot1d'"):
                                                         with vuetify.Template(v_if="tile.src"):
+                                                            with vuetify.Template(v_if="tile.media_type === 'image_sequence'"):
+                                                                html.Img(
+                                                                    src=("tile.src",),
+                                                                    class_="catnip-grid-image-sequence",
+                                                                    raw_attrs=[
+                                                                        'data-grid-image-sequence="1"',
+                                                                        ':data-fps="tile.fps || 2"',
+                                                                        ':data-frame-count="tile.frame_count || 0"',
+                                                                        ':data-frame-indices="(tile.frame_indices || []).join(\',\')"',
+                                                                        ':data-frame-sources="JSON.stringify(tile.frame_sources || [])"',
+                                                                        'data-current-frame="0"',
+                                                                    ],
+                                                                    style=(
+                                                                        "display:block;"
+                                                                        "width:100%;"
+                                                                        "height:100%;"
+                                                                        "object-fit:contain;"
+                                                                        "background:#111;"
+                                                                    ),
+                                                                )
                                                             with vuetify.Template(v_if="tile.media_type === 'image'"):
                                                                 html.Img(
                                                                     src=("tile.src",),
@@ -2745,7 +3064,7 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                                         "background:#111;"
                                                                     ),
                                                                 )
-                                                            with vuetify.Template(v_if="tile.media_type !== 'image'"):
+                                                            with vuetify.Template(v_if="tile.media_type !== 'image' && tile.media_type !== 'image_sequence'"):
                                                                 html.Video(
                                                                     src=("tile.src",),
                                                                     class_="catnip-grid-video",
@@ -2753,7 +3072,14 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                                     autoplay=False,
                                                                     loop=False,
                                                                     muted=True,
-                                                                    raw_attrs=['data-grid-video="1"', "playsinline", "webkit-playsinline"],
+                                                                    raw_attrs=[
+                                                                        'data-grid-video="1"',
+                                                                        ':data-fps="tile.fps || 2"',
+                                                                        ':data-frame-count="tile.frame_count || 0"',
+                                                                        ':data-frame-indices="(tile.frame_indices || []).join(\',\')"',
+                                                                        "playsinline",
+                                                                        "webkit-playsinline",
+                                                                    ],
                                                                     style=(
                                                                         "display:block;"
                                                                         "width:100%;"
