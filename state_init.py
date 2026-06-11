@@ -101,6 +101,15 @@ def init_state(state, db) -> None:
         "#7030a0",
         "#000000",
     ]
+    state.showScalarFieldSettingsModal = False
+    state.scalarFieldSettingsCellIndex = -1
+    state.scalarFieldSettingsTitle = ""
+    state.scalarFieldSettingsStatus = ""
+    state.scalarFieldSettingsStatusIsError = False
+    state.scalarFieldSettingsColormap = "viridis"
+    state.scalarFieldSettingsRangeAuto = True
+    state.scalarFieldSettingsMin = ""
+    state.scalarFieldSettingsMax = ""
 
     state.gridRows = 3
     state.gridCols = 3
@@ -134,6 +143,7 @@ def init_state(state, db) -> None:
             "media_type": "",
             "plot": {},
             "plot_settings": {},
+            "scalar_field_settings": {},
             "grid_row": 1,
             "grid_col": 1,
             "row_span": 1,
@@ -155,6 +165,7 @@ def init_state(state, db) -> None:
     state.contextMenuCellHasVariable = False
     state.contextMenuCellCanAddSource = False
     state.contextMenuCellCanPlotSettings = False
+    state.contextMenuCellCanScalarFieldSettings = False
     state.contextMenuCellVisualizationOptions = []
     state.contextMenuCellSelectedVisualization = ""
 
@@ -198,6 +209,7 @@ def clear_right_panes(state) -> None:
     state.contextMenuItemLabel = ""
     state.contextMenuCellHasVariable = False
     state.contextMenuCellCanAddSource = False
+    state.contextMenuCellCanScalarFieldSettings = False
     state.showScalarPlotDialog = False
     state.pendingScalarPlotVariableId = ""
     state.pendingScalarPlotCellIndex = -1
@@ -211,3 +223,12 @@ def clear_right_panes(state) -> None:
     state.plotSettingsGridColor = "#e8e8e8"
     state.plotSettingsCursorColor = "#111111"
     state.plotSettingsSeriesRows = []
+    state.showScalarFieldSettingsModal = False
+    state.scalarFieldSettingsCellIndex = -1
+    state.scalarFieldSettingsTitle = ""
+    state.scalarFieldSettingsStatus = ""
+    state.scalarFieldSettingsStatusIsError = False
+    state.scalarFieldSettingsColormap = "viridis"
+    state.scalarFieldSettingsRangeAuto = True
+    state.scalarFieldSettingsMin = ""
+    state.scalarFieldSettingsMax = ""

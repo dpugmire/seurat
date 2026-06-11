@@ -66,6 +66,8 @@ _DISPLAY_ROLE_PRIORITY = {
     "x-axis": 90,
 }
 _NONDISPLAY_ROLES = {"x-axis"}
+SCALAR_FIELD_ITEM_TYPE = "SCALAR_FIELD"
+SCALAR_FIELD_VARIABLE_TYPE = "scalarField"
 
 
 def _compile_path_template(path_template: str) -> Pattern[str]:
@@ -529,14 +531,15 @@ def _load_visualization_api_index(campaign_path: str) -> Dict[str, Dict[str, Any
     """
     Load hpc-campaign visualization API associations from the ACA SQLite tables.
 
-    FileReader exposes image payloads as ADIOS variables, but the semantic
+    FileReader exposes image payloads as ADIOS variables, while SCALAR_FIELD
+    payloads are stored as embedded ACA blobs. In both cases the semantic
     source-variable association lives in SQLite tables:
 
       visualization_sequence -> visualization_variable -> visualization_item
 
-    The returned dictionary is keyed by image dataset name. Image variables read
-    through ADIOS may append a trailing '/<width>x<height>', so callers should
-    use _image_path_candidates() when looking up entries.
+    The returned dictionary is keyed by visualization item dataset name. Image
+    variables read through ADIOS may append a trailing '/<width>x<height>', so
+    image callers should use _image_path_candidates() when looking up entries.
     """
     path = Path(campaign_path).expanduser()
     if not path.exists():
@@ -557,11 +560,18 @@ def _load_visualization_api_index(campaign_path: str) -> Dict[str, Dict[str, Any
         if not _VISUALIZATION_API_TABLES.issubset(available_tables):
             return {}
 
-        # The visualization API describes images semantically, while ADIOS stores
-        # the image payloads as datasets. This join builds the bridge:
-        # sequence -> image item -> image dataset, plus sequence -> source vars.
+        scalar_metadata_select = "sf.metadata as scalar_field_metadata"
+        scalar_metadata_join = "left join scalar_field as sf on sf.datasetid = item_dataset.rowid"
+        if "scalar_field" not in available_tables:
+            scalar_metadata_select = "NULL as scalar_field_metadata"
+            scalar_metadata_join = ""
+
+        # The visualization API describes payloads semantically, while the
+        # payload datasets hold either rendered images or raw scalar fields.
+        # This join builds the bridge: sequence -> item dataset, plus sequence
+        # -> source vars.
         rows = con.execute(
-            """
+            f"""
             select
                 vs.visid as visid,
                 vs.name as sequence_name,
@@ -571,31 +581,35 @@ def _load_visualization_api_index(campaign_path: str) -> Dict[str, Dict[str, Any
                 vi.item_type as item_type,
                 vi.item_uuid as item_uuid,
                 vi.metadata as item_metadata,
-                image_dataset.name as image_name,
+                item_dataset.name as item_name,
+                item_dataset.fileformat as item_fileformat,
+                {scalar_metadata_select},
                 source_dataset.name as source_dataset,
                 vv.variable_name as variable_name,
                 vv.role as role
             from visualization_sequence as vs
             join visualization_item as vi on vi.visid = vs.visid
-            left join dataset as image_dataset on image_dataset.uuid = vi.item_uuid
+            left join dataset as item_dataset on item_dataset.uuid = vi.item_uuid
+            {scalar_metadata_join}
             left join visualization_variable as vv on vv.visid = vs.visid
             left join dataset as source_dataset on source_dataset.rowid = vv.datasetid
-            where upper(vi.item_type) = 'IMAGE'
+            where upper(vi.item_type) in ('IMAGE', 'SCALAR_FIELD')
             order by vs.visid, vi.item_order, vv.variable_name, vv.role
             """
         )
 
         index: Dict[str, Dict[str, Any]] = {}
         for row in rows:
-            image_name = str(row["image_name"] or "").strip("/")
-            if not image_name:
+            item_name = str(row["item_name"] or "").strip("/")
+            if not item_name:
                 continue
 
             sequence_name = str(row["sequence_name"] or "")
-            # Key by the image dataset path because that is what FileReader gives
-            # us when it later walks available ADIOS variables.
+            # Key by the item dataset path because that is what FileReader gives
+            # us for IMAGE variables and what direct SQLite reads use for
+            # SCALAR_FIELD payloads.
             entry = index.setdefault(
-                image_name,
+                item_name,
                 {
                     "sequence_id": int(row["visid"]),
                     "sequence_name": sequence_name,
@@ -606,6 +620,9 @@ def _load_visualization_api_index(campaign_path: str) -> Dict[str, Dict[str, Any
                     "item_type": str(row["item_type"] or ""),
                     "item_uuid": str(row["item_uuid"] or ""),
                     "item_metadata": _json_object_or_empty(row["item_metadata"]),
+                    "item_dataset_name": item_name,
+                    "item_file_format": str(row["item_fileformat"] or ""),
+                    "scalar_field_metadata": _json_object_or_empty(row["scalar_field_metadata"]),
                     "variables": [],
                 },
             )
@@ -825,13 +842,14 @@ def parse_campaign(
     image_assoc_matched = 0
     image_assoc_unmatched = 0
     visualization_api_matched = 0
+    scalar_field_visualization_count = 0
     skipped_non_visual_data = 0
     # Load the visualization API once from SQLite metadata, then use it while
     # walking ADIOS variables. Older campaigns without these tables fall back to
     # schema or legacy path parsing.
     visualization_api_index = _load_visualization_api_index(campaign_path)
     if visualization_api_index:
-        print("visualization API image associations:", len(visualization_api_index))
+        print("visualization API item associations:", len(visualization_api_index))
 
     with FileReader(campaign_path) as fr:
         vars_dict = fr.available_variables()
@@ -1076,6 +1094,99 @@ def parse_campaign(
 
             collection.insert_one(document)
 
+    for visualization_api_entry in visualization_api_index.values():
+        item_type = str(visualization_api_entry.get("item_type", "") or "").strip().upper()
+        if item_type != SCALAR_FIELD_ITEM_TYPE:
+            continue
+
+        item_name = str(visualization_api_entry.get("item_dataset_name", "") or "").strip("/")
+        if not item_name:
+            continue
+
+        visualization_name = str(visualization_api_entry.get("visualization_name", "") or "")
+        scalar_metadata = dict(visualization_api_entry.get("scalar_field_metadata", {}) or {})
+        item_metadata = dict(visualization_api_entry.get("item_metadata", {}) or {})
+
+        display_variables = list(visualization_api_entry.get("display_variables", []))
+        scalar_variable_records: List[Dict[str, Any]] = []
+        if display_variables:
+            for api_var in display_variables:
+                api_physical_var = str(api_var.get("name", "") or "").strip()
+                if not api_physical_var:
+                    continue
+                scalar_variable_records.append(
+                    {
+                        "physical_var": api_physical_var,
+                        "logical_var": _map_physical_to_logical_name(
+                            api_physical_var,
+                            image_assoc_schema,
+                        ),
+                        "variable_id": api_physical_var,
+                        "roles": list(api_var.get("roles", [])),
+                        "source_dataset": str(api_var.get("source_dataset", "") or ""),
+                    }
+                )
+
+        if not scalar_variable_records:
+            fallback_var = visualization_name or item_name
+            scalar_variable_records = [
+                {
+                    "physical_var": fallback_var,
+                    "logical_var": _map_physical_to_logical_name(fallback_var, image_assoc_schema),
+                    "variable_id": fallback_var,
+                    "roles": [],
+                    "source_dataset": "",
+                }
+            ]
+
+        fmin = _to_float(scalar_metadata.get("min", None))
+        fmax = _to_float(scalar_metadata.get("max", None))
+
+        base_document = {
+            "campaign_path": campaign_path,
+            "file": "",
+            "visualization_name": visualization_name,
+            "variable_path": item_name,
+            "variable_type": SCALAR_FIELD_VARIABLE_TYPE,
+            "payload_type": SCALAR_FIELD_ITEM_TYPE,
+            "producer": "",
+            "casename": "",
+            "variable_location": "local",
+            "metadata": scalar_metadata,
+            "scalar_field_metadata": scalar_metadata,
+            "movie_cache": 1,
+            "frame_index": int(visualization_api_entry.get("item_order", 0) or 0),
+            "image_storage": "aca",
+            "association_source": "visualization-api",
+            "association_rule_id": "",
+            "visualization_sequence_name": str(visualization_api_entry.get("sequence_name", "") or ""),
+            "visualization_kind": str(visualization_api_entry.get("visualization_kind", "") or ""),
+            "visualization_variables": list(visualization_api_entry.get("variables", [])),
+            "visualization_item_order": int(visualization_api_entry.get("item_order", 0) or 0),
+            "visualization_item_uuid": str(visualization_api_entry.get("item_uuid", "") or ""),
+            "visualization_item_type": item_type,
+            "visualization_sequence_metadata": visualization_api_entry.get("sequence_metadata", {}),
+            "visualization_item_metadata": item_metadata,
+            "min": fmin,
+            "max": fmax,
+        }
+
+        for record in scalar_variable_records:
+            record_source_dataset = str(record.get("source_dataset", "") or "")
+            document = dict(base_document)
+            document.update(
+                {
+                    "variable_id": record.get("variable_id") or record["physical_var"],
+                    "variable_name": record["logical_var"],
+                    "variable_name_physical": record["physical_var"],
+                    "source_dataset": record_source_dataset,
+                    "visualization_roles": record["roles"],
+                    "visualization_source_dataset": record_source_dataset,
+                }
+            )
+            collection.insert_one(document)
+            scalar_field_visualization_count += 1
+
     print('Add statistics')
     for v in var_stats.items() :
         vname, stats = v
@@ -1107,6 +1218,8 @@ def parse_campaign(
             f"matched={visualization_api_matched}",
             f"available={len(visualization_api_index)}",
         )
+    if scalar_field_visualization_count:
+        print("visualization API scalar field associations:", scalar_field_visualization_count)
     if skipped_non_visual_data:
         print("Skipped non-visual datasets:", skipped_non_visual_data)
 

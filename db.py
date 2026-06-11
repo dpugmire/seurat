@@ -1,6 +1,9 @@
 import io
+import json
 import math
+import sqlite3
 import statistics
+import zlib
 from contextlib import ExitStack
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -15,6 +18,129 @@ from query_parser import and_filter
 GENERATED_SCALAR_PLOT_VIS = "generated_timeseries"
 GENERATED_SCALAR_PLOT_VERSION = 3
 _PNG_SIG = b"\x89PNG\r\n\x1a\n"
+SCALAR_FIELD_VARIABLE_TYPE = "scalarField"
+VISUALIZATION_PAYLOAD_VARIABLE_TYPES = ("image", SCALAR_FIELD_VARIABLE_TYPE)
+
+
+def _stops(values: List[List[int]]) -> np.ndarray:
+    return np.array(values, dtype=np.float32)
+
+
+_VIRIDIS_STOPS = _stops(
+    [
+        [68, 1, 84],
+        [71, 44, 122],
+        [59, 81, 139],
+        [44, 113, 142],
+        [33, 144, 141],
+        [39, 173, 129],
+        [92, 200, 99],
+        [170, 220, 50],
+        [253, 231, 37],
+    ]
+)
+_TURBO_STOPS = _stops(
+    [
+        [48, 18, 59],
+        [65, 69, 172],
+        [70, 117, 237],
+        [49, 155, 246],
+        [36, 188, 221],
+        [62, 211, 153],
+        [133, 222, 71],
+        [205, 214, 44],
+        [245, 180, 49],
+        [252, 120, 36],
+        [224, 64, 28],
+        [165, 24, 21],
+        [122, 4, 3],
+    ]
+)
+_SCALAR_FIELD_COLORMAP_STOPS = {
+    "viridis": _VIRIDIS_STOPS,
+    "plasma": _stops(
+        [[13, 8, 135], [75, 3, 161], [125, 3, 168], [168, 34, 150], [203, 70, 121], [229, 107, 93], [248, 148, 65], [253, 195, 40], [240, 249, 33]]
+    ),
+    "inferno": _stops(
+        [[0, 0, 4], [31, 12, 72], [85, 15, 109], [136, 34, 106], [186, 54, 85], [227, 89, 51], [249, 140, 10], [249, 201, 50], [252, 255, 164]]
+    ),
+    "magma": _stops(
+        [[0, 0, 4], [28, 16, 68], [79, 18, 123], [129, 37, 129], [181, 54, 122], [229, 80, 100], [251, 135, 97], [254, 194, 135], [252, 253, 191]]
+    ),
+    "cividis": _stops(
+        [[0, 34, 78], [0, 48, 96], [39, 66, 104], [73, 84, 109], [103, 102, 112], [132, 121, 113], [162, 142, 109], [196, 166, 95], [233, 196, 53], [255, 233, 69]]
+    ),
+    "turbo": _TURBO_STOPS,
+    "jet": _stops(
+        [[0, 0, 128], [0, 0, 255], [0, 128, 255], [0, 255, 255], [128, 255, 128], [255, 255, 0], [255, 128, 0], [255, 0, 0], [128, 0, 0]]
+    ),
+    "rainbow": _stops(
+        [[150, 0, 90], [0, 0, 200], [0, 25, 255], [0, 152, 255], [44, 255, 150], [151, 255, 0], [255, 234, 0], [255, 111, 0], [255, 0, 0]]
+    ),
+    "coolwarm": _stops(
+        [[59, 76, 192], [84, 111, 203], [113, 145, 211], [149, 174, 216], [185, 199, 217], [221, 221, 221], [234, 204, 190], [232, 163, 142], [214, 109, 95], [180, 4, 38]]
+    ),
+    "bwr": _stops([[0, 0, 255], [127, 127, 255], [255, 255, 255], [255, 127, 127], [255, 0, 0]]),
+    "seismic": _stops(
+        [[0, 0, 76], [0, 0, 180], [0, 76, 255], [153, 204, 255], [255, 255, 255], [255, 204, 153], [255, 76, 0], [180, 0, 0], [76, 0, 0]]
+    ),
+    "spectral": _stops(
+        [[158, 1, 66], [213, 62, 79], [244, 109, 67], [253, 174, 97], [254, 224, 139], [255, 255, 191], [230, 245, 152], [171, 221, 164], [102, 194, 165], [50, 136, 189], [94, 79, 162]]
+    ),
+    "rdylbu": _stops(
+        [[165, 0, 38], [215, 48, 39], [244, 109, 67], [253, 174, 97], [254, 224, 144], [255, 255, 191], [224, 243, 248], [171, 217, 233], [116, 173, 209], [69, 117, 180], [49, 54, 149]]
+    ),
+    "rdylgn": _stops(
+        [[165, 0, 38], [215, 48, 39], [244, 109, 67], [253, 174, 97], [254, 224, 139], [255, 255, 191], [217, 239, 139], [166, 217, 106], [102, 189, 99], [26, 152, 80], [0, 104, 55]]
+    ),
+    "difference": _stops(
+        [[49, 54, 149], [69, 117, 180], [116, 173, 209], [224, 243, 248], [255, 255, 255], [254, 224, 144], [244, 109, 67], [215, 48, 39], [165, 0, 38]]
+    ),
+    "gray": _stops([[0, 0, 0], [255, 255, 255]]),
+    "hot": _stops([[0, 0, 0], [180, 0, 0], [255, 90, 0], [255, 220, 0], [255, 255, 255]]),
+    "cool": _stops([[0, 255, 255], [255, 0, 255]]),
+    "spring": _stops([[255, 0, 255], [255, 255, 0]]),
+    "summer": _stops([[0, 128, 102], [255, 255, 102]]),
+    "autumn": _stops([[255, 0, 0], [255, 255, 0]]),
+    "winter": _stops([[0, 0, 255], [0, 255, 128]]),
+    "copper": _stops([[0, 0, 0], [80, 50, 32], [160, 100, 64], [240, 150, 96], [255, 199, 127]]),
+    "terrain": _stops([[51, 51, 153], [0, 153, 255], [0, 204, 102], [102, 153, 51], [230, 220, 170], [255, 255, 255]]),
+    "ocean": _stops([[0, 0, 0], [0, 64, 128], [0, 128, 192], [0, 192, 192], [255, 255, 255]]),
+}
+SCALAR_FIELD_COLORMAP_OPTIONS = (
+    ("Viridis", "viridis"),
+    ("Plasma", "plasma"),
+    ("Inferno", "inferno"),
+    ("Magma", "magma"),
+    ("Cividis", "cividis"),
+    ("Turbo", "turbo"),
+    ("Jet", "jet"),
+    ("Rainbow", "rainbow"),
+    ("Coolwarm", "coolwarm"),
+    ("BWR", "bwr"),
+    ("Seismic", "seismic"),
+    ("Spectral", "spectral"),
+    ("RdYlBu", "rdylbu"),
+    ("RdYlGn", "rdylgn"),
+    ("Difference", "difference"),
+    ("Gray", "gray"),
+    ("Hot", "hot"),
+    ("Cool", "cool"),
+    ("Spring", "spring"),
+    ("Summer", "summer"),
+    ("Autumn", "autumn"),
+    ("Winter", "winter"),
+    ("Copper", "copper"),
+    ("Terrain", "terrain"),
+    ("Ocean", "ocean"),
+)
+SCALAR_FIELD_COLORMAPS = tuple(value for _, value in SCALAR_FIELD_COLORMAP_OPTIONS)
+_SCALAR_FIELD_COLORMAP_ALIASES = {
+    "grey": "gray",
+    "grayscale": "gray",
+    "rd_yl_bu": "rdylbu",
+    "rd_yl_gn": "rdylgn",
+}
 
 
 def to_float(value: Any) -> Optional[float]:
@@ -75,6 +201,185 @@ def adios_image_to_png_bytes(img: Any) -> bytes:
         raise ValueError(f"Unexpected image array shape: {arr.shape}, dtype={arr.dtype}")
 
     pil = Image.fromarray(arr, mode=mode)
+    buf = io.BytesIO()
+    pil.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _json_object_or_empty(text: Any) -> Dict[str, Any]:
+    if isinstance(text, dict):
+        return dict(text)
+    if text is None:
+        return {}
+    try:
+        value = json.loads(str(text))
+    except Exception:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _scalar_field_dtype(metadata: Dict[str, Any]) -> np.dtype:
+    dtype_name = str(metadata.get("dtype", "float32") or "float32").strip()
+    dtype = np.dtype(dtype_name)
+    byte_order = str(metadata.get("byte_order", "little") or "little").strip().lower()
+    if byte_order in {"little", "<"}:
+        dtype = dtype.newbyteorder("<")
+    elif byte_order in {"big", ">"}:
+        dtype = dtype.newbyteorder(">")
+    return dtype
+
+
+def _read_scalar_field_payload(
+    campaign_path: str,
+    item_uuid: str = "",
+    dataset_name: str = "",
+) -> Tuple[bytes, Dict[str, Any]]:
+    path = str(campaign_path or "").strip()
+    if not path:
+        raise ValueError("Missing campaign path for scalar field")
+    if not item_uuid and not dataset_name:
+        raise ValueError("Missing scalar field item UUID or dataset name")
+
+    where = "d.uuid = ?" if item_uuid else "d.name = ?"
+    value = item_uuid or dataset_name
+    con = sqlite3.connect(path)
+    con.row_factory = sqlite3.Row
+    try:
+        has_scalar_table = (
+            con.execute("select name from sqlite_master where type = 'table' and name = 'scalar_field'").fetchone()
+            is not None
+        )
+        metadata_select = "sf.metadata as scalar_metadata" if has_scalar_table else "NULL as scalar_metadata"
+        metadata_join = "left join scalar_field as sf on sf.datasetid = d.rowid" if has_scalar_table else ""
+        row = con.execute(
+            f"""
+            select
+                d.name as dataset_name,
+                d.fileformat as fileformat,
+                r.keyid as keyid,
+                f.compression as file_compression,
+                f.data as payload,
+                {metadata_select}
+            from dataset as d
+            join replica as r on r.datasetid = d.rowid
+            join repfiles as rf on rf.replicaid = r.rowid
+            join file as f on f.fileid = rf.fileid
+            {metadata_join}
+            where {where}
+              and d.deltime = 0
+              and r.deltime = 0
+              and d.fileformat = 'SCALAR_FIELD'
+              and f.data is not null
+            order by r.rowid, f.fileid
+            limit 1
+            """,
+            (value,),
+        ).fetchone()
+        if row is None:
+            raise LookupError(f"Scalar field payload not found: {value}")
+        if int(row["keyid"] or 0) > 0:
+            raise ValueError("Encrypted scalar field payloads are not supported by this viewer path")
+
+        payload = bytes(row["payload"])
+        compression = int(row["file_compression"] or 0)
+        if compression == 1:
+            payload = zlib.decompress(payload)
+        elif compression != 0:
+            raise ValueError(f"Unsupported file compression flag for scalar field: {compression}")
+
+        return payload, _json_object_or_empty(row["scalar_metadata"])
+    finally:
+        con.close()
+
+
+def _apply_colormap(values: np.ndarray, colormap: str) -> np.ndarray:
+    clipped = np.clip(values, 0.0, 1.0)
+    stops = _SCALAR_FIELD_COLORMAP_STOPS.get(colormap, _VIRIDIS_STOPS)
+    scaled = clipped * (len(stops) - 1)
+    lower = np.floor(scaled).astype(np.int32)
+    upper = np.clip(lower + 1, 0, len(stops) - 1)
+    frac = (scaled - lower)[..., None]
+    rgb = stops[lower] * (1.0 - frac) + stops[upper] * frac
+    return np.clip(rgb, 0, 255).astype(np.uint8)
+
+
+def _scalar_field_colormap(render_options: Optional[Dict[str, Any]], metadata: Dict[str, Any]) -> str:
+    options = render_options if isinstance(render_options, dict) else {}
+    value = str(options.get("colormap", "") or metadata.get("colormap", "") or "viridis").strip().lower()
+    value = _SCALAR_FIELD_COLORMAP_ALIASES.get(value, value)
+    return value if value in SCALAR_FIELD_COLORMAPS else "viridis"
+
+
+def _scalar_field_render_range(
+    values: np.ndarray,
+    finite: np.ndarray,
+    metadata: Dict[str, Any],
+    render_options: Optional[Dict[str, Any]],
+) -> Tuple[float, float]:
+    options = render_options if isinstance(render_options, dict) else {}
+    range_mode = str(options.get("range_mode", "auto") or "auto").strip().lower()
+    if range_mode == "manual":
+        manual_min, manual_max = valid_extrema(
+            to_float(options.get("min", None)),
+            to_float(options.get("max", None)),
+        )
+        if manual_min is not None and manual_max is not None and manual_min < manual_max:
+            return float(manual_min), float(manual_max)
+
+    fmin, fmax = valid_extrema(to_float(metadata.get("min", None)), to_float(metadata.get("max", None)))
+    if fmin is not None and fmax is not None:
+        return float(fmin), float(fmax)
+
+    finite_values = values[finite]
+    return float(np.min(finite_values)), float(np.max(finite_values))
+
+
+def scalar_field_to_png_bytes(
+    payload: bytes,
+    metadata: Dict[str, Any],
+    render_options: Optional[Dict[str, Any]] = None,
+) -> bytes:
+    if str(metadata.get("kind", "") or "") != "scalarField":
+        raise ValueError("Scalar field metadata.kind must be 'scalarField'")
+    if str(metadata.get("encoding", "raw") or "raw").lower() != "raw":
+        raise ValueError("Only raw scalar field encoding is supported")
+    if str(metadata.get("compression", "none") or "none").lower() != "none":
+        raise ValueError("Only compression='none' scalar field metadata is supported")
+    if str(metadata.get("layout", "row-major") or "row-major").lower() != "row-major":
+        raise ValueError("Only row-major scalar field layout is supported")
+    if str(metadata.get("value_encoding", "direct") or "direct").lower() != "direct":
+        raise ValueError("Only direct scalar field value encoding is supported")
+
+    shape = metadata.get("shape", [])
+    if not isinstance(shape, list) or len(shape) != 2:
+        raise ValueError("Scalar field metadata.shape must be [height, width]")
+    height = int(shape[0])
+    width = int(shape[1])
+    if height <= 0 or width <= 0:
+        raise ValueError("Scalar field shape dimensions must be positive")
+
+    dtype = _scalar_field_dtype(metadata)
+    expected = height * width * dtype.itemsize
+    if len(payload) != expected:
+        raise ValueError(f"Scalar field payload has {len(payload)} bytes; expected {expected}")
+
+    arr = np.frombuffer(payload, dtype=dtype).reshape((height, width))
+    values = arr.astype(np.float32, copy=False)
+    finite = np.isfinite(values)
+    if not np.any(finite):
+        raise ValueError("Scalar field contains no finite values")
+
+    fmin, fmax = _scalar_field_render_range(values, finite, metadata, render_options)
+
+    if fmax <= fmin:
+        normalized = np.zeros_like(values, dtype=np.float32)
+    else:
+        normalized = (values - float(fmin)) / (float(fmax) - float(fmin))
+    normalized = np.where(finite, normalized, 0.0)
+    rgb = _apply_colormap(normalized, _scalar_field_colormap(render_options, metadata))
+    rgb[~finite] = np.array([0, 0, 0], dtype=np.uint8)
+
+    pil = Image.fromarray(rgb, mode="RGB")
     buf = io.BytesIO()
     pil.save(buf, format="PNG")
     return buf.getvalue()
@@ -229,7 +534,13 @@ class CampaignDb:
         if not self.ok:
             return []
         try:
-            image_query = and_filter({"variable_type": "image", "visualization_name": {"$ne": ""}}, extra_filter)
+            image_query = and_filter(
+                {
+                    "variable_type": {"$in": list(VISUALIZATION_PAYLOAD_VARIABLE_TYPES)},
+                    "visualization_name": {"$ne": ""},
+                },
+                extra_filter,
+            )
             queries = [image_query] if only_visualized else [
                 and_filter({"variable_type": "variable"}, extra_filter),
                 image_query,
@@ -328,7 +639,7 @@ class CampaignDb:
     ) -> List[Dict[str, Any]]:
         base_query: Dict[str, Any] = {
             "variable_id": variable_id,
-            "variable_type": "image",
+            "variable_type": {"$in": list(VISUALIZATION_PAYLOAD_VARIABLE_TYPES)},
             "visualization_name": {"$ne": ""},
         }
         query = and_filter(base_query, extra_filter)
@@ -336,6 +647,8 @@ class CampaignDb:
             "_id": 0,
             "variable_id": 1,
             "variable_path": 1,
+            "min": 1,
+            "max": 1,
             "source_dataset": 1,
             "producer": 1,
             "casename": 1,
@@ -366,8 +679,8 @@ class CampaignDb:
                     "producer": producer,
                     "casename": casename,
                     "file": file,
-                    "min": None,
-                    "max": None,
+                    "min": to_float(doc.get("min", None)),
+                    "max": to_float(doc.get("max", None)),
                 }
             )
         return sources
@@ -382,7 +695,7 @@ class CampaignDb:
         try:
             base_query: Dict[str, Any] = {
                 "variable_id": variable_id,
-                "variable_type": "image",
+                "variable_type": {"$in": list(VISUALIZATION_PAYLOAD_VARIABLE_TYPES)},
                 "visualization_name": {"$ne": ""},
             }
             query = and_filter(base_query, extra_filter)
@@ -967,19 +1280,27 @@ class CampaignDb:
             valid = len(mins)
 
             # Stage 2 support: if this variable has no ADIOS variable docs, but does
-            # have image docs, return source rows with n/a min/max so the viewer can
-            # still browse visualizations.
+            # have visualization payload docs, return those source rows so the
+            # viewer can still browse visualizations.
             if num_sources == 0:
                 image_sources = self._image_sources_for_variable(variable_id, extra_filter=extra_filter)
+                image_mins: List[float] = []
+                image_maxs: List[float] = []
+                for source in image_sources:
+                    fmin, fmax = valid_extrema(to_float(source.get("min", None)), to_float(source.get("max", None)))
+                    if fmin is not None and fmax is not None:
+                        image_mins.append(fmin)
+                        image_maxs.append(fmax)
+                image_valid = len(image_mins)
                 return {
                     "variable": variable_id,
                     "num_sources": len(image_sources),
-                    "global_min": None,
-                    "global_max": None,
-                    "mean_min": None,
-                    "mean_max": None,
-                    "median_min": None,
-                    "median_max": None,
+                    "global_min": min(image_mins) if image_valid else None,
+                    "global_max": max(image_maxs) if image_valid else None,
+                    "mean_min": statistics.fmean(image_mins) if image_valid else None,
+                    "mean_max": statistics.fmean(image_maxs) if image_valid else None,
+                    "median_min": statistics.median(image_mins) if image_valid else None,
+                    "median_max": statistics.median(image_maxs) if image_valid else None,
                     "sources": image_sources,
                 }
 
@@ -1010,13 +1331,14 @@ class CampaignDb:
         source_dataset: str = "",
         extra_filter: Optional[Dict[str, Any]] = None,
         limit_frames: int = 240,
+        scalar_field_options: Optional[Dict[str, Any]] = None,
     ) -> Tuple[List[bytes], int]:
         if not self.ok or not variable_id:
             return ([], 0)
 
         base_query: Dict[str, Any] = {
             "variable_id": variable_id,
-            "variable_type": "image",
+            "variable_type": {"$in": list(VISUALIZATION_PAYLOAD_VARIABLE_TYPES)},
             "visualization_name": visualization_name,
         }
         if source_dataset:
@@ -1033,8 +1355,11 @@ class CampaignDb:
             "_id": 1,
             "campaign_path": 1,
             "variable_path": 1,
+            "variable_type": 1,
             "image_bytes": 1,
             "frame_index": 1,
+            "scalar_field_metadata": 1,
+            "visualization_item_uuid": 1,
         }
 
         try:
@@ -1068,6 +1393,17 @@ class CampaignDb:
                         continue
 
                     try:
+                        if str(doc.get("variable_type", "") or "") == SCALAR_FIELD_VARIABLE_TYPE:
+                            payload, stored_metadata = _read_scalar_field_payload(
+                                campaign_path,
+                                item_uuid=str(doc.get("visualization_item_uuid", "") or ""),
+                                dataset_name=variable_path,
+                            )
+                            doc_metadata = dict(doc.get("scalar_field_metadata", {}) or {})
+                            metadata = {**stored_metadata, **doc_metadata}
+                            frames.append(scalar_field_to_png_bytes(payload, metadata, scalar_field_options))
+                            continue
+
                         reader = readers.get(campaign_path)
                         if reader is None:
                             reader = stack.enter_context(FileReader(campaign_path))
@@ -1090,13 +1426,14 @@ class CampaignDb:
         limit: int = 4,
         limit_frames: int = 240,
         fps: int = 24,
+        scalar_field_options: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         if not self.ok or not variable_id:
             return []
 
         base_query: Dict[str, Any] = {
             "variable_id": variable_id,
-            "variable_type": "image",
+            "variable_type": {"$in": list(VISUALIZATION_PAYLOAD_VARIABLE_TYPES)},
             "visualization_name": {"$ne": ""},
         }
         query = and_filter(base_query, extra_filter)
@@ -1110,6 +1447,11 @@ class CampaignDb:
             "casename": 1,
             "file": 1,
             "visualization_name": 1,
+            "variable_type": 1,
+            "payload_type": 1,
+            "visualization_item_type": 1,
+            "min": 1,
+            "max": 1,
         }
 
         try:
@@ -1142,6 +1484,7 @@ class CampaignDb:
                     source_dataset=source_dataset,
                     extra_filter=extra_filter,
                     limit_frames=limit_frames,
+                    scalar_field_options=scalar_field_options,
                 )
 
                 src = ""
@@ -1175,6 +1518,11 @@ class CampaignDb:
                         "producer": producer,
                         "casename": casename,
                         "file": file,
+                        "min": doc.get("min", None),
+                        "max": doc.get("max", None),
+                        "variable_type": str(doc.get("variable_type", "") or ""),
+                        "payload_type": str(doc.get("payload_type", "") or ""),
+                        "visualization_item_type": str(doc.get("visualization_item_type", "") or ""),
                         "src": src,
                         "media_type": media_type,
                         "status": status,

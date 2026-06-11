@@ -2,6 +2,8 @@ from trame.ui.vuetify3 import SinglePageLayout
 from trame.widgets import client, html
 from trame.widgets import vuetify3 as vuetify
 
+from db import SCALAR_FIELD_COLORMAP_OPTIONS
+
 
 def build_ui(server, refresh_variable_list, campaign_name: str = ""):
     state, ctrl = server.state, server.controller
@@ -251,6 +253,69 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
               }
             }
           }, true);
+        }
+
+        if (!window.__catnipFloatingPanelDragInit) {
+          window.__catnipFloatingPanelDragInit = true;
+          let floatingDrag = null;
+
+          function clampFloatingPanel(panel, left, top) {
+            const margin = 8;
+            const width = panel.offsetWidth || 560;
+            const height = panel.offsetHeight || 360;
+            const maxLeft = Math.max(margin, window.innerWidth - width - margin);
+            const maxTop = Math.max(margin, window.innerHeight - height - margin);
+            return {
+              left: Math.max(margin, Math.min(left, maxLeft)),
+              top: Math.max(margin, Math.min(top, maxTop)),
+            };
+          }
+
+          document.addEventListener("pointerdown", function(e) {
+            const target = e && e.target;
+            const handle = target && target.closest && target.closest(".catnip-floating-panel-drag-handle");
+            if (!handle) return;
+            const panel = handle.closest(".catnip-floating-options-panel");
+            if (!panel) return;
+            const rect = panel.getBoundingClientRect();
+            floatingDrag = {
+              panel,
+              startX: Number(e.clientX) || 0,
+              startY: Number(e.clientY) || 0,
+              left: rect.left,
+              top: rect.top,
+            };
+            panel.classList.add("is-dragging");
+            e.preventDefault();
+          }, true);
+
+          document.addEventListener("pointermove", function(e) {
+            if (!floatingDrag) return;
+            const dx = (Number(e.clientX) || 0) - floatingDrag.startX;
+            const dy = (Number(e.clientY) || 0) - floatingDrag.startY;
+            const pos = clampFloatingPanel(floatingDrag.panel, floatingDrag.left + dx, floatingDrag.top + dy);
+            floatingDrag.panel.style.left = pos.left + "px";
+            floatingDrag.panel.style.top = pos.top + "px";
+          }, true);
+
+          function endFloatingDrag() {
+            if (floatingDrag && floatingDrag.panel) {
+              floatingDrag.panel.classList.remove("is-dragging");
+            }
+            floatingDrag = null;
+          }
+
+          document.addEventListener("pointerup", endFloatingDrag, true);
+          document.addEventListener("pointercancel", endFloatingDrag, true);
+          window.addEventListener("resize", function() {
+            const panels = document.querySelectorAll(".catnip-floating-options-panel");
+            for (const panel of panels) {
+              const rect = panel.getBoundingClientRect();
+              const pos = clampFloatingPanel(panel, rect.left, rect.top);
+              panel.style.left = pos.left + "px";
+              panel.style.top = pos.top + "px";
+            }
+          });
         }
 
         if (window.__catnipDnDInit) return;
@@ -1910,6 +1975,46 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                 .catnip-scalar-plot-label {
                   white-space: nowrap;
                 }
+                .catnip-floating-options-panel {
+                  position: fixed;
+                  top: 84px;
+                  left: max(8px, min(320px, calc(100vw - 568px)));
+                  z-index: 9000;
+                  width: min(560px, calc(100vw - 16px));
+                  max-height: calc(100vh - 16px);
+                }
+                .catnip-floating-options-panel.is-dragging {
+                  user-select: none;
+                }
+                .catnip-floating-options-card {
+                  max-height: inherit;
+                  display: flex;
+                  flex-direction: column;
+                }
+                .catnip-floating-options-titlebar {
+                  min-height: 42px;
+                  padding: 8px 12px !important;
+                  border-bottom: 1px solid #dddddd;
+                }
+                .catnip-floating-panel-drag-handle {
+                  min-width: 0;
+                  flex: 1 1 auto;
+                  cursor: move;
+                  user-select: none;
+                  white-space: nowrap;
+                  overflow: hidden;
+                  text-overflow: ellipsis;
+                }
+                .catnip-floating-options-content {
+                  overflow: auto;
+                  max-height: calc(100vh - 136px);
+                }
+                .catnip-scalar-field-range-row {
+                  grid-template-columns: 48px 120px minmax(90px, 1fr) minmax(90px, 1fr);
+                }
+                .catnip-scalar-field-colormap {
+                  min-width: 180px;
+                }
                 .catnip-plot-settings-axis-list {
                   display: flex;
                   flex-direction: column;
@@ -3184,6 +3289,78 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                     vuetify.VBtn("Cancel", variant="text", click=ctrl.cancel_plot_settings)
                                     vuetify.VBtn("Apply", variant="tonal", click=ctrl.apply_plot_settings)
 
+                        with html.Div(
+                            id="catnip-scalar-field-settings-panel",
+                            v_show=("showScalarFieldSettingsModal",),
+                            classes="catnip-floating-options-panel",
+                        ):
+                            with vuetify.VCard(classes="catnip-floating-options-card", elevation=6):
+                                with vuetify.VCardTitle(classes="catnip-floating-options-titlebar"):
+                                    with html.Div(style="display:flex; align-items:center; gap:8px; width:100%;"):
+                                        html.Div(
+                                            "{{ 'Plot Options: ' + (scalarFieldSettingsTitle || '') }}",
+                                            classes="catnip-floating-panel-drag-handle",
+                                        )
+                                        vuetify.VSpacer()
+                                        vuetify.VBtn(
+                                            "Close",
+                                            variant="text",
+                                            size="small",
+                                            click=ctrl.cancel_scalar_field_settings,
+                                        )
+
+                                with vuetify.VCardText(classes="catnip-floating-options-content"):
+                                    with vuetify.Template(v_if="scalarFieldSettingsStatus"):
+                                        html.Div(
+                                            "{{ scalarFieldSettingsStatus }}",
+                                            class_="text-caption mb-2",
+                                            raw_attrs=[
+                                                ':style="{ color: scalarFieldSettingsStatusIsError ? \'#b00020\' : \'#1b5e20\' }"'
+                                            ],
+                                        )
+
+                                    html.Div("Color", classes="catnip-plot-settings-section-title")
+                                    with html.Div(classes="catnip-plot-settings-section"):
+                                        with html.Div(classes="catnip-plot-settings-row"):
+                                            html.Span("Colormap", class_="text-caption")
+                                            with html.Select(
+                                                v_model=("scalarFieldSettingsColormap",),
+                                                classes="catnip-scalar-plot-policy catnip-scalar-field-colormap",
+                                            ):
+                                                for label, value in SCALAR_FIELD_COLORMAP_OPTIONS:
+                                                    html.Option(label, value=value)
+
+                                    html.Div("Range", classes="catnip-plot-settings-section-title mt-3")
+                                    with html.Div(classes="catnip-plot-settings-section"):
+                                        with html.Div(classes="catnip-plot-settings-axis-row catnip-scalar-field-range-row"):
+                                            html.Span("Values:", classes="catnip-plot-settings-axis-label")
+                                            vuetify.VCheckbox(
+                                                v_model=("scalarFieldSettingsRangeAuto",),
+                                                label="Auto range",
+                                                density="compact",
+                                                hide_details=True,
+                                            )
+                                            vuetify.VTextField(
+                                                v_model=("scalarFieldSettingsMin",),
+                                                label="Min",
+                                                density="compact",
+                                                hide_details=True,
+                                                raw_attrs=[':disabled="scalarFieldSettingsRangeAuto"'],
+                                            )
+                                            vuetify.VTextField(
+                                                v_model=("scalarFieldSettingsMax",),
+                                                label="Max",
+                                                density="compact",
+                                                hide_details=True,
+                                                raw_attrs=[':disabled="scalarFieldSettingsRangeAuto"'],
+                                            )
+
+                                with vuetify.VCardActions():
+                                    vuetify.VSpacer()
+                                    vuetify.VBtn("Reset", variant="text", click=ctrl.reset_scalar_field_settings)
+                                    vuetify.VBtn("Close", variant="text", click=ctrl.cancel_scalar_field_settings)
+                                    vuetify.VBtn("Apply", variant="tonal", click=ctrl.apply_scalar_field_settings)
+
             with html.Div(
                 id="catnip-context-menu",
                 v_show=("contextMenuVisible",),
@@ -3217,6 +3394,8 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                         html.Div("Add Source", classes="menu-item", click=ctrl.context_menu_cell_add_source)
                     with vuetify.Template(v_if="contextMenuCellCanPlotSettings"):
                         html.Div("Plot settings...", classes="menu-item", click=ctrl.context_menu_cell_plot_settings)
+                    with vuetify.Template(v_if="contextMenuCellCanScalarFieldSettings"):
+                        html.Div("Plot options...", classes="menu-item", click=ctrl.context_menu_cell_scalar_field_settings)
                     with vuetify.Template(v_if="(contextMenuCellVisualizationOptions || []).length"):
                         html.Div("Visualization Type", classes="menu-section")
                         with vuetify.Template(v_for="vis in contextMenuCellVisualizationOptions", key="vis"):

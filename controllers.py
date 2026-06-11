@@ -3,7 +3,12 @@ import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from config import MAX_MOVIE_FRAMES, MOVIE_FPS
-from db import GENERATED_SCALAR_PLOT_VIS
+from db import (
+    GENERATED_SCALAR_PLOT_VIS,
+    SCALAR_FIELD_COLORMAPS,
+    SCALAR_FIELD_VARIABLE_TYPE,
+    VISUALIZATION_PAYLOAD_VARIABLE_TYPES,
+)
 from query_parser import and_filter, python_query_to_mongo, python_source_filter_matches
 from state_init import clear_right_panes, fmt
 
@@ -220,6 +225,60 @@ def attach_controllers(
             ):
                 return row
         return {}
+
+    def source_key_for_fields(row: Dict[str, Any]) -> str:
+        return (
+            "|".join(
+                str(row.get(key, "") or "")
+                for key in ("variable_id", "source_dataset", "producer", "casename", "file")
+            ).strip("|")
+            or str(row.get("source_dataset", "") or "")
+            or f"{row.get('producer', '')}|{row.get('casename', '')}|{row.get('file', '')}"
+        )
+
+    def visualization_names_for_source_filter(variable_id: str, source_filter: Dict[str, Any]) -> List[str]:
+        qf = state.queryFilter or None
+        active_filter = and_filter(qf, source_filter) if qf and source_filter else (qf or source_filter or None)
+        return db.distinct_visualization_names_for_variable(variable_id, extra_filter=active_filter)
+
+    def source_row_for_visualization_pick(variable_id: str, visualization_name: str) -> Dict[str, str]:
+        var_id = str(variable_id or "").strip()
+        vis = str(visualization_name or "").strip()
+        if not var_id or not vis:
+            return {}
+
+        query = {
+            "variable_id": var_id,
+            "variable_type": {"$in": list(VISUALIZATION_PAYLOAD_VARIABLE_TYPES)},
+            "visualization_name": vis,
+        }
+        if state.queryFilter:
+            query = and_filter(state.queryFilter, query)
+        proj = {
+            "_id": 1,
+            "variable_id": 1,
+            "source_dataset": 1,
+            "producer": 1,
+            "casename": 1,
+            "file": 1,
+        }
+
+        try:
+            doc = collection.find_one(query, proj)
+        except Exception:
+            doc = None
+        if not doc:
+            return {}
+
+        row = {
+            "variable_id": str(doc.get("variable_id", "") or var_id),
+            "source_dataset": str(doc.get("source_dataset", "") or ""),
+            "producer": str(doc.get("producer", "") or ""),
+            "casename": str(doc.get("casename", "") or ""),
+            "file": str(doc.get("file", "") or ""),
+        }
+        row["_key"] = source_key_for_fields(row)
+        return row
 
     def active_source_filter_for_variable(variable_id: str) -> Dict[str, str]:
         if str(state.detailsSelectedVarId or "") != str(variable_id or ""):
@@ -485,12 +544,20 @@ def attach_controllers(
             cell["display_title"] = str(label or "")
             return
 
-        fmin, fmax = valid_title_extrema(cell.get("min", None), cell.get("max", None))
-        if fmin is None or fmax is None:
+        if is_scalar_field_cell(cell):
             fmin, fmax = source_extrema_for_title(
                 variable_id,
                 source_filter_from_cell(cell),
             )
+            if fmin is None or fmax is None:
+                fmin, fmax = valid_title_extrema(cell.get("min", None), cell.get("max", None))
+        else:
+            fmin, fmax = valid_title_extrema(cell.get("min", None), cell.get("max", None))
+            if fmin is None or fmax is None:
+                fmin, fmax = source_extrema_for_title(
+                    variable_id,
+                    source_filter_from_cell(cell),
+                )
 
         if fmin is None or fmax is None:
             cell["display_title"] = str(label or "")
@@ -663,6 +730,70 @@ def attach_controllers(
         number = finite_float(value)
         return "" if number is None else f"{number:.12g}"
 
+    def scalar_colormap(value: Any) -> str:
+        name = str(value or "viridis").strip().lower()
+        return name if name in SCALAR_FIELD_COLORMAPS else "viridis"
+
+    def normalize_scalar_field_settings(raw_settings: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        raw = dict(raw_settings or {})
+        range_mode = str(raw.get("range_mode", "") or "").strip().lower()
+        range_auto = raw.get("range_auto", None)
+        if range_auto is None:
+            range_auto = range_mode != "manual"
+        range_auto = to_bool(range_auto, True)
+        min_value = finite_float(raw.get("min", None))
+        max_value = finite_float(raw.get("max", None))
+        if range_auto or min_value is None or max_value is None or min_value >= max_value:
+            min_value = None
+            max_value = None
+            range_auto = True
+
+        return {
+            "colormap": scalar_colormap(raw.get("colormap", "viridis")),
+            "range_auto": range_auto,
+            "range_mode": "auto" if range_auto else "manual",
+            "min": min_value,
+            "max": max_value,
+        }
+
+    def is_scalar_field_cell(cell: Dict[str, Any]) -> bool:
+        variable_type = str(cell.get("variable_type", "") or "").strip()
+        payload_type = str(cell.get("payload_type", "") or "").strip().upper()
+        item_type = str(cell.get("visualization_item_type", "") or "").strip().upper()
+        return (
+            variable_type == SCALAR_FIELD_VARIABLE_TYPE
+            or payload_type == "SCALAR_FIELD"
+            or item_type == "SCALAR_FIELD"
+        )
+
+    def existing_scalar_field_settings(existing_cell: Optional[Dict[str, Any]], variable_id: str) -> Dict[str, Any]:
+        if not isinstance(existing_cell, dict):
+            return normalize_scalar_field_settings()
+        existing_var = str(existing_cell.get("variable_id", "") or existing_cell.get("variable_name", "") or "")
+        if existing_var != str(variable_id or ""):
+            return normalize_scalar_field_settings()
+        return normalize_scalar_field_settings(existing_cell.get("scalar_field_settings", {}))
+
+    def load_scalar_field_settings_dialog(idx: int, reset: bool = False) -> None:
+        cells = normalize_grid_cells(state.gridCells)
+        if not is_valid_grid_index(idx):
+            return
+        cell = dict(cells[idx] or {})
+        if not is_scalar_field_cell(cell):
+            return
+
+        raw_settings = {} if reset else dict(cell.get("scalar_field_settings", {}) or {})
+        settings = normalize_scalar_field_settings(raw_settings)
+        state.scalarFieldSettingsCellIndex = idx
+        state.scalarFieldSettingsTitle = str(cell.get("variable_name", "") or f"Cell {idx + 1}")
+        state.scalarFieldSettingsStatus = ""
+        state.scalarFieldSettingsStatusIsError = False
+        state.scalarFieldSettingsColormap = str(settings.get("colormap", "viridis") or "viridis")
+        state.scalarFieldSettingsRangeAuto = bool(settings.get("range_auto", True))
+        state.scalarFieldSettingsMin = settings_value_text(settings.get("min", None))
+        state.scalarFieldSettingsMax = settings_value_text(settings.get("max", None))
+        state.showScalarFieldSettingsModal = True
+
     def load_plot_settings_dialog(idx: int, reset: bool = False) -> None:
         cells = normalize_grid_cells(state.gridCells)
         if not is_valid_grid_index(idx):
@@ -702,6 +833,7 @@ def attach_controllers(
         state.contextMenuCellHasVariable = False
         state.contextMenuCellCanAddSource = False
         state.contextMenuCellCanPlotSettings = False
+        state.contextMenuCellCanScalarFieldSettings = False
         state.contextMenuCellVisualizationOptions = []
         state.contextMenuCellSelectedVisualization = ""
 
@@ -1066,6 +1198,7 @@ def attach_controllers(
         if not var_id:
             return cell
         label = variable_label(var_id)
+        scalar_settings = existing_scalar_field_settings(existing_cell, var_id)
 
         qf = state.queryFilter or None
         source_fields: Dict[str, str] = {}
@@ -1113,10 +1246,13 @@ def attach_controllers(
                 limit=1,
                 limit_frames=MAX_MOVIE_FRAMES,
                 fps=MOVIE_FPS,
+                scalar_field_options=scalar_settings,
             )
             if one:
                 cell.update(one[0] or {})
                 cell.update({k: v for k, v in source_fields.items() if v})
+                if is_scalar_field_cell(cell):
+                    cell["scalar_field_settings"] = scalar_settings
             else:
                 cell["status"] = "no-frames"
                 cell["note"] = f'No movie for "{selected_vis}"'
@@ -1131,6 +1267,8 @@ def attach_controllers(
         cell["visualization_name"] = selected_vis
         cell["selected_visualization"] = selected_vis
         cell["visualization_options"] = vis_names
+        if is_scalar_field_cell(cell):
+            cell["scalar_field_settings"] = scalar_settings
         update_2d_display_title(cell, var_id, label)
         return cell
 
@@ -2191,7 +2329,19 @@ def attach_controllers(
         picked = str(picked or "")
 
         try:
-            assign_cell(cells, idx, build_grid_cell_for_variable(var, preferred_vis=picked, existing_cell=cells[idx]))
+            existing_cell = cells[idx]
+            current_filter = source_filter_from_cell(existing_cell)
+            source_row = {}
+            if current_filter:
+                current_vis_names = visualization_names_for_source_filter(var, current_filter)
+                if picked not in current_vis_names:
+                    source_row = source_row_for_visualization_pick(var, picked)
+
+            if source_row:
+                new_cell = build_grid_cell_for_variable(var, preferred_vis=picked, source_row=source_row)
+            else:
+                new_cell = build_grid_cell_for_variable(var, preferred_vis=picked, existing_cell=existing_cell)
+            assign_cell(cells, idx, new_cell)
         except Exception as e:
             err_cell = empty_grid_cell()
             err_cell["variable_id"] = var
@@ -2269,6 +2419,7 @@ def attach_controllers(
             vis_opts.append(selected_vis)
         can_add_source = has_var and is_generated_plot1d_cell(cell)
         can_plot_settings = has_var and str(cell.get("media_type", "") or "") == "plot1d"
+        can_scalar_field_settings = has_var and is_scalar_field_cell(cell)
 
         state.contextMenuKind = "cell"
         state.contextMenuItem = label
@@ -2277,6 +2428,7 @@ def attach_controllers(
         state.contextMenuCellHasVariable = has_var
         state.contextMenuCellCanAddSource = can_add_source
         state.contextMenuCellCanPlotSettings = can_plot_settings
+        state.contextMenuCellCanScalarFieldSettings = can_scalar_field_settings
         state.contextMenuCellVisualizationOptions = vis_opts
         state.contextMenuCellSelectedVisualization = selected_vis
         state.contextMenuX = px
@@ -2435,6 +2587,26 @@ def attach_controllers(
         load_plot_settings_dialog(idx)
         hide_context_menu()
 
+    @ctrl.add("context_menu_cell_scalar_field_settings")
+    def context_menu_cell_scalar_field_settings(**_):
+        try:
+            idx = int(state.contextMenuCellIndex)
+        except Exception:
+            idx = -1
+        if not is_valid_grid_index(idx):
+            hide_context_menu()
+            return
+
+        cells = normalize_grid_cells(state.gridCells)
+        cell = dict(cells[idx] or {})
+        if not is_scalar_field_cell(cell):
+            hide_context_menu()
+            return
+
+        state.activeGridCell = idx
+        load_scalar_field_settings_dialog(idx)
+        hide_context_menu()
+
     @ctrl.add("context_menu_cell_pick_visualization")
     def context_menu_cell_pick_visualization(value: str = "", **_):
         try:
@@ -2486,6 +2658,84 @@ def attach_controllers(
         state.showPlotSettingsModal = False
         state.plotSettingsCellIndex = -1
         state.plotSettingsStatus = ""
+
+    @ctrl.add("cancel_scalar_field_settings")
+    def cancel_scalar_field_settings(**_):
+        state.showScalarFieldSettingsModal = False
+        state.scalarFieldSettingsCellIndex = -1
+        state.scalarFieldSettingsStatus = ""
+        state.scalarFieldSettingsStatusIsError = False
+
+    @ctrl.add("reset_scalar_field_settings")
+    def reset_scalar_field_settings(**_):
+        try:
+            idx = int(state.scalarFieldSettingsCellIndex)
+        except Exception:
+            idx = -1
+        if is_valid_grid_index(idx):
+            load_scalar_field_settings_dialog(idx, reset=True)
+
+    @ctrl.add("apply_scalar_field_settings")
+    def apply_scalar_field_settings(**_):
+        try:
+            idx = int(state.scalarFieldSettingsCellIndex)
+        except Exception:
+            idx = -1
+        if not is_valid_grid_index(idx):
+            state.scalarFieldSettingsStatus = "No scalar-field cell selected."
+            state.scalarFieldSettingsStatusIsError = True
+            return
+
+        cells = normalize_grid_cells(state.gridCells)
+        cell = dict(cells[idx] or {})
+        if not is_scalar_field_cell(cell):
+            state.scalarFieldSettingsStatus = "Selected cell is not a scalar-field visualization."
+            state.scalarFieldSettingsStatusIsError = True
+            return
+
+        colormap = scalar_colormap(state.scalarFieldSettingsColormap)
+        range_auto = bool(state.scalarFieldSettingsRangeAuto)
+        min_value = finite_float(state.scalarFieldSettingsMin)
+        max_value = finite_float(state.scalarFieldSettingsMax)
+        if not range_auto:
+            if min_value is None or max_value is None:
+                state.scalarFieldSettingsStatus = "Manual range requires min and max values."
+                state.scalarFieldSettingsStatusIsError = True
+                return
+            if min_value >= max_value:
+                state.scalarFieldSettingsStatus = "Manual range must have min < max."
+                state.scalarFieldSettingsStatusIsError = True
+                return
+
+        settings = normalize_scalar_field_settings(
+            {
+                "colormap": colormap,
+                "range_auto": range_auto,
+                "min": None if range_auto else min_value,
+                "max": None if range_auto else max_value,
+            }
+        )
+        cell["scalar_field_settings"] = settings
+
+        var = str(cell.get("variable_id", "") or cell.get("variable_name", "") or "").strip()
+        selected_vis = str(cell.get("selected_visualization", "") or cell.get("visualization_name", "") or "").strip()
+        if not var or not selected_vis:
+            state.scalarFieldSettingsStatus = "Cell is missing a variable or visualization."
+            state.scalarFieldSettingsStatusIsError = True
+            return
+
+        try:
+            new_cell = build_grid_cell_for_variable(var, preferred_vis=selected_vis, existing_cell=cell)
+            assign_cell(cells, idx, new_cell)
+        except Exception as e:
+            state.scalarFieldSettingsStatus = f"{type(e).__name__}: {e}"
+            state.scalarFieldSettingsStatusIsError = True
+            return
+
+        state.gridCells = normalize_grid_cells(cells)
+        state.activeGridCell = idx
+        state.scalarFieldSettingsStatus = "Applied."
+        state.scalarFieldSettingsStatusIsError = False
 
     @ctrl.add("reset_plot_settings")
     def reset_plot_settings(**_):
