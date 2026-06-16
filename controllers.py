@@ -841,6 +841,11 @@ def attach_controllers(
         state.contextMenuCellVisualizationOptions = []
         state.contextMenuCellSelectedVisualization = ""
 
+    def show_help(title: str) -> None:
+        state.helpModalTitle = title
+        state.helpModalText = "TODO"
+        state.showHelpModal = True
+
     def clamp_int(value, default: int, minimum: int, maximum: int) -> int:
         try:
             ivalue = int(value)
@@ -2991,6 +2996,18 @@ def attach_controllers(
         state.sourceFilterText = str(state.sourceFilterDraftText or "").strip()
         state.sourceFilterError = ""
         apply_source_filter_and_sort()
+
+    @ctrl.add("show_query_help")
+    def show_query_help(**_):
+        show_help("Query Help")
+
+    @ctrl.add("show_source_filter_help")
+    def show_source_filter_help(**_):
+        show_help("Source Filter Help")
+
+    @ctrl.add("close_help_modal")
+    def close_help_modal(**_):
+        state.showHelpModal = False
 
     def sync_add_source_selection_to_cell(var_id: str, idx: int, selected: List[str]) -> None:
         if not var_id or not is_valid_grid_index(idx):

@@ -2084,6 +2084,14 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                 style="max-width: 420px;",
                 class_="mx-2",
             )
+            vuetify.VBtn(
+                "?",
+                click=ctrl.show_query_help,
+                variant="tonal",
+                size="small",
+                min_width=32,
+                title="Query help",
+            )
             vuetify.VBtn("Query", click=ctrl.run_query, variant="outlined", size="small")
             vuetify.VBtn("Clear", click=ctrl.clear_query, variant="text", size="small", class_="ml-1")
             with vuetify.Template(v_if="queryError"):
@@ -2745,6 +2753,22 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                 }
                 """
             )
+            with vuetify.VDialog(v_model=("showHelpModal",), max_width="520"):
+                with vuetify.VCard():
+                    with vuetify.VCardTitle():
+                        with html.Div(style="display:flex; align-items:center; gap:8px; width:100%;"):
+                            html.Div("{{ helpModalTitle || 'Help' }}")
+                            vuetify.VSpacer()
+                            vuetify.VBtn("Close", variant="text", size="small", click=ctrl.close_help_modal)
+                    with vuetify.VCardText():
+                        vuetify.VTextarea(
+                            v_model=("helpModalText",),
+                            readonly=True,
+                            auto_grow=True,
+                            rows=3,
+                            variant="outlined",
+                            hide_details=True,
+                        )
             with vuetify.VContainer(fluid=True, class_="pa-2"):
                 with vuetify.VRow():
                     with vuetify.VCol(cols=2, style="display:flex; flex-direction:column; height:80vh;"):
@@ -3171,6 +3195,14 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                 hide_details=True,
                                                 variant="outlined",
                                                 style="max-width:620px; min-width:360px;",
+                                            )
+                                            vuetify.VBtn(
+                                                "?",
+                                                variant="tonal",
+                                                size="small",
+                                                min_width=32,
+                                                title="Source filter help",
+                                                click=ctrl.show_source_filter_help,
                                             )
                                             vuetify.VBtn(
                                                 "Filter",

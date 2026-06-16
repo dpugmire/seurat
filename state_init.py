@@ -28,6 +28,9 @@ def init_state(state, db) -> None:
     state.queryError = ""
     state.queryFilter = {}
     state.queryViewLabel = "ALL"
+    state.showHelpModal = False
+    state.helpModalTitle = ""
+    state.helpModalText = ""
     state.draggedVar = ""
 
     state.detailsSelectedVar = ""
