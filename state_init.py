@@ -113,6 +113,8 @@ def init_state(state, db) -> None:
     state.scalarFieldSettingsRangeAuto = True
     state.scalarFieldSettingsMin = ""
     state.scalarFieldSettingsMax = ""
+    state.scalarFieldSettingsShowColorbar = False
+    state.scalarFieldSettingsShowAxes = False
 
     state.gridRows = 3
     state.gridCols = 3
@@ -239,3 +241,5 @@ def clear_right_panes(state) -> None:
     state.scalarFieldSettingsRangeAuto = True
     state.scalarFieldSettingsMin = ""
     state.scalarFieldSettingsMax = ""
+    state.scalarFieldSettingsShowColorbar = False
+    state.scalarFieldSettingsShowAxes = False

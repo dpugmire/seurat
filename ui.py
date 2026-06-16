@@ -2223,6 +2223,97 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                   text-overflow: ellipsis;
                   white-space: nowrap;
                 }
+                .catnip-scalar-field-view {
+                  display: flex;
+                  align-items: stretch;
+                  justify-content: center;
+                  gap: 6px;
+                  width: 100%;
+                  height: 100%;
+                  min-width: 0;
+                  min-height: 0;
+                  padding: 6px;
+                  box-sizing: border-box;
+                  background: #111;
+                }
+                .catnip-scalar-field-plot-frame {
+                  position: relative;
+                  display: flex;
+                  align-items: center;
+                  justify-content: center;
+                  flex: 1 1 auto;
+                  min-width: 0;
+                  min-height: 0;
+                  overflow: hidden;
+                }
+                .catnip-scalar-field-plot-frame.catnip-scalar-field-show-axes {
+                  padding-left: 16px;
+                  padding-bottom: 14px;
+                }
+                .catnip-scalar-field-plot-frame.catnip-scalar-field-show-axes::before {
+                  content: "";
+                  position: absolute;
+                  left: 10px;
+                  top: 4px;
+                  bottom: 12px;
+                  width: 0;
+                  border-left: 1px solid rgba(255, 255, 255, 0.78);
+                  pointer-events: none;
+                }
+                .catnip-scalar-field-plot-frame.catnip-scalar-field-show-axes::after {
+                  content: "";
+                  position: absolute;
+                  left: 10px;
+                  right: 2px;
+                  bottom: 12px;
+                  height: 0;
+                  border-bottom: 1px solid rgba(255, 255, 255, 0.78);
+                  pointer-events: none;
+                }
+                .catnip-scalar-field-plot-frame img {
+                  display: block;
+                  width: 100%;
+                  height: 100%;
+                  min-width: 0;
+                  min-height: 0;
+                  object-fit: contain;
+                  background: #111;
+                }
+                .catnip-scalar-field-colorbar {
+                  display: flex;
+                  align-items: stretch;
+                  flex: 0 0 54px;
+                  min-height: 0;
+                  gap: 4px;
+                  color: #fff;
+                  font-size: 10px;
+                  line-height: 1;
+                  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.55);
+                }
+                .catnip-scalar-field-colorbar-ramp {
+                  flex: 0 0 14px;
+                  width: 14px;
+                  min-height: 32px;
+                  border: 1px solid rgba(255, 255, 255, 0.72);
+                  border-radius: 2px;
+                  box-sizing: border-box;
+                  background: var(--catnip-scalar-field-colorbar, linear-gradient(to top, #440154, #fde725));
+                }
+                .catnip-scalar-field-colorbar-labels {
+                  display: flex;
+                  flex-direction: column;
+                  justify-content: space-between;
+                  align-items: flex-start;
+                  min-width: 0;
+                  max-width: 36px;
+                  overflow: hidden;
+                }
+                .catnip-scalar-field-colorbar-label {
+                  max-width: 36px;
+                  overflow: hidden;
+                  text-overflow: ellipsis;
+                  white-space: nowrap;
+                }
                 .catnip-drop-hover {
                   background: #e3f2fd !important;
                   box-shadow: inset 0 0 0 2px #1976d2 !important;
@@ -2515,6 +2606,10 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                   width: min(560px, calc(100vw - 16px));
                   max-height: calc(100vh - 16px);
                 }
+                .catnip-floating-options-panel.catnip-plot-settings-panel {
+                  left: max(8px, min(240px, calc(100vw - 768px)));
+                  width: min(760px, calc(100vw - 16px));
+                }
                 .catnip-floating-options-panel.is-dragging {
                   user-select: none;
                 }
@@ -2541,8 +2636,46 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                   overflow: auto;
                   max-height: calc(100vh - 136px);
                 }
-                .catnip-scalar-field-range-row {
-                  grid-template-columns: 48px 120px minmax(90px, 1fr) minmax(90px, 1fr);
+                .catnip-plot-settings-axis-row.catnip-scalar-field-range-row {
+                  display: flex;
+                  align-items: center;
+                  flex-wrap: wrap;
+                  gap: 10px 12px;
+                }
+                .catnip-scalar-field-auto-control {
+                  display: inline-flex;
+                  align-items: center;
+                  gap: 6px;
+                  flex: 0 0 auto;
+                  white-space: nowrap;
+                  font-size: 14px;
+                  line-height: 22px;
+                }
+                .catnip-scalar-field-auto-checkbox {
+                  flex: 0 0 auto;
+                  width: 14px;
+                  height: 14px;
+                  margin: 0;
+                }
+                .catnip-scalar-field-range-row .catnip-plot-settings-axis-label {
+                  flex: 0 0 auto;
+                  font-size: 14px;
+                  line-height: 22px;
+                  margin-left: 2px;
+                }
+                .catnip-scalar-field-range-row .catnip-plot-settings-axis-label.is-disabled {
+                  opacity: 0.45;
+                }
+                .catnip-scalar-field-range-row .v-input {
+                  flex: 0 0 120px;
+                  min-width: 120px;
+                  max-width: 120px;
+                }
+                .catnip-scalar-field-display-options {
+                  display: flex;
+                  align-items: center;
+                  flex-wrap: wrap;
+                  gap: 10px 18px;
                 }
                 .catnip-scalar-field-colormap {
                   min-width: 180px;
@@ -3057,7 +3190,72 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                                         )
                                                     with vuetify.Template(v_if="tile.media_type !== 'plot1d'"):
                                                         with vuetify.Template(v_if="tile.src"):
-                                                            with vuetify.Template(v_if="tile.media_type === 'image_sequence'"):
+                                                            with vuetify.Template(
+                                                                v_if=(
+                                                                    "(tile.media_type === 'image' || tile.media_type === 'image_sequence')"
+                                                                    " && (tile.variable_type === 'scalarField'"
+                                                                    " || tile.payload_type === 'SCALAR_FIELD'"
+                                                                    " || tile.visualization_item_type === 'SCALAR_FIELD')"
+                                                                )
+                                                            ):
+                                                                with html.Div(classes="catnip-scalar-field-view"):
+                                                                    with html.Div(
+                                                                        classes="catnip-scalar-field-plot-frame",
+                                                                        raw_attrs=[
+                                                                            ":class=\"{ 'catnip-scalar-field-show-axes': tile.scalar_field_settings && tile.scalar_field_settings.show_axes }\"",
+                                                                        ],
+                                                                    ):
+                                                                        with vuetify.Template(v_if="tile.media_type === 'image_sequence'"):
+                                                                            html.Img(
+                                                                                src=("tile.src",),
+                                                                                class_="catnip-grid-image-sequence",
+                                                                                raw_attrs=[
+                                                                                    'data-grid-image-sequence="1"',
+                                                                                    ':data-fps="tile.fps || 2"',
+                                                                                    ':data-frame-count="tile.frame_count || 0"',
+                                                                                    ':data-frame-indices="(tile.frame_indices || []).join(\',\')"',
+                                                                                    ':data-frame-sources="JSON.stringify(tile.frame_sources || [])"',
+                                                                                    'data-current-frame="0"',
+                                                                                ],
+                                                                            )
+                                                                        with vuetify.Template(v_if="tile.media_type === 'image'"):
+                                                                            html.Img(src=("tile.src",))
+                                                                    with vuetify.Template(
+                                                                        v_if=(
+                                                                            "tile.scalar_field_settings"
+                                                                            " && tile.scalar_field_settings.show_colorbar"
+                                                                        )
+                                                                    ):
+                                                                        with html.Div(classes="catnip-scalar-field-colorbar"):
+                                                                            html.Div(
+                                                                                classes="catnip-scalar-field-colorbar-ramp",
+                                                                                raw_attrs=[
+                                                                                    ":style=\"{ '--catnip-scalar-field-colorbar': ((tile.scalar_field_settings && tile.scalar_field_settings.colorbar_gradient) || 'linear-gradient(to top, #440154, #fde725)') }\"",
+                                                                                ],
+                                                                            )
+                                                                            with html.Div(classes="catnip-scalar-field-colorbar-labels"):
+                                                                                html.Div(
+                                                                                    "{{ tile.scalar_field_colorbar_max || tile.max || '' }}",
+                                                                                    classes="catnip-scalar-field-colorbar-label",
+                                                                                    raw_attrs=[
+                                                                                        ':title="String(tile.scalar_field_colorbar_max || tile.max || \'\')"',
+                                                                                    ],
+                                                                                )
+                                                                                html.Div(
+                                                                                    "{{ tile.scalar_field_colorbar_min || tile.min || '' }}",
+                                                                                    classes="catnip-scalar-field-colorbar-label",
+                                                                                    raw_attrs=[
+                                                                                        ':title="String(tile.scalar_field_colorbar_min || tile.min || \'\')"',
+                                                                                    ],
+                                                                                )
+                                                            with vuetify.Template(
+                                                                v_if=(
+                                                                    "tile.media_type === 'image_sequence'"
+                                                                    " && !(tile.variable_type === 'scalarField'"
+                                                                    " || tile.payload_type === 'SCALAR_FIELD'"
+                                                                    " || tile.visualization_item_type === 'SCALAR_FIELD')"
+                                                                )
+                                                            ):
                                                                 html.Img(
                                                                     src=("tile.src",),
                                                                     class_="catnip-grid-image-sequence",
@@ -3077,7 +3275,14 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                                         "background:#111;"
                                                                     ),
                                                                 )
-                                                            with vuetify.Template(v_if="tile.media_type === 'image'"):
+                                                            with vuetify.Template(
+                                                                v_if=(
+                                                                    "tile.media_type === 'image'"
+                                                                    " && !(tile.variable_type === 'scalarField'"
+                                                                    " || tile.payload_type === 'SCALAR_FIELD'"
+                                                                    " || tile.visualization_item_type === 'SCALAR_FIELD')"
+                                                                )
+                                                            ):
                                                                 html.Img(
                                                                     src=("tile.src",),
                                                                     style=(
@@ -3355,15 +3560,22 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                         click=ctrl.confirm_scalar_plot_generation,
                                     )
 
-                        with vuetify.VDialog(v_model=("showPlotSettingsModal",), max_width="760"):
-                            with vuetify.VCard():
-                                with vuetify.VCardTitle():
+                        with html.Div(
+                            id="catnip-plot-settings-panel",
+                            v_show=("showPlotSettingsModal",),
+                            classes="catnip-floating-options-panel catnip-plot-settings-panel",
+                        ):
+                            with vuetify.VCard(classes="catnip-floating-options-card", elevation=6):
+                                with vuetify.VCardTitle(classes="catnip-floating-options-titlebar"):
                                     with html.Div(style="display:flex; align-items:center; gap:8px; width:100%;"):
-                                        html.Div("{{ 'Plot Settings: ' + (plotSettingsTitle || '') }}")
+                                        html.Div(
+                                            "{{ 'Plot Settings: ' + (plotSettingsTitle || '') }}",
+                                            classes="catnip-floating-panel-drag-handle",
+                                        )
                                         vuetify.VSpacer()
                                         vuetify.VBtn("Close", variant="text", size="small", click=ctrl.cancel_plot_settings)
 
-                                with vuetify.VCardText():
+                                with vuetify.VCardText(classes="catnip-floating-options-content"):
                                     with vuetify.Template(v_if="plotSettingsStatus"):
                                         html.Div("{{ plotSettingsStatus }}", class_="text-caption mb-2", style="color:#b00020;")
 
@@ -3727,12 +3939,19 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                     html.Div("Range", classes="catnip-plot-settings-section-title mt-3")
                                     with html.Div(classes="catnip-plot-settings-section"):
                                         with html.Div(classes="catnip-plot-settings-axis-row catnip-scalar-field-range-row"):
-                                            html.Span("Values:", classes="catnip-plot-settings-axis-label")
-                                            vuetify.VCheckbox(
-                                                v_model=("scalarFieldSettingsRangeAuto",),
-                                                label="Auto range",
-                                                density="compact",
-                                                hide_details=True,
+                                            with html.Div(classes="catnip-scalar-field-auto-control"):
+                                                html.Input(
+                                                    v_model=("scalarFieldSettingsRangeAuto",),
+                                                    classes="catnip-scalar-field-auto-checkbox",
+                                                    raw_attrs=['type="checkbox"'],
+                                                )
+                                                html.Span("Auto")
+                                            html.Span(
+                                                "Values:",
+                                                classes="catnip-plot-settings-axis-label",
+                                                raw_attrs=[
+                                                    ':class="{ \'is-disabled\': scalarFieldSettingsRangeAuto }"'
+                                                ],
                                             )
                                             vuetify.VTextField(
                                                 v_model=("scalarFieldSettingsMin",),
@@ -3748,6 +3967,24 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                 hide_details=True,
                                                 raw_attrs=[':disabled="scalarFieldSettingsRangeAuto"'],
                                             )
+
+                                    html.Div("Display", classes="catnip-plot-settings-section-title mt-3")
+                                    with html.Div(classes="catnip-plot-settings-section"):
+                                        with html.Div(classes="catnip-scalar-field-display-options"):
+                                            with html.Div(classes="catnip-scalar-field-auto-control"):
+                                                html.Input(
+                                                    v_model=("scalarFieldSettingsShowColorbar",),
+                                                    classes="catnip-scalar-field-auto-checkbox",
+                                                    raw_attrs=['type="checkbox"'],
+                                                )
+                                                html.Span("Show color map")
+                                            with html.Div(classes="catnip-scalar-field-auto-control"):
+                                                html.Input(
+                                                    v_model=("scalarFieldSettingsShowAxes",),
+                                                    classes="catnip-scalar-field-auto-checkbox",
+                                                    raw_attrs=['type="checkbox"'],
+                                                )
+                                                html.Span("Show axes")
 
                                 with vuetify.VCardActions():
                                     vuetify.VSpacer()

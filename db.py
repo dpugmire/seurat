@@ -143,6 +143,26 @@ _SCALAR_FIELD_COLORMAP_ALIASES = {
 }
 
 
+def _scalar_field_colormap_css_gradient(stops: np.ndarray) -> str:
+    if len(stops) <= 1:
+        rgb = tuple(int(v) for v in stops[0])
+        color = f"rgb({rgb[0]}, {rgb[1]}, {rgb[2]})"
+        return f"linear-gradient(to top, {color} 0%, {color} 100%)"
+
+    parts = []
+    for i, rgb_values in enumerate(stops):
+        rgb = tuple(int(v) for v in rgb_values)
+        pct = (i / (len(stops) - 1)) * 100.0
+        parts.append(f"rgb({rgb[0]}, {rgb[1]}, {rgb[2]}) {pct:.3g}%")
+    return "linear-gradient(to top, " + ", ".join(parts) + ")"
+
+
+SCALAR_FIELD_COLORMAP_CSS_GRADIENTS = {
+    name: _scalar_field_colormap_css_gradient(stops)
+    for name, stops in _SCALAR_FIELD_COLORMAP_STOPS.items()
+}
+
+
 def to_float(value: Any) -> Optional[float]:
     if value is None:
         return None

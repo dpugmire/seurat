@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from config import MAX_MOVIE_FRAMES, MOVIE_FPS
 from db import (
     GENERATED_SCALAR_PLOT_VIS,
+    SCALAR_FIELD_COLORMAP_CSS_GRADIENTS,
     SCALAR_FIELD_COLORMAPS,
     SCALAR_FIELD_VARIABLE_TYPE,
     VISUALIZATION_PAYLOAD_VARIABLE_TYPES,
@@ -311,6 +312,9 @@ def attach_controllers(
             "frame_sources": [],
             "plot": {},
             "plot_settings": {},
+            "scalar_field_settings": {},
+            "scalar_field_colorbar_min": "",
+            "scalar_field_colorbar_max": "",
             "grid_row": 1,
             "grid_col": 1,
             "row_span": 1,
@@ -546,8 +550,12 @@ def attach_controllers(
         media_type = str(cell.get("media_type", "") or "")
         if media_type not in {"image", "image_sequence", "video"}:
             cell["display_title"] = str(label or "")
+            cell["scalar_field_colorbar_min"] = ""
+            cell["scalar_field_colorbar_max"] = ""
             return
 
+        title_min: Optional[float] = None
+        title_max: Optional[float] = None
         if is_scalar_field_cell(cell):
             fmin, fmax = source_extrema_for_title(
                 variable_id,
@@ -555,6 +563,7 @@ def attach_controllers(
             )
             if fmin is None or fmax is None:
                 fmin, fmax = valid_title_extrema(cell.get("min", None), cell.get("max", None))
+            title_min, title_max = fmin, fmax
         else:
             fmin, fmax = valid_title_extrema(cell.get("min", None), cell.get("max", None))
             if fmin is None or fmax is None:
@@ -567,6 +576,19 @@ def attach_controllers(
             cell["display_title"] = str(label or "")
         else:
             cell["display_title"] = f"{label} [{fmt(fmin)}, {fmt(fmax)}]"
+
+        cell["scalar_field_colorbar_min"] = ""
+        cell["scalar_field_colorbar_max"] = ""
+        if is_scalar_field_cell(cell):
+            settings = normalize_scalar_field_settings(cell.get("scalar_field_settings", {}))
+            if not bool(settings.get("range_auto", True)):
+                bar_min = finite_float(settings.get("min", None))
+                bar_max = finite_float(settings.get("max", None))
+            else:
+                bar_min, bar_max = title_min, title_max
+            if bar_min is not None and bar_max is not None:
+                cell["scalar_field_colorbar_min"] = fmt(bar_min)
+                cell["scalar_field_colorbar_max"] = fmt(bar_max)
 
     def source_sort_key(row: Dict[str, Any], field: str, selected_keys: set):
         if field == "show":
@@ -738,6 +760,13 @@ def attach_controllers(
         name = str(value or "viridis").strip().lower()
         return name if name in SCALAR_FIELD_COLORMAPS else "viridis"
 
+    def scalar_colormap_gradient(value: Any) -> str:
+        name = scalar_colormap(value)
+        return SCALAR_FIELD_COLORMAP_CSS_GRADIENTS.get(
+            name,
+            SCALAR_FIELD_COLORMAP_CSS_GRADIENTS.get("viridis", ""),
+        )
+
     def normalize_scalar_field_settings(raw_settings: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         raw = dict(raw_settings or {})
         range_mode = str(raw.get("range_mode", "") or "").strip().lower()
@@ -754,10 +783,13 @@ def attach_controllers(
 
         return {
             "colormap": scalar_colormap(raw.get("colormap", "viridis")),
+            "colorbar_gradient": scalar_colormap_gradient(raw.get("colormap", "viridis")),
             "range_auto": range_auto,
             "range_mode": "auto" if range_auto else "manual",
             "min": min_value,
             "max": max_value,
+            "show_colorbar": to_bool(raw.get("show_colorbar", False), False),
+            "show_axes": to_bool(raw.get("show_axes", False), False),
         }
 
     def is_scalar_field_cell(cell: Dict[str, Any]) -> bool:
@@ -796,6 +828,8 @@ def attach_controllers(
         state.scalarFieldSettingsRangeAuto = bool(settings.get("range_auto", True))
         state.scalarFieldSettingsMin = settings_value_text(settings.get("min", None))
         state.scalarFieldSettingsMax = settings_value_text(settings.get("max", None))
+        state.scalarFieldSettingsShowColorbar = bool(settings.get("show_colorbar", False))
+        state.scalarFieldSettingsShowAxes = bool(settings.get("show_axes", False))
         state.showScalarFieldSettingsModal = True
 
     def load_plot_settings_dialog(idx: int, reset: bool = False) -> None:
@@ -2708,6 +2742,8 @@ def attach_controllers(
 
         colormap = scalar_colormap(state.scalarFieldSettingsColormap)
         range_auto = bool(state.scalarFieldSettingsRangeAuto)
+        show_colorbar = bool(state.scalarFieldSettingsShowColorbar)
+        show_axes = bool(state.scalarFieldSettingsShowAxes)
         min_value = finite_float(state.scalarFieldSettingsMin)
         max_value = finite_float(state.scalarFieldSettingsMax)
         if not range_auto:
@@ -2726,6 +2762,8 @@ def attach_controllers(
                 "range_auto": range_auto,
                 "min": None if range_auto else min_value,
                 "max": None if range_auto else max_value,
+                "show_colorbar": show_colorbar,
+                "show_axes": show_axes,
             }
         )
         cell["scalar_field_settings"] = settings
