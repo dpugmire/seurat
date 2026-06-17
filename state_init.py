@@ -27,6 +27,9 @@ def init_state(state, db) -> None:
     state.queryStatus = ""
     state.queryError = ""
     state.queryFilter = {}
+    state.querySourceFilters = []
+    state.querySourceRestrictionFilter = {}
+    state.querySourceRestrictionCount = 0
     state.queryViewLabel = "ALL"
     state.showHelpModal = False
     state.helpModalTitle = ""

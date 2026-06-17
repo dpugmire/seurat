@@ -5,7 +5,7 @@ import sqlite3
 import statistics
 import zlib
 from contextlib import ExitStack
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import numpy as np
 from adios2 import FileReader
@@ -510,6 +510,14 @@ class CampaignDb:
                 return count
         return 1
 
+    @classmethod
+    def _is_static_scalar_variable_doc(cls, doc: Dict[str, Any]) -> bool:
+        if str(doc.get("variable_type", "") or "") != "variable":
+            return False
+        metadata = doc.get("metadata", {})
+        ndims = cls._metadata_ndims(metadata)
+        return ndims == 0 and cls._metadata_steps_count(metadata) <= 1
+
     @staticmethod
     def _plot_source_label(doc: Dict[str, Any]) -> str:
         source_dataset = str(doc.get("source_dataset", "") or "")
@@ -520,6 +528,92 @@ class CampaignDb:
         file_name = str(doc.get("file", "") or "")
         parts = [p for p in (producer, casename, file_name) if p]
         return " / ".join(parts)
+
+    @staticmethod
+    def _source_restriction_identity(doc: Dict[str, Any]) -> Optional[Tuple[str, str]]:
+        producer = str(doc.get("producer", "") or "").strip()
+        if producer:
+            return ("producer", producer)
+
+        source_dataset = str(doc.get("source_dataset", "") or "").strip()
+        if source_dataset:
+            return ("source_dataset", source_dataset)
+
+        casename = str(doc.get("casename", "") or "").strip()
+        file_name = str(doc.get("file", "") or "").strip()
+        if casename or file_name:
+            return ("case_file", f"{casename}\0{file_name}")
+
+        return None
+
+    @staticmethod
+    def _source_restriction_filter_from_identities(
+        identities: Set[Tuple[str, str]]
+    ) -> Dict[str, Any]:
+        if not identities:
+            return {"_id": {"$in": []}}
+
+        producers = sorted(value for kind, value in identities if kind == "producer")
+        source_datasets = sorted(value for kind, value in identities if kind == "source_dataset")
+        case_files = sorted(value for kind, value in identities if kind == "case_file")
+
+        parts: List[Dict[str, Any]] = []
+        if producers:
+            parts.append({"producer": {"$in": producers}})
+        if source_datasets:
+            parts.append({"source_dataset": {"$in": source_datasets}})
+        for value in case_files:
+            casename, file_name = value.split("\0", 1)
+            item: Dict[str, Any] = {"casename": casename}
+            if file_name:
+                item["file"] = file_name
+            parts.append(item)
+
+        if not parts:
+            return {"_id": {"$in": []}}
+        if len(parts) == 1:
+            return parts[0]
+        return {"$or": parts}
+
+    def source_restriction_summary(
+        self,
+        source_filters: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        if not source_filters:
+            return {"filter": {}, "count": 0}
+        if not self.ok:
+            return {"filter": {"_id": {"$in": []}}, "count": 0}
+
+        proj = {
+            "_id": 0,
+            "source_dataset": 1,
+            "producer": 1,
+            "casename": 1,
+            "file": 1,
+        }
+
+        matched: Optional[Set[Tuple[str, str]]] = None
+        try:
+            for source_filter in source_filters:
+                identities: Set[Tuple[str, str]] = set()
+                for doc in self.collection.find(source_filter or {}, proj):
+                    identity = self._source_restriction_identity(doc)
+                    if identity is not None:
+                        identities.add(identity)
+
+                matched = identities if matched is None else matched.intersection(identities)
+                if not matched:
+                    break
+
+            final_identities = matched or set()
+            return {
+                "filter": self._source_restriction_filter_from_identities(final_identities),
+                "count": len(final_identities),
+            }
+        except Exception as e:
+            self.last_error = f"{type(e).__name__}: {e}"
+            self.ok = False
+            return {"filter": {"_id": {"$in": []}}, "count": 0}
 
     def _classify_variable_group(
         self,
@@ -572,11 +666,16 @@ class CampaignDb:
                 "variable_name_physical": 1,
                 "variable_path": 1,
                 "source_dataset": 1,
+                "variable_type": 1,
+                "metadata": 1,
             }
 
             by_id: Dict[str, Dict[str, str]] = {}
             for query in queries:
                 for doc in self.collection.find(query, proj):
+                    if self._is_static_scalar_variable_doc(doc):
+                        continue
+
                     variable_id = str(doc.get("variable_id", "") or "").strip()
                     if not variable_id:
                         variable_id = str(doc.get("variable_name", "") or "").strip()
@@ -666,6 +765,8 @@ class CampaignDb:
         proj = {
             "_id": 0,
             "variable_id": 1,
+            "variable_name": 1,
+            "variable_type": 1,
             "variable_path": 1,
             "min": 1,
             "max": 1,
@@ -673,6 +774,13 @@ class CampaignDb:
             "producer": 1,
             "casename": 1,
             "file": 1,
+            "visualization_name": 1,
+            "visualization_kind": 1,
+            "visualization_source_dataset": 1,
+            "association_source": 1,
+            "campaign_path": 1,
+            "variable_location": 1,
+            "frame_index": 1,
         }
 
         cursor = self.collection.find(query, proj).sort(
@@ -695,10 +803,19 @@ class CampaignDb:
                 {
                     "source_dataset": source_dataset,
                     "variable_id": str(doc.get("variable_id", "") or ""),
+                    "variable_name": str(doc.get("variable_name", "") or ""),
+                    "variable_type": str(doc.get("variable_type", "") or ""),
                     "variable_path": str(doc.get("variable_path", "") or ""),
                     "producer": producer,
                     "casename": casename,
                     "file": file,
+                    "visualization_name": str(doc.get("visualization_name", "") or ""),
+                    "visualization_kind": str(doc.get("visualization_kind", "") or ""),
+                    "visualization_source_dataset": str(doc.get("visualization_source_dataset", "") or ""),
+                    "association_source": str(doc.get("association_source", "") or ""),
+                    "campaign_path": str(doc.get("campaign_path", "") or ""),
+                    "variable_location": str(doc.get("variable_location", "") or ""),
+                    "frame_index": doc.get("frame_index", None),
                     "min": to_float(doc.get("min", None)),
                     "max": to_float(doc.get("max", None)),
                 }
@@ -1243,8 +1360,11 @@ class CampaignDb:
             "casename": 1,
             "file": 1,
             "variable_name": 1,
+            "variable_type": 1,
             "variable_name_physical": 1,
             "variable_path": 1,
+            "campaign_path": 1,
+            "variable_location": 1,
             "metadata": 1,
             "Min": 1,
             "Max": 1,
@@ -1288,10 +1408,14 @@ class CampaignDb:
                             else str(doc.get("source_dataset"))
                         ),
                         "variable_id": "" if doc.get("variable_id", None) is None else str(doc.get("variable_id")),
+                        "variable_name": "" if doc.get("variable_name", None) is None else str(doc.get("variable_name")),
+                        "variable_type": "" if doc.get("variable_type", None) is None else str(doc.get("variable_type")),
                         "producer": "" if doc.get("producer", None) is None else str(doc.get("producer")),
                         "casename": "" if doc.get("casename", None) is None else str(doc.get("casename")),
                         "file": "" if doc.get("file", None) is None else str(doc.get("file")),
                         "variable_path": "" if doc.get("variable_path", None) is None else str(doc.get("variable_path")),
+                        "campaign_path": "" if doc.get("campaign_path", None) is None else str(doc.get("campaign_path")),
+                        "variable_location": "" if doc.get("variable_location", None) is None else str(doc.get("variable_location")),
                         "min": fmin,
                         "max": fmax,
                     }

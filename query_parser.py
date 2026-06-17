@@ -1,5 +1,6 @@
 import ast
-from typing import Any, Dict, List, Optional
+import re
+from typing import Any, Dict, List, Optional, Tuple
 
 FIELD_ALIASES = {
     "id": "variable_id",
@@ -55,69 +56,135 @@ def _const(node: ast.AST):
     raise ValueError(f"Only constants/lists are allowed, got: {type(node).__name__}")
 
 
+def _compile_query_node(node: ast.AST) -> Dict[str, Any]:
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "source":
+        raise ValueError("source(...) is only supported as a top-level 'and' clause")
+
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "contains":
+        if len(node.args) != 2 or node.keywords:
+            raise ValueError("contains(...) takes exactly a field name and a search string")
+        field_node, search_node = node.args
+        if not isinstance(field_node, ast.Name):
+            raise ValueError("contains(...) first argument must be a field name")
+        search_text = _const(search_node)
+        if not isinstance(search_text, str):
+            raise ValueError("contains(...) search value must be a string")
+        return {_field_name(field_node.id): {"$regex": re.escape(search_text)}}
+
+    if isinstance(node, ast.BoolOp):
+        op = "$and" if isinstance(node.op, ast.And) else "$or"
+        parts = [_compile_query_node(v) for v in node.values]
+        flat: List[Dict[str, Any]] = []
+        for p in parts:
+            if isinstance(p, dict) and op in p and len(p) == 1:
+                flat.extend(p[op])
+            else:
+                flat.append(p)
+        return {op: flat}
+
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+        inner = _compile_query_node(node.operand)
+        return {"$nor": [inner]}
+
+    if isinstance(node, ast.Compare):
+        if len(node.ops) != 1 or len(node.comparators) != 1:
+            raise ValueError("Chained comparisons are not supported")
+
+        left = node.left
+        op = node.ops[0]
+        right = node.comparators[0]
+
+        if not isinstance(left, ast.Name):
+            raise ValueError("Left side must be a field name")
+
+        field = _field_name(left.id)
+
+        if isinstance(op, ast.Eq):
+            return {field: _const(right)}
+        if isinstance(op, ast.NotEq):
+            return {field: {"$ne": _const(right)}}
+        if isinstance(op, ast.In):
+            return {field: {"$in": _const(right)}}
+        if isinstance(op, ast.NotIn):
+            return {field: {"$nin": _const(right)}}
+
+        if isinstance(op, ast.Gt):
+            return {field: {"$gt": _const(right)}}
+        if isinstance(op, ast.GtE):
+            return {field: {"$gte": _const(right)}}
+        if isinstance(op, ast.Lt):
+            return {field: {"$lt": _const(right)}}
+        if isinstance(op, ast.LtE):
+            return {field: {"$lte": _const(right)}}
+
+        raise ValueError(f"Unsupported operator: {type(op).__name__}")
+
+    if isinstance(node, ast.Name):
+        field = _field_name(node.id)
+        return {field: {"$ne": None}}
+
+    raise ValueError(f"Unsupported expression: {type(node).__name__}")
+
+
+def _combine_and(filters: List[Dict[str, Any]]) -> Dict[str, Any]:
+    nonempty = [f for f in filters if f]
+    if not nonempty:
+        return {}
+    if len(nonempty) == 1:
+        return nonempty[0]
+    return {"$and": nonempty}
+
+
+def _is_source_call(node: ast.AST) -> bool:
+    return isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "source"
+
+
+def _has_source_call(node: ast.AST) -> bool:
+    return any(_is_source_call(child) for child in ast.walk(node))
+
+
+def _top_level_and_terms(node: ast.AST) -> List[ast.AST]:
+    if isinstance(node, ast.BoolOp) and isinstance(node.op, ast.And):
+        terms: List[ast.AST] = []
+        for value in node.values:
+            terms.extend(_top_level_and_terms(value))
+        return terms
+    return [node]
+
+
 def python_query_to_mongo(expr: str) -> Dict[str, Any]:
     expr = (expr or "").strip()
     if not expr:
         return {}
 
     tree = ast.parse(expr, mode="eval")
+    return _compile_query_node(tree.body)
 
-    def compile_node(node: ast.AST) -> Dict[str, Any]:
-        if isinstance(node, ast.BoolOp):
-            op = "$and" if isinstance(node.op, ast.And) else "$or"
-            parts = [compile_node(v) for v in node.values]
-            flat: List[Dict[str, Any]] = []
-            for p in parts:
-                if isinstance(p, dict) and op in p and len(p) == 1:
-                    flat.extend(p[op])
-                else:
-                    flat.append(p)
-            return {op: flat}
 
-        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
-            inner = compile_node(node.operand)
-            return {"$nor": [inner]}
+def python_query_to_filters(expr: str) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+    expr = (expr or "").strip()
+    if not expr:
+        return {}, []
 
-        if isinstance(node, ast.Compare):
-            if len(node.ops) != 1 or len(node.comparators) != 1:
-                raise ValueError("Chained comparisons are not supported")
+    tree = ast.parse(expr, mode="eval")
+    doc_filters: List[Dict[str, Any]] = []
+    source_filters: List[Dict[str, Any]] = []
 
-            left = node.left
-            op = node.ops[0]
-            right = node.comparators[0]
+    for term in _top_level_and_terms(tree.body):
+        if _is_source_call(term):
+            if len(term.args) != 1 or term.keywords:
+                raise ValueError("source(...) takes exactly one query expression")
+            if _has_source_call(term.args[0]):
+                raise ValueError("Nested source(...) clauses are not supported")
+            source_filters.append(_compile_query_node(term.args[0]))
+            continue
 
-            if not isinstance(left, ast.Name):
-                raise ValueError("Left side must be a field name")
+        if _has_source_call(term):
+            raise ValueError("source(...) is only supported as a top-level 'and' clause")
 
-            field = _field_name(left.id)
+        doc_filters.append(_compile_query_node(term))
 
-            if isinstance(op, ast.Eq):
-                return {field: _const(right)}
-            if isinstance(op, ast.NotEq):
-                return {field: {"$ne": _const(right)}}
-            if isinstance(op, ast.In):
-                return {field: {"$in": _const(right)}}
-            if isinstance(op, ast.NotIn):
-                return {field: {"$nin": _const(right)}}
-
-            if isinstance(op, ast.Gt):
-                return {field: {"$gt": _const(right)}}
-            if isinstance(op, ast.GtE):
-                return {field: {"$gte": _const(right)}}
-            if isinstance(op, ast.Lt):
-                return {field: {"$lt": _const(right)}}
-            if isinstance(op, ast.LtE):
-                return {field: {"$lte": _const(right)}}
-
-            raise ValueError(f"Unsupported operator: {type(op).__name__}")
-
-        if isinstance(node, ast.Name):
-            field = _field_name(node.id)
-            return {field: {"$ne": None}}
-
-        raise ValueError(f"Unsupported expression: {type(node).__name__}")
-
-    return compile_node(tree.body)
+    return _combine_and(doc_filters), source_filters
 
 
 def and_filter(base: Dict[str, Any], extra: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -126,93 +193,65 @@ def and_filter(base: Dict[str, Any], extra: Optional[Dict[str, Any]]) -> Dict[st
     return {"$and": [base, extra]}
 
 
-SOURCE_FILTER_FIELDS = {
-    "sourceName",
-    "source_name",
-    "source_dataset",
-    "producer",
-    "casename",
-    "file",
-    "min",
-    "max",
-}
+def _value_matches(value: Any, condition: Any) -> bool:
+    if not isinstance(condition, dict):
+        return value == condition
 
-
-def python_source_filter_matches(expr: str, values: Dict[str, Any]) -> bool:
-    expr = (expr or "").strip()
-    if not expr:
-        return True
-
-    tree = ast.parse(expr, mode="eval")
-
-    def value_of(node: ast.AST):
-        if isinstance(node, ast.Name):
-            if node.id in {"None", "True", "False"}:
-                return {"None": None, "True": True, "False": False}[node.id]
-            if node.id not in SOURCE_FILTER_FIELDS:
-                raise ValueError(f"Unknown/unsupported source field: {node.id}")
-            if node.id == "source_name":
-                return values.get("sourceName", "")
-            return values.get(node.id)
-        if isinstance(node, ast.Constant):
-            return node.value
-        if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
-            v = value_of(node.operand)
-            if not isinstance(v, (int, float)):
-                raise ValueError("Unary +/- is only allowed on numeric values")
-            return +v if isinstance(node.op, ast.UAdd) else -v
-        if isinstance(node, (ast.List, ast.Tuple)):
-            return [value_of(elt) for elt in node.elts]
-        raise ValueError(f"Unsupported source filter value: {type(node).__name__}")
-
-    def compare(left, op: ast.AST, right) -> bool:
-        if isinstance(op, ast.Eq):
-            return left == right
-        if isinstance(op, ast.NotEq):
-            return left != right
-        if isinstance(op, ast.In):
-            try:
-                return left in right
-            except TypeError:
+    for op, expected in condition.items():
+        if op == "$ne":
+            if value == expected:
                 return False
-        if isinstance(op, ast.NotIn):
+            continue
+
+        if op in {"$in", "$nin"}:
             try:
-                return left not in right
+                matched = value in expected
             except TypeError:
-                return True
+                matched = False
+            if op == "$in" and not matched:
+                return False
+            if op == "$nin" and matched:
+                return False
+            continue
+
+        if op == "$regex":
+            if not isinstance(value, str):
+                return False
+            return re.search(str(expected), value) is not None
+
         try:
-            if isinstance(op, ast.Gt):
-                return left > right
-            if isinstance(op, ast.GtE):
-                return left >= right
-            if isinstance(op, ast.Lt):
-                return left < right
-            if isinstance(op, ast.LtE):
-                return left <= right
+            if op == "$gt" and not (value > expected):
+                return False
+            if op == "$gte" and not (value >= expected):
+                return False
+            if op == "$lt" and not (value < expected):
+                return False
+            if op == "$lte" and not (value <= expected):
+                return False
         except TypeError:
             return False
-        raise ValueError(f"Unsupported source filter operator: {type(op).__name__}")
 
-    def eval_node(node: ast.AST) -> bool:
-        if isinstance(node, ast.BoolOp):
-            parts = [eval_node(v) for v in node.values]
-            if isinstance(node.op, ast.And):
-                return all(parts)
-            if isinstance(node.op, ast.Or):
-                return any(parts)
-            raise ValueError(f"Unsupported boolean operator: {type(node.op).__name__}")
-        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
-            return not eval_node(node.operand)
-        if isinstance(node, ast.Compare):
-            left = value_of(node.left)
-            for op, comparator in zip(node.ops, node.comparators):
-                right = value_of(comparator)
-                if not compare(left, op, right):
-                    return False
-                left = right
-            return True
-        if isinstance(node, ast.Name):
-            return bool(value_of(node))
-        raise ValueError(f"Unsupported source filter expression: {type(node).__name__}")
+        if op not in {"$gt", "$gte", "$lt", "$lte"}:
+            raise ValueError(f"Unsupported filter operator: {op}")
 
-    return bool(eval_node(tree.body))
+    return True
+
+
+def mongo_filter_matches(filter_doc: Dict[str, Any], values: Dict[str, Any]) -> bool:
+    if not filter_doc:
+        return True
+
+    for key, condition in filter_doc.items():
+        if key == "$and":
+            return all(mongo_filter_matches(part, values) for part in condition)
+        if key == "$or":
+            return any(mongo_filter_matches(part, values) for part in condition)
+        if key == "$nor":
+            return not any(mongo_filter_matches(part, values) for part in condition)
+        if key.startswith("$"):
+            raise ValueError(f"Unsupported filter operator: {key}")
+
+        if not _value_matches(values.get(key), condition):
+            return False
+
+    return True

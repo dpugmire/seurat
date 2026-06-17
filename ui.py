@@ -2075,6 +2075,14 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
 
         with layout.toolbar:
             html.Span("Query:", class_="text-caption ml-4")
+            vuetify.VBtn(
+                "?",
+                click=ctrl.show_query_help,
+                variant="tonal",
+                size="small",
+                min_width=32,
+                title="Query help",
+            )
             vuetify.VTextField(
                 v_model=("queryText",),
                 placeholder="e.g. var == 'rho' and source_dataset == 'hll_128/output.bp'",
@@ -2083,14 +2091,6 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                 variant="outlined",
                 style="max-width: 420px;",
                 class_="mx-2",
-            )
-            vuetify.VBtn(
-                "?",
-                click=ctrl.show_query_help,
-                variant="tonal",
-                size="small",
-                min_width=32,
-                title="Query help",
             )
             vuetify.VBtn("Query", click=ctrl.run_query, variant="outlined", size="small")
             vuetify.VBtn("Clear", click=ctrl.clear_query, variant="text", size="small", class_="ml-1")
@@ -3389,17 +3389,9 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                             )
                                         ):
                                             html.Span(
-                                                "Sources:",
+                                                "Filter Sources:",
                                                 class_="text-caption",
                                                 style="white-space:nowrap;",
-                                            )
-                                            vuetify.VTextField(
-                                                v_model=("sourceFilterDraftText",),
-                                                placeholder='e.g. "F0.0179" in sourceName',
-                                                density="compact",
-                                                hide_details=True,
-                                                variant="outlined",
-                                                style="max-width:620px; min-width:360px;",
                                             )
                                             vuetify.VBtn(
                                                 "?",
@@ -3408,6 +3400,14 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                 min_width=32,
                                                 title="Source filter help",
                                                 click=ctrl.show_source_filter_help,
+                                            )
+                                            vuetify.VTextField(
+                                                v_model=("sourceFilterDraftText",),
+                                                placeholder="e.g. contains(producer, 'F0.03968') and min > 0.32",
+                                                density="compact",
+                                                hide_details=True,
+                                                variant="outlined",
+                                                style="max-width:620px; min-width:360px;",
                                             )
                                             vuetify.VBtn(
                                                 "Filter",

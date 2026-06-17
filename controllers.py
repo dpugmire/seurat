@@ -10,7 +10,7 @@ from db import (
     SCALAR_FIELD_VARIABLE_TYPE,
     VISUALIZATION_PAYLOAD_VARIABLE_TYPES,
 )
-from query_parser import and_filter, python_query_to_mongo, python_source_filter_matches
+from query_parser import and_filter, mongo_filter_matches, python_query_to_filters
 from state_init import clear_right_panes, fmt
 
 
@@ -28,9 +28,16 @@ def attach_controllers(
     GRID_MAX_ROWS = 8
     GRID_MAX_COLS = 8
 
+    def active_query_filter() -> Optional[Dict[str, Any]]:
+        query_filter = state.queryFilter or None
+        source_restriction = state.querySourceRestrictionFilter or None
+        if query_filter and source_restriction:
+            return and_filter(query_filter, source_restriction)
+        return query_filter or source_restriction or None
+
     def refresh_variable_list():
         grouped = db.grouped_variable_names(
-            extra_filter=state.queryFilter or None,
+            extra_filter=active_query_filter(),
             only_visualized=bool(state.showOnlyVisualizedVars),
         )
         state.variableGroups = grouped
@@ -238,7 +245,7 @@ def attach_controllers(
         )
 
     def visualization_names_for_source_filter(variable_id: str, source_filter: Dict[str, Any]) -> List[str]:
-        qf = state.queryFilter or None
+        qf = active_query_filter()
         active_filter = and_filter(qf, source_filter) if qf and source_filter else (qf or source_filter or None)
         return db.distinct_visualization_names_for_variable(variable_id, extra_filter=active_filter)
 
@@ -253,8 +260,9 @@ def attach_controllers(
             "variable_type": {"$in": list(VISUALIZATION_PAYLOAD_VARIABLE_TYPES)},
             "visualization_name": vis,
         }
-        if state.queryFilter:
-            query = and_filter(state.queryFilter, query)
+        qf = active_query_filter()
+        if qf:
+            query = and_filter(qf, query)
         proj = {
             "_id": 1,
             "variable_id": 1,
@@ -516,12 +524,27 @@ def attach_controllers(
         return numeric if math.isfinite(numeric) else None
 
     def source_filter_values(row: Dict[str, Any]) -> Dict[str, Any]:
+        variable_id = str(row.get("variable_id", "") or "")
+        variable_name = str(row.get("variable_name", "") or "").strip()
+        if not variable_name and variable_id:
+            variable_name = variable_id.strip("/").rsplit("/", 1)[-1]
+        source_dataset = str(row.get("source_dataset", "") or "")
         return {
-            "sourceName": source_name_for_row(row),
-            "source_dataset": str(row.get("source_dataset", "") or ""),
+            "variable_id": variable_id,
+            "variable_name": variable_name,
+            "variable_type": str(row.get("variable_type", "") or "variable"),
+            "source_dataset": source_dataset,
             "producer": str(row.get("producer", "") or ""),
             "casename": str(row.get("casename", "") or ""),
             "file": str(row.get("file", "") or ""),
+            "visualization_name": str(row.get("visualization_name", "") or ""),
+            "visualization_kind": str(row.get("visualization_kind", "") or ""),
+            "visualization_source_dataset": str(row.get("visualization_source_dataset", "") or source_dataset),
+            "association_source": str(row.get("association_source", "") or ""),
+            "variable_path": str(row.get("variable_path", "") or ""),
+            "campaign_path": str(row.get("campaign_path", "") or ""),
+            "variable_location": str(row.get("variable_location", "") or ""),
+            "frame_index": source_filter_number(row.get("frame_index", None)),
             "min": source_filter_number(row.get("min_value", row.get("min", None))),
             "max": source_filter_number(row.get("max_value", row.get("max", None))),
         }
@@ -538,7 +561,7 @@ def attach_controllers(
         if not var_id or not source_filter:
             return None, None
 
-        qf = state.queryFilter or None
+        qf = active_query_filter()
         extra_filter = and_filter(qf, source_filter) if qf else source_filter
         summary = db.variable_min_max_summary(var_id, extra_filter=extra_filter)
         return valid_title_extrema(
@@ -623,11 +646,17 @@ def attach_controllers(
         expr = str(state.sourceFilterText or "").strip()
         if expr:
             try:
-                rows = [
-                    row
-                    for row in rows
-                    if python_source_filter_matches(expr, source_filter_values(row))
-                ]
+                row_filter, source_filters = python_query_to_filters(expr)
+                source_restriction = {}
+                if source_filters:
+                    source_summary = db.source_restriction_summary(source_filters)
+                    source_restriction = dict(source_summary.get("filter", {}) or {})
+                matched_rows = []
+                for row in rows:
+                    values = source_filter_values(row)
+                    if mongo_filter_matches(row_filter, values) and mongo_filter_matches(source_restriction, values):
+                        matched_rows.append(row)
+                rows = matched_rows
                 state.sourceFilterError = ""
             except Exception as e:
                 state.sourceFilterError = f"{type(e).__name__}: {e}"
@@ -877,7 +906,67 @@ def attach_controllers(
 
     def show_help(title: str) -> None:
         state.helpModalTitle = title
-        state.helpModalText = "TODO"
+        if str(title or "") in {"Query Help", "Source Filter Help"}:
+            scope_note = (
+                "Query applies globally to the variable list, source lists, grid cells, and generated plots."
+                if str(title or "") == "Query Help"
+                else "Source Filter applies only to source rows that already passed the active Query."
+            )
+            state.helpModalText = f"""Use Python-like expressions to filter variables and sources.
+
+{scope_note}
+
+Basic fields:
+  var                 variable name, e.g. 'U', 'V', 'valid'
+  id                  variable id
+  type                variable type, e.g. 'variable', 'image', 'scalarField'
+  source or dataset   source dataset path
+  producer            run/producer name
+  casename            case name
+  file                file name
+  visualization_name  visualization name
+  min, max            variable/source min and max values
+  frame_index         visualization frame index
+
+Operators:
+  ==  !=  >  >=  <  <=
+  in, not in
+  and, or, not
+
+Functions:
+  contains(field, 'text')   substring match on a text field
+                            literal and case-sensitive
+
+Examples:
+  var == 'U'
+  var in ['U', 'V']
+  var == 'U' and min > 0.32
+  contains(producer, 'F0.03968')
+  contains(source, 'output.bp')
+  visualization_name == 'U_heatmap_yz'
+  producer == 'Du0.0979_Dv0.0526_F0.01634_k0.0502'
+
+Source restrictions:
+  Use source(...) to restrict to runs/sources that match another query.
+
+  source(var == 'valid' and min == 1)
+
+In Query, this keeps only sources/runs where valid == 1 while still allowing you to select U, V, and other variables.
+In Source Filter, this keeps only visible source rows from those sources/runs.
+
+Multiple source(...) clauses are intersected:
+
+  source(var == 'valid' and min == 1) and source(var == 'U' and min > 0.32)
+
+This keeps sources/runs where valid == 1 and U.min > 0.32.
+
+Notes:
+  var == 'valid' and min == 1 filters directly to the valid variable rows.
+  source(var == 'valid' and min == 1) filters sources/runs for all variables.
+  source(...) is supported as a top-level clause combined with and.
+"""
+        else:
+            state.helpModalText = "TODO"
         state.showHelpModal = True
 
     def clamp_int(value, default: int, minimum: int, maximum: int) -> int:
@@ -1243,7 +1332,7 @@ def attach_controllers(
         label = variable_label(var_id)
         scalar_settings = existing_scalar_field_settings(existing_cell, var_id)
 
-        qf = state.queryFilter or None
+        qf = active_query_filter()
         source_fields: Dict[str, str] = {}
         if source_row:
             source_fields = source_fields_from_row(source_row)
@@ -1343,7 +1432,7 @@ def attach_controllers(
                 campaign_path,
                 variable_id,
                 source_filter=source_filter or None,
-                extra_filter=state.queryFilter or None,
+                extra_filter=active_query_filter(),
             )
         except Exception as e:
             tile = {}
@@ -1407,7 +1496,7 @@ def attach_controllers(
                 campaign_path,
                 variable_id,
                 source_filters=source_filters,
-                extra_filter=state.queryFilter or None,
+                extra_filter=active_query_filter(),
             )
         except Exception as e:
             tile = {}
@@ -1452,7 +1541,7 @@ def attach_controllers(
         sync_selection: bool = True,
     ) -> bool:
         source_filter = source_filter_for_assignment(variable_id, source_row=source_row)
-        qf = state.queryFilter or None
+        qf = active_query_filter()
         active_filter = and_filter(qf, source_filter) if qf and source_filter else (qf or source_filter or None)
         if db.distinct_visualization_names_for_variable(variable_id, extra_filter=active_filter):
             return False
@@ -1527,7 +1616,7 @@ def attach_controllers(
                             campaign_path,
                             var_id,
                             source_filters=source_filters,
-                            extra_filter=state.queryFilter or None,
+                            extra_filter=active_query_filter(),
                         )
                         if not tile:
                             raise ValueError("Could not regenerate scalar plot for selected sources")
@@ -1542,7 +1631,7 @@ def attach_controllers(
                             campaign_path,
                             var_id,
                             source_filter=source_fields_to_filter(var_id, source_fields) or None,
-                            extra_filter=state.queryFilter or None,
+                            extra_filter=active_query_filter(),
                         )
                         if not tile:
                             raise ValueError("Could not regenerate scalar plot for source")
@@ -1622,7 +1711,7 @@ def attach_controllers(
             if previous_var == var_id
             else {}
         )
-        qf = state.queryFilter or None
+        qf = active_query_filter()
         summary = db.variable_min_max_summary(var_id, extra_filter=qf)
 
         state.dbOk = db.ok
@@ -1649,10 +1738,19 @@ def attach_controllers(
             row = {
                 "source_dataset": r.get("source_dataset", ""),
                 "variable_id": r.get("variable_id", ""),
+                "variable_name": r.get("variable_name", ""),
+                "variable_type": r.get("variable_type", "variable"),
                 "variable_path": r.get("variable_path", ""),
                 "producer": r.get("producer", ""),
                 "casename": r.get("casename", ""),
                 "file": r.get("file", ""),
+                "visualization_name": r.get("visualization_name", ""),
+                "visualization_kind": r.get("visualization_kind", ""),
+                "visualization_source_dataset": r.get("visualization_source_dataset", ""),
+                "association_source": r.get("association_source", ""),
+                "campaign_path": r.get("campaign_path", ""),
+                "variable_location": r.get("variable_location", ""),
+                "frame_index": r.get("frame_index", None),
                 "min": fmt(r.get("min", None)),
                 "max": fmt(r.get("max", None)),
                 "min_value": r.get("min", None),
@@ -3209,6 +3307,9 @@ def attach_controllers(
 
         if not q:
             state.queryFilter = {}
+            state.querySourceFilters = []
+            state.querySourceRestrictionFilter = {}
+            state.querySourceRestrictionCount = 0
             state.queryError = ""
             state.queryStatus = "Query cleared"
             state.queryViewLabel = "ALL"
@@ -3216,13 +3317,25 @@ def attach_controllers(
             return
 
         try:
-            filt = python_query_to_mongo(q)
-            state.queryFilter = filt
+            query_filter, source_filters = python_query_to_filters(q)
+            source_summary = db.source_restriction_summary(source_filters)
+            source_count = int(source_summary.get("count", 0) or 0)
+            state.queryFilter = query_filter
+            state.querySourceFilters = source_filters
+            state.querySourceRestrictionFilter = dict(source_summary.get("filter", {}) or {}) if source_filters else {}
+            state.querySourceRestrictionCount = source_count if source_filters else 0
             state.queryError = ""
-            state.queryStatus = "Query OK"
+            state.queryStatus = (
+                f"Query OK · {source_count} source run{'s' if source_count != 1 else ''}"
+                if source_filters
+                else "Query OK"
+            )
             state.queryViewLabel = q
         except Exception as e:
             state.queryFilter = {}
+            state.querySourceFilters = []
+            state.querySourceRestrictionFilter = {}
+            state.querySourceRestrictionCount = 0
             state.queryError = f"{type(e).__name__}: {e}"
             state.queryStatus = "Query ERROR"
             state.queryViewLabel = "ALL"
@@ -3234,6 +3347,9 @@ def attach_controllers(
     def clear_query(**_):
         state.queryText = ""
         state.queryFilter = {}
+        state.querySourceFilters = []
+        state.querySourceRestrictionFilter = {}
+        state.querySourceRestrictionCount = 0
         state.queryError = ""
         state.queryStatus = "Query cleared"
         state.queryViewLabel = "ALL"

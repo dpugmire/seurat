@@ -77,3 +77,21 @@ physical_to_logical:
 Current cache note: the app currently drops and re-ingests the sidecar each time
 it starts. The sidecar is metadata-only for image frames, but the next cache
 phase should skip ingest when the ACA file is unchanged.
+
+## TODO
+
+- Query/source restriction errors: `source(...)` resolution should propagate DB
+  errors to the UI instead of reporting a successful query with zero source
+  runs.
+- Query language validation: require `in` and `not in` to use a list/tuple
+  right-hand side so Mongo query behavior and local source-filter behavior stay
+  identical.
+- Query language validation: restrict `contains(field, text)` to text fields
+  such as `var`, `id`, `source`, `dataset`, `producer`, `casename`, `file`,
+  visualization names, and paths.
+- Source Filter field parity: either enrich source rows with visualization
+  metadata so fields like `visualization_name` and `frame_index` work locally,
+  or document that those fields are Query-only.
+- Source restriction identity: use a compound source/run identity instead of
+  preferring `producer` alone, so reused producer names across cases/files do
+  not over-include unrelated sources.
