@@ -511,6 +511,50 @@ def attach_controllers(
         ]
         return "/".join(part for part in parts if part)
 
+    def source_row_from_summary_source(source: Dict[str, Any], variable_id: str) -> Dict[str, Any]:
+        row = {
+            "source_dataset": str(source.get("source_dataset", "") or ""),
+            "variable_id": str(source.get("variable_id", "") or variable_id or ""),
+            "variable_name": str(source.get("variable_name", "") or ""),
+            "variable_type": str(source.get("variable_type", "variable") or "variable"),
+            "variable_path": str(source.get("variable_path", "") or ""),
+            "producer": str(source.get("producer", "") or ""),
+            "casename": str(source.get("casename", "") or ""),
+            "file": str(source.get("file", "") or ""),
+            "visualization_name": str(source.get("visualization_name", "") or ""),
+            "visualization_kind": str(source.get("visualization_kind", "") or ""),
+            "visualization_source_dataset": str(source.get("visualization_source_dataset", "") or ""),
+            "association_source": str(source.get("association_source", "") or ""),
+            "campaign_path": str(source.get("campaign_path", "") or ""),
+            "variable_location": str(source.get("variable_location", "") or ""),
+            "frame_index": source.get("frame_index", None),
+            "min": fmt(source.get("min", None)),
+            "max": fmt(source.get("max", None)),
+            "min_value": source.get("min", None),
+            "max_value": source.get("max", None),
+        }
+        row["_key"] = source_key_for_fields(row)
+        row["sourceName"] = source_name_for_row(row)
+        return row
+
+    def first_query_source_row_for_variable(variable_id: str, preferred_vis: str = "") -> Dict[str, Any]:
+        var_id = str(variable_id or "").strip()
+        vis = str(preferred_vis or "").strip()
+        if not var_id:
+            return {}
+
+        if vis and vis != GENERATED_SCALAR_PLOT_VIS:
+            row = source_row_for_visualization_pick(var_id, vis)
+            if row:
+                return row
+
+        summary = db.variable_min_max_summary(var_id, extra_filter=active_query_filter())
+        for source in summary.get("sources", []) or []:
+            row = source_row_from_summary_source(dict(source or {}), var_id)
+            if source_filter_from_row(row):
+                return row
+        return {}
+
     def source_filter_number(value: Any) -> Optional[float]:
         if value is None:
             return None
@@ -1154,6 +1198,64 @@ Notes:
             cell_count = grid_cell_count()
         return idx if 0 <= idx < cell_count else -1
 
+    def is_selectable_grid_cell(cells: List[Dict[str, Any]], idx: int) -> bool:
+        if idx < 0 or idx >= len(cells):
+            return False
+        cell = dict(cells[idx] or {})
+        if bool(cell.get("grid_hidden", False)):
+            return False
+        return bool(str(cell.get("variable_id", "") or cell.get("variable_name", "") or "").strip())
+
+    def normalize_grid_selection(
+        raw_indices: Optional[List[Any]] = None,
+        cells: Optional[List[Dict[str, Any]]] = None,
+    ) -> List[int]:
+        if cells is None:
+            cells = normalize_grid_cells(state.gridCells)
+        items = raw_indices if raw_indices is not None else list(state.selectedGridCellIndices or [])
+        selected: List[int] = []
+        for raw_idx in items or []:
+            try:
+                idx = int(raw_idx)
+            except Exception:
+                continue
+            if idx in selected or not is_selectable_grid_cell(cells, idx):
+                continue
+            selected.append(idx)
+        return selected
+
+    def set_grid_selection(indices: List[int], active: Optional[int] = None) -> None:
+        cells = normalize_grid_cells(state.gridCells)
+        selected = normalize_grid_selection(indices, cells)
+        publish_grid_selection(selected)
+        if active is not None and is_valid_grid_index(active):
+            state.activeGridCell = int(active)
+
+    def publish_grid_selection(selected: List[int]) -> None:
+        state.selectedGridCellIndices = selected
+        state.selectedGridCellMap = {str(idx): True for idx in selected}
+
+    def source_dialog_targets_for_anchor(idx: int, cells: Optional[List[Dict[str, Any]]] = None) -> List[int]:
+        if cells is None:
+            cells = normalize_grid_cells(state.gridCells)
+        if not is_selectable_grid_cell(cells, idx):
+            return []
+        selected = normalize_grid_selection(cells=cells)
+        if idx in selected and len(selected) > 1:
+            return selected
+        return [idx]
+
+    def source_row_for_variable(row: Dict[str, Any], variable_id: str) -> Dict[str, str]:
+        target = {
+            "variable_id": str(variable_id or ""),
+            "source_dataset": str(row.get("source_dataset", "") or ""),
+            "producer": str(row.get("producer", "") or ""),
+            "casename": str(row.get("casename", "") or ""),
+            "file": str(row.get("file", "") or ""),
+        }
+        target["_key"] = source_key_for_fields(target)
+        return target
+
     def normalize_grid_cells(raw_cells, rows=None, cols=None) -> List[Dict[str, Any]]:
         if rows is None or cols is None:
             rows, cols = grid_dimensions()
@@ -1186,6 +1288,7 @@ Notes:
         state.gridCols = cols
         state.gridCells = normalize_grid_cells(cells)
         state.activeGridCell = active if 0 <= active < rows * cols else -1
+        publish_grid_selection(normalize_grid_selection(cells=list(state.gridCells or [])))
         clear_context_menu_state()
 
     @ctrl.add("set_grid_layout_mode")
@@ -1195,6 +1298,7 @@ Notes:
         active = active_grid_index(rows * cols)
         state.gridCells = normalize_grid_cells(state.gridCells, rows, cols)
         state.activeGridCell = active if 0 <= active < rows * cols else -1
+        publish_grid_selection(normalize_grid_selection(cells=list(state.gridCells or [])))
 
     @ctrl.add("set_grid_cell_size")
     def set_grid_cell_size(size: int, **_):
@@ -1350,6 +1454,13 @@ Notes:
             source_filter = active_source_filter_for_variable(var_id)
         active_filter = and_filter(qf, source_filter) if qf and source_filter else (qf or source_filter or None)
         vis_names = db.distinct_visualization_names_for_variable(var_id, extra_filter=active_filter)
+        if existing_cell and source_filter and not vis_names:
+            fallback_row = first_query_source_row_for_variable(var_id, preferred_vis)
+            if fallback_row:
+                source_fields = source_fields_from_row(fallback_row)
+                source_filter = source_filter_from_row(fallback_row)
+                active_filter = and_filter(qf, source_filter) if qf and source_filter else (qf or source_filter or None)
+                vis_names = db.distinct_visualization_names_for_variable(var_id, extra_filter=active_filter)
 
         selected_vis = choose_visualization_default(vis_names, preferred_vis)
 
@@ -1534,6 +1645,194 @@ Notes:
             state.draggedVar = variable_id
         return bool(tile)
 
+    def generated_scalar_plot_cell_for_source_rows(
+        variable_id: str,
+        source_rows: List[Dict[str, Any]],
+        existing_cell: Dict[str, Any],
+        allow_multi_sources: bool,
+    ) -> Dict[str, Any]:
+        var_id = str(variable_id or "").strip()
+        rows = [source_row_for_variable(row, var_id) for row in source_rows if row]
+        if not var_id or not rows:
+            raise ValueError("No source selected")
+
+        prior_settings = existing_plot_settings(existing_cell, var_id)
+        if allow_multi_sources and len(rows) > 1:
+            source_fields_list = [source_fields_from_row(row) for row in rows]
+            source_filters = [source_filter_from_row(row) for row in rows]
+            source_keys = [
+                str(fields.get("_source_key", "") or "")
+                for fields in source_fields_list
+                if str(fields.get("_source_key", "") or "")
+            ]
+            tile = db.get_generated_scalar_plot_tile_for_sources(
+                campaign_path,
+                var_id,
+                source_filters=source_filters,
+                extra_filter=active_query_filter(),
+            )
+            if not tile:
+                raise ValueError("Could not generate scalar plot for the selected sources")
+
+            first_fields = source_fields_list[0]
+            tile.update({k: v for k, v in first_fields.items() if v and k != "_source_key"})
+            tile["_source_key"] = source_keys[0] if source_keys else str(first_fields.get("_source_key", "") or "")
+            tile["_source_keys"] = source_keys
+            tile["_source_fields_list"] = source_fields_list
+            assign_plot_series_keys(tile, source_keys)
+        else:
+            source_fields = source_fields_from_row(rows[0])
+            source_filter = source_fields_to_filter(var_id, source_fields)
+            tile = db.get_or_create_generated_scalar_plot_tile(
+                campaign_path,
+                var_id,
+                source_filter=source_filter or None,
+                extra_filter=active_query_filter(),
+            )
+            if not tile:
+                raise ValueError("Could not generate scalar plot for this source")
+
+            tile.update({k: v for k, v in source_fields.items() if v})
+            source_key = str(source_fields.get("_source_key", "") or "")
+            tile["_source_keys"] = [source_key] if source_key else []
+            tile["_source_fields_list"] = [source_fields] if source_fields else []
+            assign_plot_series_keys(tile, [source_key] if source_key else [])
+
+        tile["plot_settings"] = normalize_plot_settings(tile, prior_settings)
+        tile["visualization_name"] = GENERATED_SCALAR_PLOT_VIS
+        tile["selected_visualization"] = GENERATED_SCALAR_PLOT_VIS
+        tile["visualization_options"] = [GENERATED_SCALAR_PLOT_VIS]
+        return tile
+
+    def build_cell_for_source_rows(
+        variable_id: str,
+        existing_cell: Dict[str, Any],
+        source_rows: List[Dict[str, Any]],
+        allow_multi_sources: bool,
+    ) -> Dict[str, Any]:
+        var_id = str(variable_id or "").strip()
+        if not var_id:
+            raise ValueError("Cell has no variable")
+        if not source_rows:
+            raise ValueError("No source selected")
+
+        existing = dict(existing_cell or {})
+        if is_generated_plot1d_cell(existing):
+            return generated_scalar_plot_cell_for_source_rows(
+                var_id,
+                source_rows,
+                existing,
+                allow_multi_sources,
+            )
+
+        target_row = source_row_for_variable(source_rows[0], var_id)
+        selected_vis = str(existing.get("selected_visualization", "") or existing.get("visualization_name", "") or "")
+        new_cell = build_grid_cell_for_variable(
+            var_id,
+            preferred_vis=selected_vis,
+            source_row=target_row,
+            existing_cell=existing,
+        )
+        status = str(new_cell.get("status", "") or "")
+        if status in {"error", "no-visualizations"}:
+            note = str(new_cell.get("note", "") or "No visualization for this source")
+            raise ValueError(note)
+        return new_cell
+
+    def source_dialog_target_indices() -> List[int]:
+        cells = normalize_grid_cells(state.gridCells)
+        raw_targets = list(state.sourceDialogTargetCellIndices or [])
+        if not raw_targets:
+            try:
+                raw_targets = [int(state.sourceDialogCellIndex)]
+            except Exception:
+                raw_targets = []
+        return normalize_grid_selection(raw_targets, cells)
+
+    def source_dialog_multi_source_allowed(targets: List[int], cells: List[Dict[str, Any]]) -> bool:
+        return bool(targets) and all(is_generated_plot1d_cell(cells[idx]) for idx in targets)
+
+    def apply_source_rows_to_targets(
+        target_indices: List[int],
+        selected_source_keys: List[str],
+        allow_multi_sources: bool,
+    ) -> Tuple[int, List[str]]:
+        source_rows = source_rows_for_keys(selected_source_keys)
+        if not source_rows:
+            return 0, ["No sources selected"]
+
+        cells = normalize_grid_cells(state.gridCells)
+        targets = normalize_grid_selection(target_indices, cells)
+        if not targets:
+            return 0, ["No plot cells selected"]
+
+        updated = list(cells)
+        failures: List[str] = []
+        applied = 0
+        for idx in targets:
+            existing = dict(updated[idx] or {})
+            var_id = str(existing.get("variable_id", "") or existing.get("variable_name", "") or "").strip()
+            if not var_id:
+                failures.append(f"Cell {idx + 1}: no variable")
+                continue
+            try:
+                new_cell = build_cell_for_source_rows(
+                    var_id,
+                    existing,
+                    source_rows,
+                    allow_multi_sources and is_generated_plot1d_cell(existing),
+                )
+            except Exception as e:
+                failures.append(f"Cell {idx + 1}: {e}")
+                continue
+            assign_cell(updated, idx, new_cell)
+            applied += 1
+
+        if applied:
+            state.gridCells = normalize_grid_cells(updated)
+            anchor = targets[0]
+            state.activeGridCell = anchor
+            publish_grid_selection(normalize_grid_selection(targets, list(state.gridCells or [])))
+        return applied, failures
+
+    def open_source_dialog_for_cell(cell_index: int, prefer_multi: bool = False) -> None:
+        if not is_valid_grid_index(cell_index):
+            return
+        cells = normalize_grid_cells(state.gridCells)
+        targets = source_dialog_targets_for_anchor(cell_index, cells)
+        if not targets:
+            return
+
+        cell = dict(cells[cell_index] or {})
+        var = str(cell.get("variable_id", "") or cell.get("variable_name", "") or "").strip()
+        if not var:
+            return
+
+        multi_allowed = source_dialog_multi_source_allowed(targets, cells)
+        source_keys = source_keys_from_cell(cell)
+        preferred_key = source_keys[0] if source_keys else str(cell.get("_source_key", "") or "")
+
+        state.activeGridCell = cell_index
+        publish_grid_selection(targets)
+        state.sourceDialogTargetCellIndices = targets
+        state.sourceDialogCellIndex = cell_index
+        state.sourceDialogMode = "add" if (prefer_multi or len(targets) > 1) and multi_allowed else "single"
+        if len(targets) > 1:
+            state.sourceDialogTitle = f"Sources: {variable_label(var)} - applying to {len(targets)} cells"
+        else:
+            state.sourceDialogTitle = f"{'Add Source' if str(state.sourceDialogMode or '') == 'add' else 'Sources'}: {variable_label(var)}"
+        state.sourceDialogStatus = ""
+        state.sourceDialogStatusIsError = False
+        state.selectedVar = var
+        state.draggedVar = var
+
+        if str(state.sourceDialogMode or "") == "add":
+            update_selected_var_panels(var, preferred_source_keys=source_keys)
+        else:
+            update_selected_var_panels(var, preferred_source_key=preferred_key)
+        state.sourceDialogInitialSelectedSourceKeys = normalize_source_keys(state.selectedSourceKeys or source_keys)
+        state.showSourcesModal = True
+
     def maybe_handle_generated_scalar_plot(
         variable_id: str,
         cell_index: int,
@@ -1608,6 +1907,23 @@ Notes:
                 source_fields_list = source_fields_list_from_cell(c)
                 try:
                     if len(source_fields_list) > 1:
+                        valid_source_fields_list: List[Dict[str, Any]] = []
+                        valid_source_keys: List[str] = []
+                        for fields in source_fields_list:
+                            source_filter = source_fields_to_filter(var_id, fields)
+                            if db.scalar_plot_candidate(
+                                var_id,
+                                source_filter=source_filter or None,
+                                extra_filter=active_query_filter(),
+                            ):
+                                valid_source_fields_list.append(fields)
+                                source_key = str(fields.get("_source_key", "") or "")
+                                if source_key:
+                                    valid_source_keys.append(source_key)
+                        source_fields_list = valid_source_fields_list
+                        source_keys = valid_source_keys
+                        if not source_fields_list:
+                            raise ValueError("Could not regenerate scalar plot for selected sources")
                         source_filters = [
                             source_fields_to_filter(var_id, fields)
                             for fields in source_fields_list
@@ -1643,8 +1959,32 @@ Notes:
                     tile["plot_settings"] = normalize_plot_settings(tile, existing_plot_settings(c, var_id))
                     updated.append(preserve_grid_geometry(tile, c))
                 except Exception as e:
-                    err_cell = no_visualization_grid_cell(var_id, f"{type(e).__name__}: {e}")
-                    updated.append(preserve_grid_geometry(err_cell, c))
+                    fallback_row = first_query_source_row_for_variable(var_id, GENERATED_SCALAR_PLOT_VIS)
+                    try:
+                        if not fallback_row:
+                            raise e
+                        source_fields = source_fields_from_row(fallback_row)
+                        source_key = str(source_fields.get("_source_key", "") or "")
+                        tile = db.get_or_create_generated_scalar_plot_tile(
+                            campaign_path,
+                            var_id,
+                            source_filter=source_fields_to_filter(var_id, source_fields) or None,
+                            extra_filter=active_query_filter(),
+                        )
+                        if not tile:
+                            raise e
+                        tile.update({k: v for k, v in source_fields.items() if v})
+                        tile["visualization_name"] = GENERATED_SCALAR_PLOT_VIS
+                        tile["selected_visualization"] = GENERATED_SCALAR_PLOT_VIS
+                        tile["visualization_options"] = [GENERATED_SCALAR_PLOT_VIS]
+                        tile["_source_keys"] = [source_key] if source_key else []
+                        tile["_source_fields_list"] = [source_fields] if source_fields else []
+                        assign_plot_series_keys(tile, [source_key] if source_key else [])
+                        tile["plot_settings"] = normalize_plot_settings(tile, existing_plot_settings(c, var_id))
+                        updated.append(preserve_grid_geometry(tile, c))
+                    except Exception as fallback_e:
+                        err_cell = no_visualization_grid_cell(var_id, f"{type(fallback_e).__name__}: {fallback_e}")
+                        updated.append(preserve_grid_geometry(err_cell, c))
                 continue
 
             preferred_vis = str(c.get("selected_visualization", "") or "")
@@ -1941,6 +2281,7 @@ Notes:
             source_row=source_row or None,
             sync_selection=True,
         ):
+            set_grid_selection([target], active=target)
             return
 
         try:
@@ -1955,11 +2296,12 @@ Notes:
 
         state.gridCells = normalize_grid_cells(cells)
         state.activeGridCell = target
+        set_grid_selection([target], active=target)
         state.selectedVar = var
         state.draggedVar = var
 
     @ctrl.add("set_active_grid_cell")
-    def set_active_grid_cell(cell_index: int, ignore=0, **_):
+    def set_active_grid_cell(cell_index: int, ignore=0, multi=0, **_):
         try:
             if int(ignore):
                 return
@@ -1973,10 +2315,43 @@ Notes:
         if not is_valid_grid_index(idx):
             return
 
-        state.activeGridCell = idx
         cells = normalize_grid_cells(state.gridCells)
+        try:
+            use_multi = bool(int(multi))
+        except Exception:
+            use_multi = False
+
+        if use_multi:
+            if not is_selectable_grid_cell(cells, idx):
+                return
+            selected = normalize_grid_selection(cells=cells)
+            anchor = active_grid_index(len(cells))
+            if not is_selectable_grid_cell(cells, anchor):
+                anchor = selected[0] if selected else idx
+            start, end = sorted((anchor, idx))
+            range_indices = [
+                item
+                for item in range(start, end + 1)
+                if is_selectable_grid_cell(cells, item)
+            ]
+            selected_set = set(selected).union(range_indices or [idx])
+            publish_grid_selection([
+                item
+                for item in range(len(cells))
+                if item in selected_set
+            ])
+            state.activeGridCell = idx
+            var = str(cells[idx].get("variable_id", "") or cells[idx].get("variable_name", "") or "")
+            if var:
+                state.selectedVar = var
+                state.draggedVar = var
+                update_selected_var_panels(var, preferred_source_key=str(cells[idx].get("_source_key", "") or ""))
+            return
+
+        state.activeGridCell = idx
         var = str(cells[idx].get("variable_id", "") or cells[idx].get("variable_name", "") or "")
         if var:
+            set_grid_selection([idx], active=idx)
             state.selectedVar = var
             state.draggedVar = var
             update_selected_var_panels(var, preferred_source_key=str(cells[idx].get("_source_key", "") or ""))
@@ -1984,6 +2359,7 @@ Notes:
 
         selected = str(state.selectedVar or "").strip()
         if not selected:
+            set_grid_selection([], active=idx)
             return
 
         source_row = {}
@@ -1995,6 +2371,7 @@ Notes:
             source_row=source_row or None,
             sync_selection=True,
         ):
+            set_grid_selection([idx], active=idx)
             return
 
         try:
@@ -2007,6 +2384,7 @@ Notes:
             err_cell["note"] = f"{type(e).__name__}: {e}"
             assign_cell(cells, idx, err_cell)
         state.gridCells = normalize_grid_cells(cells)
+        set_grid_selection([idx], active=idx)
 
     @ctrl.add("clear_grid_cell")
     def clear_grid_cell(cell_index: int, **_):
@@ -2020,6 +2398,7 @@ Notes:
         cells = normalize_grid_cells(state.gridCells)
         assign_cell(cells, idx, empty_grid_cell())
         state.gridCells = normalize_grid_cells(cells)
+        publish_grid_selection([item for item in normalize_grid_selection(cells=list(state.gridCells or [])) if item != idx])
 
     @ctrl.add("move_grid_cell")
     def move_grid_cell(from_index: int, to_index: int, **_):
@@ -2043,6 +2422,7 @@ Notes:
         assign_cell(cells, src, empty_grid_cell())
         state.gridCells = normalize_grid_cells(cells)
         state.activeGridCell = dst
+        set_grid_selection([dst], active=dst)
 
     @ctrl.trigger("move_grid_cell_trigger")
     def move_grid_cell_trigger(from_index, to_index, **_):
@@ -2345,6 +2725,7 @@ Notes:
         cells[idx] = cell
         state.gridCells = rebuild_spanning_cells(cells, rows, cols)
         state.activeGridCell = idx
+        publish_grid_selection(normalize_grid_selection(cells=list(state.gridCells or [])))
         return True
 
     @ctrl.add("span_grid_cell_right")
@@ -2430,6 +2811,7 @@ Notes:
             source_row=source_row or None,
             sync_selection=sync_selection,
         ):
+            set_grid_selection([idx], active=idx)
             return
 
         try:
@@ -2443,6 +2825,7 @@ Notes:
             assign_cell(cells, idx, err_cell)
         state.gridCells = normalize_grid_cells(cells)
         state.activeGridCell = idx
+        set_grid_selection([idx], active=idx)
         if sync_selection:
             state.selectedVar = var
             state.draggedVar = var
@@ -2497,6 +2880,7 @@ Notes:
 
         state.gridCells = normalize_grid_cells(cells)
         state.activeGridCell = idx
+        set_grid_selection([idx], active=idx)
         state.selectedVar = var
 
     @ctrl.add("hide_context_menu")
@@ -2562,7 +2946,8 @@ Notes:
         selected_vis = str(cell.get("selected_visualization", "") or cell.get("visualization_name", "") or "").strip()
         if selected_vis and selected_vis not in vis_opts:
             vis_opts.append(selected_vis)
-        can_add_source = has_var and is_generated_plot1d_cell(cell)
+        targets = source_dialog_targets_for_anchor(idx, cells)
+        can_add_source = bool(targets) and all(is_generated_plot1d_cell(cells[target]) for target in targets)
         can_plot_settings = has_var and str(cell.get("media_type", "") or "") == "plot1d"
         can_scalar_field_settings = has_var and is_scalar_field_cell(cell)
 
@@ -2667,20 +3052,7 @@ Notes:
             hide_context_menu()
             return
 
-        cells = normalize_grid_cells(state.gridCells)
-        cell = dict(cells[idx] or {})
-        var = str(cell.get("variable_id", "") or cell.get("variable_name", "") or "").strip()
-        if var:
-            state.activeGridCell = idx
-            state.sourceDialogMode = "single"
-            state.sourceDialogCellIndex = idx
-            state.selectedVar = var
-            state.draggedVar = var
-            source_keys = source_keys_from_cell(cell)
-            preferred_key = source_keys[0] if source_keys else str(cell.get("_source_key", "") or "")
-            update_selected_var_panels(var, preferred_source_key=preferred_key)
-            state.sourceDialogInitialSelectedSourceKeys = normalize_source_keys(state.selectedSourceKeys or [])
-            state.showSourcesModal = True
+        open_source_dialog_for_cell(idx, prefer_multi=False)
         hide_context_menu()
 
     @ctrl.add("context_menu_cell_add_source")
@@ -2693,23 +3065,7 @@ Notes:
             hide_context_menu()
             return
 
-        cells = normalize_grid_cells(state.gridCells)
-        cell = dict(cells[idx] or {})
-        var = str(cell.get("variable_id", "") or cell.get("variable_name", "") or "").strip()
-        if not var or not is_generated_plot1d_cell(cell):
-            hide_context_menu()
-            return
-
-        source_keys = source_keys_from_cell(cell)
-        state.activeGridCell = idx
-        state.sourceDialogMode = "add"
-        state.sourceDialogCellIndex = idx
-        state.selectedVar = var
-        state.draggedVar = var
-        state.sourceDialogInitialSelectedSourceKeys = source_keys
-        update_selected_var_panels(var, preferred_source_keys=source_keys)
-        state.sourceDialogInitialSelectedSourceKeys = normalize_source_keys(state.selectedSourceKeys or source_keys)
-        state.showSourcesModal = True
+        open_source_dialog_for_cell(idx, prefer_multi=True)
         hide_context_menu()
 
     @ctrl.add("context_menu_cell_plot_settings")
@@ -3067,19 +3423,9 @@ Notes:
                 idx = int(state.activeGridCell)
             except Exception:
                 idx = -1
-            state.sourceDialogCellIndex = idx if is_valid_grid_index(idx) else -1
-            cells = normalize_grid_cells(state.gridCells)
-            cell = dict(cells[idx] or {}) if is_valid_grid_index(idx) else {}
-            cell_var = str(cell.get("variable_id", "") or cell.get("variable_name", "") or "").strip()
-            details_var = str(state.detailsSelectedVarId or state.selectedVar or "").strip()
-            if cell_var and cell_var == details_var and is_generated_plot1d_cell(cell):
-                source_keys = source_keys_from_cell(cell)
-                state.sourceDialogMode = "add"
-                update_selected_var_panels(cell_var, preferred_source_keys=source_keys)
-                state.sourceDialogInitialSelectedSourceKeys = normalize_source_keys(state.selectedSourceKeys or source_keys)
-            else:
-                state.sourceDialogMode = "single"
-                state.sourceDialogInitialSelectedSourceKeys = normalize_source_keys(state.selectedSourceKeys or [])
+            state.showSourcesModal = False
+            if is_valid_grid_index(idx):
+                open_source_dialog_for_cell(idx, prefer_multi=True)
 
     @ctrl.add("cancel_source_dialog")
     def cancel_source_dialog(**_):
@@ -3091,35 +3437,42 @@ Notes:
         ]
         state.selectedSourceKeys = restored
         update_selected_source_label()
+        state.sourceDialogStatus = ""
+        state.sourceDialogStatusIsError = False
         state.showSourcesModal = False
 
     @ctrl.add("apply_source_dialog")
     def apply_source_dialog(**_):
         mode = str(state.sourceDialogMode or "single")
-        var_id = str(state.detailsSelectedVarId or state.selectedVar or "").strip()
-        try:
-            idx = int(state.sourceDialogCellIndex)
-        except Exception:
-            idx = -1
-        if not is_valid_grid_index(idx):
-            try:
-                idx = int(state.activeGridCell)
-            except Exception:
-                idx = -1
-
         valid_keys = source_row_keys()
         selected = [
             key
             for key in normalize_source_keys(state.selectedSourceKeys or [])
             if key in valid_keys
         ]
+        targets = source_dialog_target_indices()
+        cells = normalize_grid_cells(state.gridCells)
+        allow_multi_sources = mode == "add" and source_dialog_multi_source_allowed(targets, cells)
+        if not allow_multi_sources:
+            selected = selected[:1]
 
-        if mode == "add":
-            sync_add_source_selection_to_cell(var_id, idx, selected)
-        elif selected:
-            commit_single_source_selection(selected[0], idx)
+        applied, failures = apply_source_rows_to_targets(
+            targets,
+            selected,
+            allow_multi_sources,
+        )
 
         state.sourceDialogInitialSelectedSourceKeys = selected
+        if failures:
+            prefix = f"Applied to {applied} cell{'s' if applied != 1 else ''}; " if applied else ""
+            state.sourceDialogStatus = prefix + "Failed: " + "; ".join(failures[:4])
+            if len(failures) > 4:
+                state.sourceDialogStatus += f"; {len(failures) - 4} more"
+            state.sourceDialogStatusIsError = True
+            return
+
+        state.sourceDialogStatus = f"Applied to {applied} cell{'s' if applied != 1 else ''}."
+        state.sourceDialogStatusIsError = False
         state.showSourcesModal = False
 
     @ctrl.add("clear_source_filter")

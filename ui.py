@@ -718,6 +718,7 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
           syncTimer: null,
           lastTickMs: 0,
         };
+        let gridMediaSyncTimer = null;
 
         setupPlot1dObserver();
 
@@ -1628,6 +1629,94 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
           gridVcrState.syncTimer = setInterval(syncGridVideosNow, 160);
         }
 
+        function currentVcrSliderTarget(videos, plots) {
+          const slider = document.getElementById("catnip-vcr-step-slider");
+          if (slider) {
+            const target = getVcrSliderTimeValue(videos || [], plots || []);
+            if (Number.isFinite(target)) return target;
+          }
+          const stateTime = Number(gridVcrState.syncTime);
+          if (Number.isFinite(stateTime)) return stateTime;
+          const windowTime = Number(window.__catnipGridSyncTime);
+          return Number.isFinite(windowTime) ? windowTime : 0;
+        }
+
+        function syncGridMediaToCurrentVcrTime() {
+          const sequences = getGridImageSequences();
+          const videos = getGridVideos();
+          const plots = getGridPlots();
+          if (!sequences.length && !videos.length && !plots.length) {
+            updateVcrTimeLabelFromSeconds(0, []);
+            return;
+          }
+
+          const target = currentVcrSliderTarget(videos, plots);
+          if (sequences.length) {
+            const frame = setImageSequenceFrame(target, sequences);
+            gridVcrState.syncTime = frame;
+            updateVcrTimeLabelFromSeconds(frame, videos, plots);
+            return;
+          }
+          if (videos.length) {
+            const t = setAllVideoTimes(videos, target);
+            gridVcrState.syncTime = t;
+            updateVcrTimeLabelFromSeconds(t, videos, plots);
+            if (gridVcrState.playing) {
+              playAllVideos(videos);
+            } else {
+              pauseAllVideos(videos);
+            }
+            return;
+          }
+
+          const t = clampTimeForMedia(target, [], plots);
+          gridVcrState.syncTime = t;
+          updateVcrTimeLabelFromSeconds(t, [], plots);
+        }
+
+        function scheduleGridMediaSyncToCurrentVcrTime() {
+          if (gridMediaSyncTimer) {
+            clearTimeout(gridMediaSyncTimer);
+          }
+          gridMediaSyncTimer = setTimeout(function() {
+            gridMediaSyncTimer = null;
+            syncGridMediaToCurrentVcrTime();
+          }, 30);
+        }
+
+        function mutationTouchesGridMedia(mutation) {
+          if (!mutation) return false;
+          if (mutation.type === "attributes") {
+            const target = mutation.target;
+            return !!(
+              target
+              && target.matches
+              && (
+                target.matches('img[data-grid-image-sequence="1"]')
+                || target.matches('video[data-grid-video="1"]')
+                || target.matches(".catnip-plot1d")
+              )
+            );
+          }
+          for (const node of Array.from(mutation.addedNodes || [])) {
+            if (!node || node.nodeType !== 1) continue;
+            if (
+              (node.matches && (
+                node.matches('img[data-grid-image-sequence="1"]')
+                || node.matches('video[data-grid-video="1"]')
+                || node.matches(".catnip-plot1d")
+                || node.matches(".catnip-dropcell")
+              ))
+              || (node.querySelector && node.querySelector(
+                'img[data-grid-image-sequence="1"], video[data-grid-video="1"], .catnip-plot1d, .catnip-dropcell'
+              ))
+            ) {
+              return true;
+            }
+          }
+          return false;
+        }
+
         function seekAllVideosBy(deltaSeconds) {
           const sequences = getGridImageSequences();
           const videos = getGridVideos();
@@ -1906,6 +1995,19 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
 
         window.__catnipMainGridVcr = runGridVcrAction;
         window.catnipGridVcr = runGridVcrAction;
+
+        const gridMediaObserver = new MutationObserver(function(mutations) {
+          if ((mutations || []).some(mutationTouchesGridMedia)) {
+            scheduleGridMediaSyncToCurrentVcrTime();
+          }
+        });
+        gridMediaObserver.observe(document.body, {
+          childList: true,
+          subtree: true,
+          attributes: true,
+          attributeFilter: ["data-frame-count", "data-frame-indices", "data-frame-sources", "data-plot", "data-plot-settings"],
+        });
+        scheduleGridMediaSyncToCurrentVcrTime();
 
         document.addEventListener("dragstart", function(e) {
           const target = e && e.target;
@@ -2980,7 +3082,6 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                             raw_attrs=[
                                                 'type="button"',
                                                 'data-vcr-action="start"',
-                                                "onclick=\"window.catnipGridVcr && window.catnipGridVcr('start'); return false;\"",
                                             ],
                                             title="Jump to start",
                                         )
@@ -2990,7 +3091,6 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                             raw_attrs=[
                                                 'type="button"',
                                                 'data-vcr-action="back"',
-                                                "onclick=\"window.catnipGridVcr && window.catnipGridVcr('back'); return false;\"",
                                             ],
                                             title="Back step",
                                         )
@@ -3000,7 +3100,6 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                             raw_attrs=[
                                                 'type="button"',
                                                 'data-vcr-action="play"',
-                                                "onclick=\"window.catnipGridVcr && window.catnipGridVcr('play'); return false;\"",
                                             ],
                                             title="Play all",
                                         )
@@ -3010,7 +3109,6 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                             raw_attrs=[
                                                 'type="button"',
                                                 'data-vcr-action="pause"',
-                                                "onclick=\"window.catnipGridVcr && window.catnipGridVcr('pause'); return false;\"",
                                             ],
                                             title="Pause all",
                                         )
@@ -3020,7 +3118,6 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                             raw_attrs=[
                                                 'type="button"',
                                                 'data-vcr-action="forward"',
-                                                "onclick=\"window.catnipGridVcr && window.catnipGridVcr('forward'); return false;\"",
                                             ],
                                             title="Forward step",
                                         )
@@ -3030,7 +3127,6 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                             raw_attrs=[
                                                 'type="button"',
                                                 'data-vcr-action="end"',
-                                                "onclick=\"window.catnipGridVcr && window.catnipGridVcr('end'); return false;\"",
                                             ],
                                             title="Jump to end",
                                         )
@@ -3080,7 +3176,7 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                         with html.Div(
                                             click=(
                                                 ctrl.set_active_grid_cell,
-                                                "[i, (($event && $event.target && $event.target.closest && $event.target.closest('.catnip-cell-close')) ? 1 : 0)]",
+                                                "[i, (($event && $event.target && $event.target.closest && $event.target.closest('.catnip-cell-close')) ? 1 : 0), (($event && $event.shiftKey) ? 1 : 0)]",
                                             ),
                                             classes="catnip-dropcell",
                                             raw_attrs=[
@@ -3108,13 +3204,13 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                             with vuetify.Template(v_if="tile && tile.variable_name"):
                                                 with html.Div(
                                                     style=(
-                                                        "('display:flex;'"
+                                                        "'display:flex;'"
                                                         " + 'align-items:center;'"
                                                         " + 'gap:8px;'"
                                                         " + 'width:100%;'"
                                                         " + 'height:32px;'"
                                                         " + 'padding:4px 6px;'"
-                                                        " + ((activeGridCell === i) ? 'background:#1565c0; color:#fff; border-bottom:1px solid #0d47a1;' : 'background:#7bd0ef; color:#111; border-bottom:1px solid #3ca7c9;'))",
+                                                        " + (((selectedGridCellMap || {})[String(i)]) ? 'background:#ef6c00; color:#fff; border-bottom:1px solid #b53d00;' : ((activeGridCell === i) ? 'background:#1565c0; color:#fff; border-bottom:1px solid #0d47a1;' : 'background:#7bd0ef; color:#111; border-bottom:1px solid #3ca7c9;'))",
                                                     ),
                                                 ):
                                                     html.Div(
@@ -3372,9 +3468,7 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                             with vuetify.VCard():
                                 with vuetify.VCardTitle():
                                     with html.Div(style="display:flex; align-items:center; gap:8px; width:100%;"):
-                                        html.Div(
-                                            "{{ detailsSelectedVar ? (((sourceDialogMode === 'add') ? 'Add Source: ' : 'Sources: ') + detailsSelectedVar) : 'Sources' }}"
-                                        )
+                                        html.Div("{{ sourceDialogTitle || 'Sources' }}")
                                         vuetify.VSpacer()
                                         vuetify.VBtn("Close", variant="text", size="small", click=ctrl.cancel_source_dialog)
 
@@ -3430,6 +3524,10 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                 )
                                         with vuetify.Template(v_if="sourceFilterError"):
                                             html.Div("{{ sourceFilterError }}", class_="text-caption mb-2", style="color:#b00020;")
+                                        with vuetify.Template(v_if="sourceDialogStatus && sourceDialogStatusIsError"):
+                                            html.Div("{{ sourceDialogStatus }}", class_="text-caption mb-2", style="color:#b00020;")
+                                        with vuetify.Template(v_if="sourceDialogStatus && !sourceDialogStatusIsError"):
+                                            html.Div("{{ sourceDialogStatus }}", class_="text-caption mb-2", style="color:#2e7d32;")
                                         html.Div(
                                             "{{ ((sourceDialogMode === 'add') ? 'Selected sources: ' : 'Selected source: ') + selectedSourceLabel }}",
                                             class_="text-caption mb-2",

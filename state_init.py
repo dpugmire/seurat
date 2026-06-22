@@ -50,6 +50,10 @@ def init_state(state, db) -> None:
     state.showSourcesModal = False
     state.sourceDialogMode = "single"
     state.sourceDialogCellIndex = -1
+    state.sourceDialogTargetCellIndices = []
+    state.sourceDialogTitle = "Sources"
+    state.sourceDialogStatus = ""
+    state.sourceDialogStatusIsError = False
     state.sourceRowsAll = []
     state.sourceRows = []
     state.sourceFilterDraftText = ""
@@ -167,6 +171,8 @@ def init_state(state, db) -> None:
         for _ in range(state.gridRows * state.gridCols)
     ]
     state.activeGridCell = -1
+    state.selectedGridCellIndices = []
+    state.selectedGridCellMap = {}
     state.contextMenuVisible = False
     state.contextMenuX = 0
     state.contextMenuY = 0
@@ -197,6 +203,10 @@ def clear_details(state) -> None:
     state.showSourcesModal = False
     state.sourceDialogMode = "single"
     state.sourceDialogCellIndex = -1
+    state.sourceDialogTargetCellIndices = []
+    state.sourceDialogTitle = "Sources"
+    state.sourceDialogStatus = ""
+    state.sourceDialogStatusIsError = False
     state.sourceRowsAll = []
     state.sourceRows = []
     state.sourceFilterDraftText = ""
