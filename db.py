@@ -530,6 +530,110 @@ class CampaignDb:
         return " / ".join(parts)
 
     @staticmethod
+    def _source_group_for_doc(doc: Dict[str, Any]) -> Tuple[Tuple[str, str, str, str], Dict[str, Any]]:
+        source_dataset = "" if doc.get("source_dataset", None) is None else str(doc.get("source_dataset"))
+        producer = "" if doc.get("producer", None) is None else str(doc.get("producer"))
+        casename = "" if doc.get("casename", None) is None else str(doc.get("casename"))
+        file_name = "" if doc.get("file", None) is None else str(doc.get("file"))
+        schema_file_group = "" if doc.get("schema_file_group", None) is None else str(doc.get("schema_file_group"))
+        schema_mode = "" if doc.get("schema_mode", None) is None else str(doc.get("schema_mode"))
+
+        if schema_file_group and schema_mode == "file_per_timestep":
+            return (
+                ("schema_file_group", "", "", schema_file_group),
+                {
+                    "source_dataset": "",
+                    "source_label": schema_file_group,
+                    "schema_file_group": schema_file_group,
+                    "schema_mode": schema_mode,
+                    "schema_num_timesteps": doc.get("schema_num_timesteps", None),
+                    "schema_name": "" if doc.get("schema_name", None) is None else str(doc.get("schema_name")),
+                    "schema_role": "" if doc.get("schema_role", None) is None else str(doc.get("schema_role")),
+                    "variable_id": "" if doc.get("variable_id", None) is None else str(doc.get("variable_id")),
+                    "variable_name": "" if doc.get("variable_name", None) is None else str(doc.get("variable_name")),
+                    "variable_type": "" if doc.get("variable_type", None) is None else str(doc.get("variable_type")),
+                    "producer": "",
+                    "casename": "",
+                    "file": "",
+                    "visualization_name": str(doc.get("visualization_name", "") or ""),
+                    "visualization_kind": str(doc.get("visualization_kind", "") or ""),
+                    "visualization_source_dataset": "",
+                    "association_source": str(doc.get("association_source", "") or ""),
+                    "campaign_path": str(doc.get("campaign_path", "") or ""),
+                    "variable_location": str(doc.get("variable_location", "") or ""),
+                    "variable_path": "",
+                    "frame_index": None,
+                    "min": None,
+                    "max": None,
+                    "_files_seen": set(),
+                    "_source_datasets_seen": set(),
+                },
+            )
+
+        source_label = source_dataset or file_name or " / ".join(part for part in (producer, casename) if part)
+        return (
+            ("source_dataset", source_dataset, producer, file_name),
+            {
+                "source_dataset": source_dataset,
+                "source_label": source_label,
+                "schema_file_group": schema_file_group,
+                "schema_mode": schema_mode,
+                "schema_num_timesteps": doc.get("schema_num_timesteps", None),
+                "schema_name": "" if doc.get("schema_name", None) is None else str(doc.get("schema_name")),
+                "schema_role": "" if doc.get("schema_role", None) is None else str(doc.get("schema_role")),
+                "variable_id": "" if doc.get("variable_id", None) is None else str(doc.get("variable_id")),
+                "variable_name": "" if doc.get("variable_name", None) is None else str(doc.get("variable_name")),
+                "variable_type": "" if doc.get("variable_type", None) is None else str(doc.get("variable_type")),
+                "producer": producer,
+                "casename": casename,
+                "file": file_name,
+                "visualization_name": str(doc.get("visualization_name", "") or ""),
+                "visualization_kind": str(doc.get("visualization_kind", "") or ""),
+                "visualization_source_dataset": str(doc.get("visualization_source_dataset", "") or ""),
+                "association_source": str(doc.get("association_source", "") or ""),
+                "campaign_path": str(doc.get("campaign_path", "") or ""),
+                "variable_location": str(doc.get("variable_location", "") or ""),
+                "variable_path": str(doc.get("variable_path", "") or ""),
+                "frame_index": doc.get("frame_index", None),
+                "min": None,
+                "max": None,
+                "_files_seen": {file_name} if file_name else set(),
+                "_source_datasets_seen": {source_dataset} if source_dataset else set(),
+            },
+        )
+
+    @staticmethod
+    def _update_source_min_max(source: Dict[str, Any], fmin: Optional[float], fmax: Optional[float]) -> None:
+        if fmin is not None:
+            current_min = source.get("min", None)
+            source["min"] = fmin if current_min is None else min(float(current_min), fmin)
+        if fmax is not None:
+            current_max = source.get("max", None)
+            source["max"] = fmax if current_max is None else max(float(current_max), fmax)
+
+    @staticmethod
+    def _finalize_sources(grouped: Dict[Tuple[str, str, str, str], Dict[str, Any]]) -> List[Dict[str, Any]]:
+        sources: List[Dict[str, Any]] = []
+        for source in grouped.values():
+            files_seen = source.pop("_files_seen", set())
+            datasets_seen = source.pop("_source_datasets_seen", set())
+            files = sorted(str(file_name) for file_name in files_seen if str(file_name))
+            source_datasets = sorted(str(name) for name in datasets_seen if str(name))
+            source["files"] = files
+            source["source_datasets"] = source_datasets
+            if source.get("schema_mode") == "file_per_timestep":
+                try:
+                    num_timesteps = int(source.get("schema_num_timesteps", 0) or 0)
+                except Exception:
+                    num_timesteps = 0
+                source["num_timesteps"] = num_timesteps or len(source_datasets) or len(files) or 1
+            else:
+                source["num_timesteps"] = 1
+            sources.append(source)
+        sources.sort(key=lambda source: str(source.get("source_label", "")).lower())
+        return sources
+
+    @staticmethod
     def _source_restriction_identity(doc: Dict[str, Any]) -> Optional[Tuple[str, str]]:
         producer = str(doc.get("producer", "") or "").strip()
         if producer:
@@ -781,46 +885,28 @@ class CampaignDb:
             "campaign_path": 1,
             "variable_location": 1,
             "frame_index": 1,
+            "schema_name": 1,
+            "schema_file_group": 1,
+            "schema_role": 1,
+            "schema_mode": 1,
+            "schema_num_timesteps": 1,
         }
 
         cursor = self.collection.find(query, proj).sort(
             [("source_dataset", 1), ("producer", 1), ("casename", 1), ("file", 1)]
         )
-        seen = set()
-        sources: List[Dict[str, Any]] = []
+        grouped: Dict[Tuple[str, str, str, str], Dict[str, Any]] = {}
         for doc in cursor:
-            source_dataset = (
-                "" if doc.get("source_dataset", None) is None else str(doc.get("source_dataset"))
-            )
-            producer = "" if doc.get("producer", None) is None else str(doc.get("producer"))
-            casename = "" if doc.get("casename", None) is None else str(doc.get("casename"))
-            file = "" if doc.get("file", None) is None else str(doc.get("file"))
-            key = source_dataset or (producer, casename, file)
-            if key in seen:
-                continue
-            seen.add(key)
-            sources.append(
-                {
-                    "source_dataset": source_dataset,
-                    "variable_id": str(doc.get("variable_id", "") or ""),
-                    "variable_name": str(doc.get("variable_name", "") or ""),
-                    "variable_type": str(doc.get("variable_type", "") or ""),
-                    "variable_path": str(doc.get("variable_path", "") or ""),
-                    "producer": producer,
-                    "casename": casename,
-                    "file": file,
-                    "visualization_name": str(doc.get("visualization_name", "") or ""),
-                    "visualization_kind": str(doc.get("visualization_kind", "") or ""),
-                    "visualization_source_dataset": str(doc.get("visualization_source_dataset", "") or ""),
-                    "association_source": str(doc.get("association_source", "") or ""),
-                    "campaign_path": str(doc.get("campaign_path", "") or ""),
-                    "variable_location": str(doc.get("variable_location", "") or ""),
-                    "frame_index": doc.get("frame_index", None),
-                    "min": to_float(doc.get("min", None)),
-                    "max": to_float(doc.get("max", None)),
-                }
-            )
-        return sources
+            key, source = self._source_group_for_doc(doc)
+            entry = grouped.setdefault(key, source)
+            file_name = "" if doc.get("file", None) is None else str(doc.get("file"))
+            source_dataset = "" if doc.get("source_dataset", None) is None else str(doc.get("source_dataset"))
+            if file_name:
+                entry.setdefault("_files_seen", set()).add(file_name)
+            if source_dataset:
+                entry.setdefault("_source_datasets_seen", set()).add(source_dataset)
+            self._update_source_min_max(entry, to_float(doc.get("min", None)), to_float(doc.get("max", None)))
+        return self._finalize_sources(grouped)
 
     def distinct_visualization_names_for_variable(
         self,
@@ -868,6 +954,8 @@ class CampaignDb:
             "source_dataset": 1,
             "producer": 1,
             "casename": 1,
+            "schema_file_group": 1,
+            "schema_mode": 1,
             "metadata": 1,
             "min": 1,
             "max": 1,
@@ -894,12 +982,17 @@ class CampaignDb:
 
         source_fields = {
             "source_dataset": str(doc.get("source_dataset", "") or ""),
+            "schema_file_group": str(doc.get("schema_file_group", "") or ""),
+            "schema_mode": str(doc.get("schema_mode", "") or ""),
             "producer": str(doc.get("producer", "") or ""),
             "casename": str(doc.get("casename", "") or ""),
             "file": str(doc.get("file", "") or ""),
         }
         source_filter_out: Dict[str, str] = {"variable_id": variable_id}
-        if source_fields["source_dataset"]:
+        if source_fields["schema_file_group"] and source_fields["schema_mode"] == "file_per_timestep":
+            source_filter_out["schema_file_group"] = source_fields["schema_file_group"]
+            source_filter_out["schema_mode"] = source_fields["schema_mode"]
+        elif source_fields["source_dataset"]:
             source_filter_out["source_dataset"] = source_fields["source_dataset"]
         else:
             for key in ("producer", "casename", "file"):
@@ -1370,6 +1463,11 @@ class CampaignDb:
             "Max": 1,
             "min": 1,
             "max": 1,
+            "schema_name": 1,
+            "schema_file_group": 1,
+            "schema_role": 1,
+            "schema_mode": 1,
+            "schema_num_timesteps": 1,
         }
 
         try:
@@ -1377,11 +1475,11 @@ class CampaignDb:
 
             mins: List[float] = []
             maxs: List[float] = []
-            num_sources = 0
-            sources: List[Dict[str, Any]] = []
+            num_docs = 0
+            source_groups: Dict[Tuple[str, str, str, str], Dict[str, Any]] = {}
 
             for doc in source_docs:
-                num_sources += 1
+                num_docs += 1
 
                 fmin = to_float(doc.get("min", None))
                 fmax = to_float(doc.get("max", None))
@@ -1400,33 +1498,23 @@ class CampaignDb:
                     mins.append(fmin)
                     maxs.append(fmax)
 
-                sources.append(
-                    {
-                        "source_dataset": (
-                            ""
-                            if doc.get("source_dataset", None) is None
-                            else str(doc.get("source_dataset"))
-                        ),
-                        "variable_id": "" if doc.get("variable_id", None) is None else str(doc.get("variable_id")),
-                        "variable_name": "" if doc.get("variable_name", None) is None else str(doc.get("variable_name")),
-                        "variable_type": "" if doc.get("variable_type", None) is None else str(doc.get("variable_type")),
-                        "producer": "" if doc.get("producer", None) is None else str(doc.get("producer")),
-                        "casename": "" if doc.get("casename", None) is None else str(doc.get("casename")),
-                        "file": "" if doc.get("file", None) is None else str(doc.get("file")),
-                        "variable_path": "" if doc.get("variable_path", None) is None else str(doc.get("variable_path")),
-                        "campaign_path": "" if doc.get("campaign_path", None) is None else str(doc.get("campaign_path")),
-                        "variable_location": "" if doc.get("variable_location", None) is None else str(doc.get("variable_location")),
-                        "min": fmin,
-                        "max": fmax,
-                    }
-                )
+                key, source = self._source_group_for_doc(doc)
+                entry = source_groups.setdefault(key, source)
+                file_name = "" if doc.get("file", None) is None else str(doc.get("file"))
+                source_dataset = "" if doc.get("source_dataset", None) is None else str(doc.get("source_dataset"))
+                if file_name:
+                    entry.setdefault("_files_seen", set()).add(file_name)
+                if source_dataset:
+                    entry.setdefault("_source_datasets_seen", set()).add(source_dataset)
+                self._update_source_min_max(entry, fmin, fmax)
 
             valid = len(mins)
+            sources = self._finalize_sources(source_groups)
 
             # Stage 2 support: if this variable has no ADIOS variable docs, but does
             # have visualization payload docs, return those source rows so the
             # viewer can still browse visualizations.
-            if num_sources == 0:
+            if num_docs == 0:
                 image_sources = self._image_sources_for_variable(variable_id, extra_filter=extra_filter)
                 image_mins: List[float] = []
                 image_maxs: List[float] = []
@@ -1450,7 +1538,7 @@ class CampaignDb:
 
             return {
                 "variable": variable_id,
-                "num_sources": num_sources,
+                "num_sources": len(sources),
                 "global_min": min(mins) if valid else None,
                 "global_max": max(maxs) if valid else None,
                 "mean_min": statistics.fmean(mins) if valid else None,
@@ -1476,9 +1564,9 @@ class CampaignDb:
         extra_filter: Optional[Dict[str, Any]] = None,
         limit_frames: int = 240,
         scalar_field_options: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[List[bytes], int, List[int]]:
+    ) -> Tuple[List[bytes], int, List[int], List[Any], str]:
         if not self.ok or not variable_id:
-            return ([], 0, [])
+            return ([], 0, [], [], "timestep")
 
         base_query: Dict[str, Any] = {
             "variable_id": variable_id,
@@ -1487,7 +1575,7 @@ class CampaignDb:
         }
         if source_dataset:
             base_query["source_dataset"] = source_dataset
-        else:
+        elif producer or casename or file:
             base_query["producer"] = producer
             base_query["casename"] = casename
             if file:
@@ -1502,6 +1590,8 @@ class CampaignDb:
             "variable_type": 1,
             "image_bytes": 1,
             "frame_index": 1,
+            "time_index": 1,
+            "physical_time": 1,
             "scalar_field_metadata": 1,
             "visualization_item_uuid": 1,
         }
@@ -1511,27 +1601,55 @@ class CampaignDb:
             cursor = (
                 self.collection.find(query, proj)
                 .sort([("frame_index", 1), ("_id", 1)])
-                .limit(int(limit_frames))
             )
             docs = list(cursor)
 
             frames: List[bytes] = []
             frame_indices: List[int] = []
+            time_values: List[Any] = []
+            has_physical_time = False
+            seen_frame_indices: Set[int] = set()
 
             def append_frame(png_bytes: bytes, doc: Dict[str, Any]) -> None:
+                nonlocal has_physical_time
                 frames.append(png_bytes)
                 try:
-                    frame_indices.append(int(doc.get("frame_index", len(frame_indices))))
+                    frame_index = int(doc.get("frame_index", len(frame_indices)))
                 except Exception:
-                    frame_indices.append(len(frame_indices))
+                    frame_index = len(frame_indices)
+                frame_indices.append(frame_index)
+
+                physical_time = to_float(doc.get("physical_time", None))
+                if physical_time is not None:
+                    time_values.append(physical_time)
+                    has_physical_time = True
+                    return
+
+                time_index = doc.get("time_index", None)
+                try:
+                    time_values.append(int(time_index))
+                    return
+                except Exception:
+                    pass
+                time_values.append(frame_index)
 
             with ExitStack() as stack:
                 readers: Dict[str, Any] = {}
                 for doc in docs:
+                    try:
+                        frame_index = int(doc.get("frame_index", len(frames)))
+                    except Exception:
+                        frame_index = len(frames)
+                    if frame_index in seen_frame_indices:
+                        continue
+
                     img = doc.get("image_bytes", None)
                     if img:
                         try:
                             append_frame(bytes(img), doc)
+                            seen_frame_indices.add(frame_index)
+                            if len(frames) >= int(limit_frames):
+                                break
                         except Exception:
                             continue
                         continue
@@ -1558,6 +1676,9 @@ class CampaignDb:
                                 scalar_field_to_png_bytes(payload, metadata, scalar_field_options),
                                 doc,
                             )
+                            seen_frame_indices.add(frame_index)
+                            if len(frames) >= int(limit_frames):
+                                break
                             continue
 
                         reader = readers.get(campaign_path)
@@ -1565,15 +1686,24 @@ class CampaignDb:
                             reader = stack.enter_context(FileReader(campaign_path))
                             readers[campaign_path] = reader
                         append_frame(adios_image_to_png_bytes(reader.read(variable_path)), doc)
+                        seen_frame_indices.add(frame_index)
+                        if len(frames) >= int(limit_frames):
+                            break
                     except Exception:
                         continue
 
-            return (frames, total, frame_indices)
+            return (
+                frames,
+                len(frames) if frames else total,
+                frame_indices,
+                time_values,
+                "physical_time" if has_physical_time else "timestep",
+            )
 
         except Exception as e:
             self.last_error = f"{type(e).__name__}: {e}"
             self.ok = False
-            return ([], 0, [])
+            return ([], 0, [], [], "timestep")
 
     def get_first_movie_tiles_for_variable(
         self,
@@ -1597,6 +1727,10 @@ class CampaignDb:
         proj = {
             "_id": 1,
             "source_dataset": 1,
+            "schema_file_group": 1,
+            "schema_mode": 1,
+            "schema_name": 1,
+            "schema_role": 1,
             "variable_id": 1,
             "variable_name": 1,
             "producer": 1,
@@ -1619,6 +1753,8 @@ class CampaignDb:
             for doc in cursor:
                 vis = str(doc.get("visualization_name", "") or "")
                 source_dataset = str(doc.get("source_dataset", "") or "")
+                schema_file_group = str(doc.get("schema_file_group", "") or "")
+                schema_mode = str(doc.get("schema_mode", "") or "")
                 producer = str(doc.get("producer", "") or "")
                 casename = str(doc.get("casename", "") or "")
                 file = str(doc.get("file", "") or "")
@@ -1626,18 +1762,23 @@ class CampaignDb:
                 if not vis:
                     continue
 
-                key = (vis, source_dataset) if source_dataset else (vis, producer, casename, file)
+                key = (
+                    (vis, "schema", schema_file_group)
+                    if schema_file_group and schema_mode == "file_per_timestep"
+                    else ((vis, source_dataset) if source_dataset else (vis, producer, casename, file))
+                )
                 if key in seen:
                     continue
                 seen.add(key)
 
-                frames, total, frame_indices = self.get_movie_frames_for_stream(
+                grouped_schema_source = bool(schema_file_group and schema_mode == "file_per_timestep")
+                frames, total, frame_indices, time_values, time_mode = self.get_movie_frames_for_stream(
                     variable_id,
                     visualization_name=vis,
-                    producer=producer,
-                    casename=casename,
-                    file=file,
-                    source_dataset=source_dataset,
+                    producer="" if grouped_schema_source else producer,
+                    casename="" if grouped_schema_source else casename,
+                    file="" if grouped_schema_source else file,
+                    source_dataset="" if grouped_schema_source else source_dataset,
                     extra_filter=extra_filter,
                     limit_frames=limit_frames,
                     scalar_field_options=scalar_field_options,
@@ -1670,6 +1811,10 @@ class CampaignDb:
                         "variable_id": variable_id,
                         "visualization_name": vis,
                         "source_dataset": source_dataset,
+                        "schema_name": str(doc.get("schema_name", "") or ""),
+                        "schema_file_group": schema_file_group,
+                        "schema_role": str(doc.get("schema_role", "") or ""),
+                        "schema_mode": schema_mode,
                         "producer": producer,
                         "casename": casename,
                         "file": file,
@@ -1685,6 +1830,8 @@ class CampaignDb:
                         "fps": int(fps),
                         "frame_count": frame_count,
                         "frame_indices": frame_indices,
+                        "time_values": time_values,
+                        "time_mode": time_mode,
                         "frame_sources": frame_sources,
                     }
                 )

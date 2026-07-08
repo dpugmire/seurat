@@ -157,6 +157,8 @@ def init_state(state, db) -> None:
             "frame_count": 0,
             "frame_indices": [],
             "frame_sources": [],
+            "time_values": [],
+            "time_mode": "timestep",
             "plot": {},
             "plot_settings": {},
             "scalar_field_settings": {},
@@ -173,6 +175,7 @@ def init_state(state, db) -> None:
     state.activeGridCell = -1
     state.selectedGridCellIndices = []
     state.selectedGridCellMap = {}
+    state.timelineDriverCell = -1
     state.contextMenuVisible = False
     state.contextMenuX = 0
     state.contextMenuY = 0

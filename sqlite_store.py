@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 
-SIDECAR_SCHEMA_VERSION = 1
+SIDECAR_SCHEMA_VERSION = 2
 
 INDEXED_FIELDS = {
     "campaign_path": "campaign_path",
@@ -26,6 +26,15 @@ INDEXED_FIELDS = {
     "variable_path": "variable_path",
     "variable_location": "variable_location",
     "frame_index": "frame_index",
+    "schema_name": "schema_name",
+    "schema_file_group": "schema_file_group",
+    "schema_role": "schema_role",
+    "schema_mode": "schema_mode",
+    "schema_frame_index": "schema_frame_index",
+    "schema_step_index": "schema_step_index",
+    "time_index": "time_index",
+    "physical_time": "physical_time",
+    "time_source": "time_source",
     "min": "min_value",
     "max": "max_value",
 }
@@ -45,9 +54,34 @@ TEXT_FIELDS = {
     "association_source",
     "variable_path",
     "variable_location",
+    "schema_name",
+    "schema_file_group",
+    "schema_role",
+    "schema_mode",
+    "time_source",
 }
 
-NUMERIC_FIELDS = {"frame_index", "min", "max"}
+NUMERIC_FIELDS = {
+    "frame_index",
+    "schema_frame_index",
+    "schema_step_index",
+    "time_index",
+    "physical_time",
+    "min",
+    "max",
+}
+
+ADDED_COLUMNS = {
+    "schema_name": "text",
+    "schema_file_group": "text",
+    "schema_role": "text",
+    "schema_mode": "text",
+    "schema_frame_index": "integer",
+    "schema_step_index": "integer",
+    "time_index": "integer",
+    "physical_time": "real",
+    "time_source": "text",
+}
 
 
 def _safe_filename(value: str) -> str:
@@ -235,6 +269,15 @@ class SQLiteCampaignCollection:
               variable_path text,
               variable_location text,
               frame_index integer,
+              schema_name text,
+              schema_file_group text,
+              schema_role text,
+              schema_mode text,
+              schema_frame_index integer,
+              schema_step_index integer,
+              time_index integer,
+              physical_time real,
+              time_source text,
               min_value real,
               max_value real,
               doc_json text not null,
@@ -251,6 +294,25 @@ class SQLiteCampaignCollection:
               on campaign_entries(variable_id, visualization_name, source_dataset, frame_index);
             create index if not exists idx_campaign_entries_minmax
               on campaign_entries(min_value, max_value);
+            """
+        )
+        existing = {
+            str(row["name"])
+            for row in self._con.execute("pragma table_info(campaign_entries)").fetchall()
+        }
+        for column, ddl_type in ADDED_COLUMNS.items():
+            if column not in existing:
+                self._con.execute(f"alter table campaign_entries add column {column} {ddl_type}")
+        self._con.execute(
+            """
+            create index if not exists idx_campaign_entries_schema_group
+              on campaign_entries(variable_id, schema_file_group, schema_mode, frame_index)
+            """
+        )
+        self._con.execute(
+            """
+            create index if not exists idx_campaign_entries_physical_time
+              on campaign_entries(variable_id, physical_time)
             """
         )
         self._con.execute(
@@ -311,6 +373,15 @@ class SQLiteCampaignCollection:
             "variable_path": _text_value(doc.get("variable_path")),
             "variable_location": _text_value(doc.get("variable_location")),
             "frame_index": _int_value(doc.get("frame_index")),
+            "schema_name": _text_value(doc.get("schema_name")),
+            "schema_file_group": _text_value(doc.get("schema_file_group")),
+            "schema_role": _text_value(doc.get("schema_role")),
+            "schema_mode": _text_value(doc.get("schema_mode")),
+            "schema_frame_index": _int_value(doc.get("schema_frame_index")),
+            "schema_step_index": _int_value(doc.get("schema_step_index")),
+            "time_index": _int_value(doc.get("time_index")),
+            "physical_time": _float_value(doc.get("physical_time")),
+            "time_source": _text_value(doc.get("time_source")),
             "min_value": _float_value(doc.get("min")),
             "max_value": _float_value(doc.get("max")),
             "doc_json": _to_json(doc),

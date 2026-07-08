@@ -96,6 +96,13 @@ def attach_controllers(
         if variable_id:
             filt["variable_id"] = variable_id
 
+        schema_file_group = str(row.get("schema_file_group", "") or "")
+        schema_mode = str(row.get("schema_mode", "") or "")
+        if schema_file_group and schema_mode == "file_per_timestep":
+            filt["schema_file_group"] = schema_file_group
+            filt["schema_mode"] = schema_mode
+            return filt
+
         source_dataset = str(row.get("source_dataset", "") or "")
         if source_dataset:
             filt["source_dataset"] = source_dataset
@@ -123,6 +130,8 @@ def attach_controllers(
         return {
             "_source_key": str(row.get("_key", "") or ""),
             "source_dataset": str(row.get("source_dataset", "") or ""),
+            "schema_file_group": str(row.get("schema_file_group", "") or ""),
+            "schema_mode": str(row.get("schema_mode", "") or ""),
             "producer": str(row.get("producer", "") or ""),
             "casename": str(row.get("casename", "") or ""),
             "file": str(row.get("file", "") or ""),
@@ -167,6 +176,8 @@ def attach_controllers(
                     fields = {
                         "_source_key": str(raw_item.get("_source_key", "") or ""),
                         "source_dataset": str(raw_item.get("source_dataset", "") or ""),
+                        "schema_file_group": str(raw_item.get("schema_file_group", "") or ""),
+                        "schema_mode": str(raw_item.get("schema_mode", "") or ""),
                         "producer": str(raw_item.get("producer", "") or ""),
                         "casename": str(raw_item.get("casename", "") or ""),
                         "file": str(raw_item.get("file", "") or ""),
@@ -184,6 +195,8 @@ def attach_controllers(
             fields = {
                 "_source_key": str(cell.get("_source_key", "") or ""),
                 "source_dataset": str(cell.get("source_dataset", "") or ""),
+                "schema_file_group": str(cell.get("schema_file_group", "") or ""),
+                "schema_mode": str(cell.get("schema_mode", "") or ""),
                 "producer": str(cell.get("producer", "") or ""),
                 "casename": str(cell.get("casename", "") or ""),
                 "file": str(cell.get("file", "") or ""),
@@ -193,6 +206,15 @@ def attach_controllers(
         return fields_list
 
     def source_filter_from_cell(cell: Dict[str, Any]) -> Dict[str, str]:
+        schema_file_group = str(cell.get("schema_file_group", "") or "")
+        schema_mode = str(cell.get("schema_mode", "") or "")
+        if schema_file_group and schema_mode == "file_per_timestep":
+            filt = {"schema_file_group": schema_file_group, "schema_mode": schema_mode}
+            variable_id = str(cell.get("variable_id", "") or "")
+            if variable_id:
+                filt["variable_id"] = variable_id
+            return filt
+
         source_dataset = str(cell.get("source_dataset", "") or "")
         if source_dataset:
             filt = {"source_dataset": source_dataset}
@@ -219,10 +241,19 @@ def attach_controllers(
                 return row
 
         source_dataset = str(cell.get("source_dataset", "") or "")
+        schema_file_group = str(cell.get("schema_file_group", "") or "")
+        schema_mode = str(cell.get("schema_mode", "") or "")
         producer = str(cell.get("producer", "") or "")
         casename = str(cell.get("casename", "") or "")
         file_name = str(cell.get("file", "") or "")
         for row in all_source_rows():
+            if (
+                schema_file_group
+                and schema_mode
+                and str(row.get("schema_file_group", "") or "") == schema_file_group
+                and str(row.get("schema_mode", "") or "") == schema_mode
+            ):
+                return row
             if source_dataset and str(row.get("source_dataset", "") or "") == source_dataset:
                 return row
             if (
@@ -235,6 +266,10 @@ def attach_controllers(
         return {}
 
     def source_key_for_fields(row: Dict[str, Any]) -> str:
+        schema_file_group = str(row.get("schema_file_group", "") or "")
+        schema_mode = str(row.get("schema_mode", "") or "")
+        if schema_file_group and schema_mode == "file_per_timestep":
+            return f"schema|{row.get('variable_id', '')}|{schema_file_group}"
         return (
             "|".join(
                 str(row.get(key, "") or "")
@@ -267,6 +302,8 @@ def attach_controllers(
             "_id": 1,
             "variable_id": 1,
             "source_dataset": 1,
+            "schema_file_group": 1,
+            "schema_mode": 1,
             "producer": 1,
             "casename": 1,
             "file": 1,
@@ -282,6 +319,8 @@ def attach_controllers(
         row = {
             "variable_id": str(doc.get("variable_id", "") or var_id),
             "source_dataset": str(doc.get("source_dataset", "") or ""),
+            "schema_file_group": str(doc.get("schema_file_group", "") or ""),
+            "schema_mode": str(doc.get("schema_mode", "") or ""),
             "producer": str(doc.get("producer", "") or ""),
             "casename": str(doc.get("casename", "") or ""),
             "file": str(doc.get("file", "") or ""),
@@ -318,6 +357,8 @@ def attach_controllers(
             "frame_count": 0,
             "frame_indices": [],
             "frame_sources": [],
+            "time_values": [],
+            "time_mode": "timestep",
             "plot": {},
             "plot_settings": {},
             "scalar_field_settings": {},
@@ -501,6 +542,12 @@ def attach_controllers(
         return tile
 
     def source_name_for_row(row: Dict[str, Any]) -> str:
+        source_label = str(row.get("source_label", "") or "")
+        if source_label:
+            return source_label
+        schema_file_group = str(row.get("schema_file_group", "") or "")
+        if schema_file_group:
+            return schema_file_group
         source_dataset = str(row.get("source_dataset", "") or "")
         if source_dataset:
             return source_dataset
@@ -514,6 +561,14 @@ def attach_controllers(
     def source_row_from_summary_source(source: Dict[str, Any], variable_id: str) -> Dict[str, Any]:
         row = {
             "source_dataset": str(source.get("source_dataset", "") or ""),
+            "source_label": str(source.get("source_label", "") or ""),
+            "schema_name": str(source.get("schema_name", "") or ""),
+            "schema_file_group": str(source.get("schema_file_group", "") or ""),
+            "schema_role": str(source.get("schema_role", "") or ""),
+            "schema_mode": str(source.get("schema_mode", "") or ""),
+            "num_timesteps": int(source.get("num_timesteps", 1) or 1),
+            "files": list(source.get("files", []) or []),
+            "source_datasets": list(source.get("source_datasets", []) or []),
             "variable_id": str(source.get("variable_id", "") or variable_id or ""),
             "variable_name": str(source.get("variable_name", "") or ""),
             "variable_type": str(source.get("variable_type", "variable") or "variable"),
@@ -578,6 +633,13 @@ def attach_controllers(
             "variable_name": variable_name,
             "variable_type": str(row.get("variable_type", "") or "variable"),
             "source_dataset": source_dataset,
+            "source_label": str(row.get("source_label", "") or ""),
+            "sourceName": str(row.get("sourceName", "") or ""),
+            "schema_name": str(row.get("schema_name", "") or ""),
+            "schema_file_group": str(row.get("schema_file_group", "") or ""),
+            "schema_role": str(row.get("schema_role", "") or ""),
+            "schema_mode": str(row.get("schema_mode", "") or ""),
+            "num_timesteps": source_filter_number(row.get("num_timesteps", None)),
             "producer": str(row.get("producer", "") or ""),
             "casename": str(row.get("casename", "") or ""),
             "file": str(row.get("file", "") or ""),
@@ -1231,6 +1293,32 @@ Notes:
         if active is not None and is_valid_grid_index(active):
             state.activeGridCell = int(active)
 
+    def clear_timeline_driver_if_cell(idx: int) -> None:
+        try:
+            if int(state.timelineDriverCell) == int(idx):
+                state.timelineDriverCell = -1
+        except Exception:
+            state.timelineDriverCell = -1
+
+    def cell_has_timeline_samples(cell: Dict[str, Any]) -> bool:
+        time_values = cell.get("time_values", [])
+        if isinstance(time_values, list) and any(finite_float(value) is not None for value in time_values):
+            return True
+
+        plot = cell.get("plot", {})
+        if not isinstance(plot, dict):
+            return False
+        x_label = str(plot.get("x_label", "") or "").strip().lower()
+        if x_label not in {"time", "physical time"}:
+            return False
+        for item in plot.get("series", []) or []:
+            if not isinstance(item, dict):
+                continue
+            x_values = item.get("x", [])
+            if isinstance(x_values, list) and any(finite_float(value) is not None for value in x_values):
+                return True
+        return False
+
     def publish_grid_selection(selected: List[int]) -> None:
         state.selectedGridCellIndices = selected
         state.selectedGridCellMap = {str(idx): True for idx in selected}
@@ -1249,6 +1337,8 @@ Notes:
         target = {
             "variable_id": str(variable_id or ""),
             "source_dataset": str(row.get("source_dataset", "") or ""),
+            "schema_file_group": str(row.get("schema_file_group", "") or ""),
+            "schema_mode": str(row.get("schema_mode", "") or ""),
             "producer": str(row.get("producer", "") or ""),
             "casename": str(row.get("casename", "") or ""),
             "file": str(row.get("file", "") or ""),
@@ -1288,6 +1378,11 @@ Notes:
         state.gridCols = cols
         state.gridCells = normalize_grid_cells(cells)
         state.activeGridCell = active if 0 <= active < rows * cols else -1
+        try:
+            if int(state.timelineDriverCell) >= rows * cols:
+                state.timelineDriverCell = -1
+        except Exception:
+            state.timelineDriverCell = -1
         publish_grid_selection(normalize_grid_selection(cells=list(state.gridCells or [])))
         clear_context_menu_state()
 
@@ -1418,6 +1513,8 @@ Notes:
         source_filter = active_source_filter_for_variable(variable_id)
         return {
             "source_dataset": str(source_filter.get("source_dataset", "") or ""),
+            "schema_file_group": str(source_filter.get("schema_file_group", "") or ""),
+            "schema_mode": str(source_filter.get("schema_mode", "") or ""),
             "producer": str(source_filter.get("producer", "") or ""),
             "casename": str(source_filter.get("casename", "") or ""),
             "file": str(source_filter.get("file", "") or ""),
@@ -1445,6 +1542,8 @@ Notes:
             source_fields = {
                 "_source_key": str(existing_cell.get("_source_key", "") or ""),
                 "source_dataset": str(existing_cell.get("source_dataset", "") or ""),
+                "schema_file_group": str(existing_cell.get("schema_file_group", "") or ""),
+                "schema_mode": str(existing_cell.get("schema_mode", "") or ""),
                 "producer": str(existing_cell.get("producer", "") or ""),
                 "casename": str(existing_cell.get("casename", "") or ""),
                 "file": str(existing_cell.get("file", "") or ""),
@@ -2075,37 +2174,7 @@ Notes:
         rows = summary.get("sources", []) or []
         source_rows_all: List[Dict[str, Any]] = []
         for r in rows:
-            row = {
-                "source_dataset": r.get("source_dataset", ""),
-                "variable_id": r.get("variable_id", ""),
-                "variable_name": r.get("variable_name", ""),
-                "variable_type": r.get("variable_type", "variable"),
-                "variable_path": r.get("variable_path", ""),
-                "producer": r.get("producer", ""),
-                "casename": r.get("casename", ""),
-                "file": r.get("file", ""),
-                "visualization_name": r.get("visualization_name", ""),
-                "visualization_kind": r.get("visualization_kind", ""),
-                "visualization_source_dataset": r.get("visualization_source_dataset", ""),
-                "association_source": r.get("association_source", ""),
-                "campaign_path": r.get("campaign_path", ""),
-                "variable_location": r.get("variable_location", ""),
-                "frame_index": r.get("frame_index", None),
-                "min": fmt(r.get("min", None)),
-                "max": fmt(r.get("max", None)),
-                "min_value": r.get("min", None),
-                "max_value": r.get("max", None),
-                "_key": (
-                    "|".join(
-                        str(r.get(key, "") or "")
-                        for key in ("variable_id", "source_dataset", "producer", "casename", "file")
-                    ).strip("|")
-                    or str(r.get("source_dataset", "") or "")
-                    or f"{r.get('producer', '')}|{r.get('casename', '')}|{r.get('file', '')}"
-                ),
-            }
-            row["sourceName"] = source_name_for_row(row)
-            source_rows_all.append(row)
+            source_rows_all.append(source_row_from_summary_source(dict(r or {}), var_id))
 
         state.sourceRowsAll = source_rows_all
         apply_source_filter_and_sort()
@@ -2169,6 +2238,8 @@ Notes:
                     "frame_count": 0,
                     "frame_indices": [],
                     "frame_sources": [],
+                    "time_values": [],
+                    "time_mode": "timestep",
                     "status": "no-visualizations",
                     "note": "No visualization types for this source",
                 }
@@ -2184,6 +2255,7 @@ Notes:
                     )
                     if one:
                         tile = one[0]
+                        tile.update({k: v for k, v in source_fields_from_row(row).items() if v})
                     else:
                         tile["status"] = "no-frames"
                         tile["note"] = f'No movie for "{selected_vis}"'
@@ -2386,6 +2458,26 @@ Notes:
         state.gridCells = normalize_grid_cells(cells)
         set_grid_selection([idx], active=idx)
 
+    @ctrl.add("toggle_timeline_driver_cell")
+    def toggle_timeline_driver_cell(cell_index: int, **_):
+        try:
+            idx = int(cell_index)
+        except Exception:
+            return
+        if not is_valid_grid_index(idx):
+            return
+        cells = normalize_grid_cells(state.gridCells)
+        cell = cells[idx] if 0 <= idx < len(cells) else {}
+        if not str(cell.get("variable_id", "") or cell.get("variable_name", "") or "").strip():
+            return
+        if not cell_has_timeline_samples(cell):
+            return
+        try:
+            current = int(state.timelineDriverCell)
+        except Exception:
+            current = -1
+        state.timelineDriverCell = -1 if current == idx else idx
+
     @ctrl.add("clear_grid_cell")
     def clear_grid_cell(cell_index: int, **_):
         try:
@@ -2395,6 +2487,7 @@ Notes:
         if not is_valid_grid_index(idx):
             return
 
+        clear_timeline_driver_if_cell(idx)
         cells = normalize_grid_cells(state.gridCells)
         assign_cell(cells, idx, empty_grid_cell())
         state.gridCells = normalize_grid_cells(cells)
@@ -2418,6 +2511,8 @@ Notes:
             return
 
         # Move + overwrite: destination takes source tile, source is cleared.
+        clear_timeline_driver_if_cell(src)
+        clear_timeline_driver_if_cell(dst)
         assign_cell(cells, dst, source)
         assign_cell(cells, src, empty_grid_cell())
         state.gridCells = normalize_grid_cells(cells)

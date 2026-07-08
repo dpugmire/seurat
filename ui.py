@@ -328,6 +328,220 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
           return values;
         }
 
+        function parseImageSequenceTimeValues(el) {
+          const raw = String(el && el.getAttribute && el.getAttribute("data-time-values") || "");
+          if (!raw) return [];
+          const values = [];
+          for (const part of raw.split(",")) {
+            const value = Number(part);
+            if (Number.isFinite(value)) values.push(value);
+          }
+          return values;
+        }
+
+        function imageSequencesHavePhysicalTime(sequences) {
+          for (const el of (sequences || [])) {
+            if (parseImageSequenceTimeValues(el).length) return true;
+          }
+          return false;
+        }
+
+        function isVisibleGridCell(cell) {
+          if (!cell) return false;
+          try {
+            const style = window.getComputedStyle(cell);
+            if (style && style.display === "none") return false;
+          } catch (_err) {
+            // Keep going; visibility is best-effort here.
+          }
+          return true;
+        }
+
+        function collectPlotTimeValues(plots) {
+          const values = [];
+          if (typeof parsePlotData !== "function") return values;
+          for (const el of (plots || [])) {
+            const plot = parsePlotData(el);
+            const xLabel = String(plot.x_label || "").trim().toLowerCase();
+            if (xLabel && xLabel !== "time" && xLabel !== "physical time") continue;
+            if (!xLabel) continue;
+            const series = Array.isArray(plot.series) ? plot.series : [];
+            for (const item of series) {
+              const xs = Array.isArray(item && item.x) ? item.x : [];
+              for (const raw of xs) {
+                const value = Number(raw);
+                if (Number.isFinite(value)) values.push(value);
+              }
+            }
+          }
+          return values;
+        }
+
+        function uniqueSortedTimelineValues(values) {
+          const sorted = (values || [])
+            .map(function(value) { return Number(value); })
+            .filter(function(value) { return Number.isFinite(value); })
+            .sort(function(a, b) { return a - b; });
+          const result = [];
+          for (const value of sorted) {
+            if (!result.length) {
+              result.push(value);
+              continue;
+            }
+            const previous = result[result.length - 1];
+            const tolerance = Math.max(1e-12, 1e-9 * Math.max(1, Math.abs(previous), Math.abs(value)));
+            if (Math.abs(value - previous) > tolerance) result.push(value);
+          }
+          return result;
+        }
+
+        function timelineForGridCell(cell) {
+          if (!cell || !isVisibleGridCell(cell)) {
+            return { values: [], hasPlot: false, hasSequence: false };
+          }
+
+          const plots = Array.from(cell.querySelectorAll ? cell.querySelectorAll(".catnip-plot1d") : []);
+          const sequences = Array.from(cell.querySelectorAll ? cell.querySelectorAll('img[data-grid-image-sequence="1"]') : []);
+          const values = [];
+          const plotValues = collectPlotTimeValues(plots);
+          values.push.apply(values, plotValues);
+
+          let sequenceValueCount = 0;
+          for (const el of sequences) {
+            const times = parseImageSequenceTimeValues(el);
+            if (times.length) {
+              sequenceValueCount += times.length;
+              values.push.apply(values, times);
+            }
+          }
+
+          return {
+            values: uniqueSortedTimelineValues(values),
+            hasPlot: plotValues.length > 0,
+            hasSequence: sequenceValueCount > 0,
+          };
+        }
+
+        function selectedTimelineDriverCell() {
+          const cell = document.querySelector('.catnip-dropcell[data-timeline-driver="1"]');
+          return cell && isVisibleGridCell(cell) ? cell : null;
+        }
+
+        function autoTimelineDriver() {
+          const cells = Array.from(document.querySelectorAll(".catnip-dropcell"));
+          let best = null;
+          for (const cell of cells) {
+            const timeline = timelineForGridCell(cell);
+            if (!timeline.values.length) continue;
+            const rawIndex = Number(cell.getAttribute("data-cell-index"));
+            const index = Number.isFinite(rawIndex) ? rawIndex : cells.indexOf(cell);
+            const candidate = {
+              cell,
+              values: timeline.values,
+              hasPlot: timeline.hasPlot,
+              index,
+            };
+            if (
+              !best
+              || candidate.values.length > best.values.length
+              || (
+                candidate.values.length === best.values.length
+                && candidate.hasPlot
+                && !best.hasPlot
+              )
+              || (
+                candidate.values.length === best.values.length
+                && candidate.hasPlot === best.hasPlot
+                && candidate.index < best.index
+              )
+            ) {
+              best = candidate;
+            }
+          }
+          return best || { values: [] };
+        }
+
+        function getPhysicalTimeline(sequences, plots) {
+          const selected = selectedTimelineDriverCell();
+          if (selected) {
+            const selectedTimeline = timelineForGridCell(selected);
+            if (selectedTimeline.values.length) return selectedTimeline.values;
+          }
+
+          const auto = autoTimelineDriver();
+          if (auto.values.length) return auto.values;
+
+          sequences = sequences || getGridImageSequencesSafe();
+          plots = plots || (typeof getGridPlots === "function" ? getGridPlots() : []);
+          if (sequences.length && !imageSequencesHavePhysicalTime(sequences)) return [];
+
+          const values = [];
+          for (const el of (sequences || [])) {
+            values.push.apply(values, parseImageSequenceTimeValues(el));
+          }
+          values.push.apply(values, collectPlotTimeValues(plots));
+          return uniqueSortedTimelineValues(values);
+        }
+
+        function timelineIndexAtOrBefore(rawTime, timeline) {
+          const values = timeline || [];
+          if (!values.length) return 0;
+          const t = Number(rawTime);
+          if (!Number.isFinite(t) || t <= values[0]) return 0;
+          if (t >= values[values.length - 1]) return values.length - 1;
+
+          let lo = 0;
+          let hi = values.length;
+          while (lo < hi) {
+            const mid = Math.floor((lo + hi) / 2);
+            if (values[mid] <= t) lo = mid + 1;
+            else hi = mid;
+          }
+          return Math.max(0, Math.min(lo - 1, values.length - 1));
+        }
+
+        function timelineIndexNearest(rawTime, timeline) {
+          const values = timeline || [];
+          if (!values.length) return 0;
+          const lower = timelineIndexAtOrBefore(rawTime, values);
+          const upper = Math.min(lower + 1, values.length - 1);
+          const t = Number(rawTime);
+          if (!Number.isFinite(t)) return lower;
+          return Math.abs(values[upper] - t) < Math.abs(t - values[lower]) ? upper : lower;
+        }
+
+        function timeForTimelineIndex(rawIndex, timeline) {
+          const values = timeline || [];
+          if (!values.length) return 0;
+          let index = Math.round(Number(rawIndex) || 0);
+          index = Math.max(0, Math.min(index, values.length - 1));
+          return values[index];
+        }
+
+        function imageSequenceFrameForTime(el, rawTime) {
+          const sources = parseImageSequenceSources(el);
+          if (!sources.length) return 0;
+
+          const times = parseImageSequenceTimeValues(el);
+          if (!times.length) {
+            return Math.max(0, Math.min(Math.round(Number(rawTime) || 0), sources.length - 1));
+          }
+
+          const index = timelineIndexAtOrBefore(rawTime, times);
+          return Math.max(0, Math.min(index, sources.length - 1));
+        }
+
+        function formatTimelineValue(value) {
+          const number = Number(value);
+          if (!Number.isFinite(number)) return String(value);
+          if (Number.isInteger(number)) return String(number);
+          const absValue = Math.abs(number);
+          if (absValue > 0 && (absValue < 1e-3 || absValue >= 1e6)) {
+            return number.toExponential(6).replace(/0+e/, "e");
+          }
+          return String(Number(number.toPrecision(7)));
+        }
+
         function getImageSequenceFrameCount(el) {
           const count = Number(el && el.getAttribute && el.getAttribute("data-frame-count"));
           if (Number.isFinite(count) && count > 0) return Math.floor(count);
@@ -354,10 +568,14 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
         function imageSequenceFrameLabel(rawOrdinal, sequences) {
           const ordinal = clampImageSequenceFrame(rawOrdinal, sequences);
           const firstSequence = (sequences || [])[0];
+          const timeValues = parseImageSequenceTimeValues(firstSequence);
+          if (ordinal < timeValues.length) {
+            return formatTimelineValue(timeValues[ordinal]);
+          }
           const indices = parseImageSequenceFrameIndices(firstSequence);
           if (ordinal < indices.length) {
             const value = indices[ordinal];
-            return Number.isInteger(value) ? String(value) : String(value);
+            return formatTimelineValue(value);
           }
           return String(ordinal);
         }
@@ -385,12 +603,37 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
           return ordinal;
         }
 
+        function setImageSequencesForTime(rawTime, sequences) {
+          const t = Number(rawTime);
+          for (const el of (sequences || [])) {
+            const sources = parseImageSequenceSources(el);
+            if (!sources.length) continue;
+            const idx = imageSequenceFrameForTime(el, t);
+            if (el.getAttribute("src") !== sources[idx]) {
+              el.setAttribute("src", sources[idx]);
+            }
+            el.setAttribute("data-current-frame", String(idx));
+          }
+          return Number.isFinite(t) ? t : 0;
+        }
+
         function getReferenceImageSequenceFrame(sequences) {
           for (const el of (sequences || [])) {
             const value = Number(el && el.getAttribute && el.getAttribute("data-current-frame"));
             if (Number.isFinite(value) && value >= 0) return Math.round(value);
           }
           return 0;
+        }
+
+        function getReferenceImageSequenceTime(sequences) {
+          for (const el of (sequences || [])) {
+            const frame = Number(el && el.getAttribute && el.getAttribute("data-current-frame"));
+            if (!Number.isFinite(frame) || frame < 0) continue;
+            const times = parseImageSequenceTimeValues(el);
+            const index = Math.max(0, Math.min(Math.round(frame), Math.max(0, times.length - 1)));
+            if (index < times.length) return times[index];
+          }
+          return getReferenceImageSequenceFrame(sequences);
         }
 
         function getVcrSliderFrameValue() {
@@ -406,6 +649,10 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
           videos = videos || [];
           plots = plots || (typeof getGridPlots === "function" ? getGridPlots() : []);
           const sequences = getGridImageSequencesSafe();
+          const timeline = getPhysicalTimeline(sequences, plots);
+          if (timeline.length) {
+            return timeForTimelineIndex(getVcrSliderFrameValue(), timeline);
+          }
           if (sequences.length) {
             return getVcrSliderFrameValue();
           }
@@ -438,8 +685,11 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
             ? clampTimeForMedia(seconds, videos, plots)
             : (Number.isFinite(seconds) && seconds >= 0 ? seconds : 0);
           const fps = inferFpsForVideos(videos);
+          const timeline = getPhysicalTimeline(sequences, plots);
           if (label) {
-            if (sequences.length) {
+            if (timeline.length) {
+              label.textContent = "Time = " + formatTimelineValue(safeSeconds);
+            } else if (sequences.length) {
               const ordinal = clampImageSequenceFrame(safeSeconds, sequences);
               label.textContent = "Time = " + imageSequenceFrameLabel(ordinal, sequences);
             } else if (videos && videos.length) {
@@ -457,7 +707,13 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
           window.__catnipGridSyncTime = safeSeconds;
           if (!slider) return;
 
-          if (sequences.length) {
+          if (timeline.length) {
+            const maxFrames = Math.max(0, timeline.length - 1);
+            slider.min = "0";
+            slider.max = String(maxFrames);
+            slider.step = "1";
+            slider.value = String(Math.max(0, Math.min(timelineIndexNearest(safeSeconds, timeline), maxFrames)));
+          } else if (sequences.length) {
             const count = getCommonImageSequenceFrameCount(sequences);
             const maxFrames = count !== null ? Math.max(0, count - 1) : 0;
             const frameValue = clampImageSequenceFrame(safeSeconds, sequences);
@@ -715,6 +971,7 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
         const gridVcrState = {
           playing: false,
           syncTime: 0,
+          timelinePosition: 0,
           syncTimer: null,
           lastTickMs: 0,
         };
@@ -1213,19 +1470,31 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
         }
 
         function getMediaTimelineBounds(videos, plots) {
-          const sequenceCount = getCommonImageSequenceFrameCount(getGridImageSequences());
+          const sequences = getGridImageSequences();
+          const timeline = getPhysicalTimeline(sequences, plots || getGridPlots());
+          if (timeline.length) {
+            return {
+              start: timeline[0],
+              end: timeline[timeline.length - 1],
+              usesVideos: false,
+              usesImageSequence: !!sequences.length,
+              usesPhysicalTimeline: true,
+            };
+          }
+
+          const sequenceCount = getCommonImageSequenceFrameCount(sequences);
           if (sequenceCount !== null) {
-            return { start: 0, end: Math.max(0, sequenceCount - 1), usesVideos: false, usesImageSequence: true };
+            return { start: 0, end: Math.max(0, sequenceCount - 1), usesVideos: false, usesImageSequence: true, usesPhysicalTimeline: false };
           }
           const videoEnd = getCommonEndTime(videos || []);
           if (videoEnd !== null) {
-            return { start: 0, end: videoEnd, usesVideos: true, usesImageSequence: false };
+            return { start: 0, end: videoEnd, usesVideos: true, usesImageSequence: false, usesPhysicalTimeline: false };
           }
           const plotBounds = getPlotTimelineBounds(plots || getGridPlots());
           if (plotBounds) {
-            return { start: plotBounds.start, end: plotBounds.end, usesVideos: false, usesImageSequence: false };
+            return { start: plotBounds.start, end: plotBounds.end, usesVideos: false, usesImageSequence: false, usesPhysicalTimeline: false };
           }
-          return { start: 0, end: 0, usesVideos: false, usesImageSequence: false };
+          return { start: 0, end: 0, usesVideos: false, usesImageSequence: false, usesPhysicalTimeline: false };
         }
 
         function clampTimeForMedia(rawTime, videos, plots) {
@@ -1243,7 +1512,9 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
           const bounds = getMediaTimelineBounds(videos || [], plots);
           const t = clampTimeForMedia(rawTime, videos || [], plots);
           const denom = Math.max(1e-12, bounds.end - bounds.start);
-          const progress = (bounds.usesVideos || bounds.usesImageSequence) ? ((t - bounds.start) / denom) : null;
+          const progress = (bounds.usesVideos || (bounds.usesImageSequence && !bounds.usesPhysicalTimeline))
+            ? ((t - bounds.start) / denom)
+            : null;
           for (const el of plots) {
             const meta = el.__catnipPlotMeta;
             if (!meta || !meta.cursor) continue;
@@ -1516,6 +1787,46 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
           }
         }
 
+        function applyPhysicalTimelineTime(rawTime, sequences, videos, plots) {
+          sequences = sequences || getGridImageSequences();
+          videos = videos || getGridVideos();
+          plots = plots || getGridPlots();
+          const t = clampTimeForMedia(rawTime, videos, plots);
+          if (sequences.length) {
+            setImageSequencesForTime(t, sequences);
+          }
+          if (videos.length) {
+            setAllVideoTimes(videos, t);
+          } else {
+            window.__catnipGridSyncTime = t;
+            updatePlotCursors(t, videos);
+          }
+          gridVcrState.syncTime = t;
+
+          const timeline = getPhysicalTimeline(sequences, plots);
+          if (timeline.length) {
+            gridVcrState.timelinePosition = timelineIndexNearest(t, timeline);
+          }
+          updateVcrTimeLabelFromSeconds(t, videos, plots);
+          return t;
+        }
+
+        function stepPhysicalTimelineBy(frameCount, sequences, videos, plots) {
+          sequences = sequences || getGridImageSequences();
+          videos = videos || getGridVideos();
+          plots = plots || getGridPlots();
+          const timeline = getPhysicalTimeline(sequences, plots);
+          if (!timeline.length) return null;
+          const base = Number.isFinite(gridVcrState.syncTime)
+            ? gridVcrState.syncTime
+            : (sequences.length ? getReferenceImageSequenceTime(sequences) : timeline[0]);
+          const nextIndex = Math.max(
+            0,
+            Math.min(timelineIndexNearest(base, timeline) + Number(frameCount || 0), timeline.length - 1)
+          );
+          return applyPhysicalTimelineTime(timeline[nextIndex], sequences, videos, plots);
+        }
+
         function stopSyncTimer() {
           if (gridVcrState.syncTimer) {
             clearInterval(gridVcrState.syncTimer);
@@ -1530,7 +1841,15 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
             const videosNow = getGridVideos();
             const plotsNow = getGridPlots();
             if (sequencesNow.length) {
-              updateVcrTimeLabelFromSeconds(getReferenceImageSequenceFrame(sequencesNow), videosNow, plotsNow);
+              const timelineNow = getPhysicalTimeline(sequencesNow, plotsNow);
+              if (timelineNow.length) {
+                const target = Number.isFinite(gridVcrState.syncTime)
+                  ? gridVcrState.syncTime
+                  : getReferenceImageSequenceTime(sequencesNow);
+                applyPhysicalTimelineTime(target, sequencesNow, videosNow, plotsNow);
+              } else {
+                updateVcrTimeLabelFromSeconds(getReferenceImageSequenceFrame(sequencesNow), videosNow, plotsNow);
+              }
             } else if (videosNow.length) {
               updateVcrTimeLabelFromSeconds(getReferenceTime(videosNow), videosNow);
             } else if (plotsNow.length) {
@@ -1545,6 +1864,32 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
           const videos = getGridVideos();
           const plots = getGridPlots();
           if (sequences.length) {
+            const timeline = getPhysicalTimeline(sequences, plots);
+            if (timeline.length) {
+              const now = (window.performance && window.performance.now) ? window.performance.now() : Date.now();
+              const last = Number(gridVcrState.lastTickMs);
+              const dt = Number.isFinite(last) && last > 0 ? Math.max(0, (now - last) / 1000.0) : 0.16;
+              gridVcrState.lastTickMs = now;
+              const fps = inferFpsForImageSequences(sequences);
+              let position = Number(gridVcrState.timelinePosition);
+              if (!Number.isFinite(position)) {
+                position = timelineIndexNearest(gridVcrState.syncTime, timeline);
+              }
+              const nextPosition = Math.min(Math.max(0, timeline.length - 1), position + dt * fps);
+              const nextIndex = Math.max(0, Math.min(Math.floor(nextPosition + 1e-9), timeline.length - 1));
+              const nextTime = timeline[nextIndex];
+              setImageSequencesForTime(nextTime, sequences);
+              gridVcrState.timelinePosition = nextPosition;
+              gridVcrState.syncTime = nextTime;
+              window.__catnipGridSyncTime = nextTime;
+              updateVcrTimeLabelFromSeconds(nextTime, videos, plots);
+              if (nextPosition >= Math.max(0, timeline.length - 1)) {
+                gridVcrState.playing = false;
+                stopSyncTimer();
+              }
+              return;
+            }
+
             const count = getCommonImageSequenceFrameCount(sequences);
             if (count === null || count <= 0) {
               gridVcrState.playing = false;
@@ -1652,9 +1997,14 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
 
           const target = currentVcrSliderTarget(videos, plots);
           if (sequences.length) {
-            const frame = setImageSequenceFrame(target, sequences);
-            gridVcrState.syncTime = frame;
-            updateVcrTimeLabelFromSeconds(frame, videos, plots);
+            if (getPhysicalTimeline(sequences, plots).length) {
+              applyPhysicalTimelineTime(target, sequences, videos, plots);
+            } else {
+              const frame = setImageSequenceFrame(target, sequences);
+              gridVcrState.syncTime = frame;
+              gridVcrState.timelinePosition = frame;
+              updateVcrTimeLabelFromSeconds(frame, videos, plots);
+            }
             return;
           }
           if (videos.length) {
@@ -1695,6 +2045,7 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                 target.matches('img[data-grid-image-sequence="1"]')
                 || target.matches('video[data-grid-video="1"]')
                 || target.matches(".catnip-plot1d")
+                || target.matches(".catnip-dropcell")
               )
             );
           }
@@ -1726,11 +2077,18 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
             return;
           }
           if (sequences.length) {
+            const timeline = getPhysicalTimeline(sequences, plots);
+            if (timeline.length) {
+              const step = Number(deltaSeconds || 0) >= 0 ? 1 : -1;
+              stepPhysicalTimelineBy(step, sequences, videos, plots);
+              return;
+            }
             const next = setImageSequenceFrame(
               getReferenceImageSequenceFrame(sequences) + Number(deltaSeconds || 0),
               sequences
             );
             gridVcrState.syncTime = next;
+            gridVcrState.timelinePosition = next;
             updateVcrTimeLabelFromSeconds(next, videos, plots);
             return;
           }
@@ -1756,12 +2114,19 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
           const videos = getGridVideos();
           const plots = getGridPlots();
           if (!sequences.length && !videos.length && !plots.length) return;
+          const timeline = getPhysicalTimeline(sequences, plots);
+          if (timeline.length && !videos.length) {
+            stepPhysicalTimelineBy(frameCount, sequences, videos, plots);
+            if (!gridVcrState.playing) pauseAllVideos(videos);
+            return;
+          }
           if (sequences.length) {
             const next = setImageSequenceFrame(
               getReferenceImageSequenceFrame(sequences) + Number(frameCount || 0),
               sequences
             );
             gridVcrState.syncTime = next;
+            gridVcrState.timelinePosition = next;
             updateVcrTimeLabelFromSeconds(next, videos, plots);
             if (!gridVcrState.playing) pauseAllVideos(videos);
             return;
@@ -1806,9 +2171,14 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
           }
           const targetSeconds = getVcrSliderTimeValue(videos, plots);
           if (sequences.length) {
-            const frame = setImageSequenceFrame(targetSeconds, sequences);
-            gridVcrState.syncTime = frame;
-            updateVcrTimeLabelFromSeconds(frame, videos, plots);
+            if (getPhysicalTimeline(sequences, plots).length) {
+              applyPhysicalTimelineTime(targetSeconds, sequences, videos, plots);
+            } else {
+              const frame = setImageSequenceFrame(targetSeconds, sequences);
+              gridVcrState.syncTime = frame;
+              gridVcrState.timelinePosition = frame;
+              updateVcrTimeLabelFromSeconds(frame, videos, plots);
+            }
             return;
           }
           const t = setAllVideoTimes(videos, targetSeconds);
@@ -1831,9 +2201,15 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
             updateVcrTimeLabelFromSeconds(0, []);
             return;
           }
+          const timeline = getPhysicalTimeline(sequences, plots);
+          if (timeline.length && !videos.length) {
+            applyPhysicalTimelineTime(timeline[0], sequences, videos, plots);
+            return;
+          }
           if (sequences.length) {
             const frame = setImageSequenceFrame(0, sequences);
             gridVcrState.syncTime = frame;
+            gridVcrState.timelinePosition = frame;
             updateVcrTimeLabelFromSeconds(frame, videos, plots);
             return;
           }
@@ -1858,10 +2234,16 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
             updateVcrTimeLabelFromSeconds(0, []);
             return;
           }
+          const timeline = getPhysicalTimeline(sequences, plots);
+          if (timeline.length && !videos.length) {
+            applyPhysicalTimelineTime(timeline[timeline.length - 1], sequences, videos, plots);
+            return;
+          }
           if (sequences.length) {
             const count = getCommonImageSequenceFrameCount(sequences);
             const frame = setImageSequenceFrame(count !== null ? Math.max(0, count - 1) : 0, sequences);
             gridVcrState.syncTime = frame;
+            gridVcrState.timelinePosition = frame;
             updateVcrTimeLabelFromSeconds(frame, videos, plots);
             return;
           }
@@ -1887,12 +2269,25 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
             updateVcrTimeLabelFromSeconds(0, []);
             return;
           }
+          const timeline = getPhysicalTimeline(sequences, plots);
+          if (timeline.length && !videos.length) {
+            const base = Number.isFinite(gridVcrState.syncTime)
+              ? clampTimeForMedia(gridVcrState.syncTime, videos, plots)
+              : timeline[0];
+            applyPhysicalTimelineTime(base, sequences, videos, plots);
+            gridVcrState.timelinePosition = timelineIndexNearest(base, timeline);
+            gridVcrState.playing = true;
+            gridVcrState.lastTickMs = (window.performance && window.performance.now) ? window.performance.now() : Date.now();
+            startSyncTimer();
+            return;
+          }
           if (sequences.length) {
             const frame = setImageSequenceFrame(
               Number.isFinite(gridVcrState.syncTime) ? gridVcrState.syncTime : getReferenceImageSequenceFrame(sequences),
               sequences
             );
             gridVcrState.syncTime = frame;
+            gridVcrState.timelinePosition = frame;
             updateVcrTimeLabelFromSeconds(frame, videos, plots);
             gridVcrState.playing = true;
             gridVcrState.lastTickMs = (window.performance && window.performance.now) ? window.performance.now() : Date.now();
@@ -1919,9 +2314,17 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
             updateVcrTimeLabelFromSeconds(0, []);
             return;
           }
-          gridVcrState.syncTime = sequences.length
-            ? getReferenceImageSequenceFrame(sequences)
-            : clampTimeForMedia(videos.length ? getReferenceTime(videos) : gridVcrState.syncTime, videos, plots);
+          const timeline = getPhysicalTimeline(sequences, plots);
+          if (timeline.length && !videos.length) {
+            gridVcrState.syncTime = clampTimeForMedia(gridVcrState.syncTime, videos, plots);
+            gridVcrState.timelinePosition = timelineIndexNearest(gridVcrState.syncTime, timeline);
+            setImageSequencesForTime(gridVcrState.syncTime, sequences);
+          } else {
+            gridVcrState.syncTime = sequences.length
+              ? getReferenceImageSequenceFrame(sequences)
+              : clampTimeForMedia(videos.length ? getReferenceTime(videos) : gridVcrState.syncTime, videos, plots);
+            gridVcrState.timelinePosition = gridVcrState.syncTime;
+          }
           gridVcrState.playing = false;
           stopSyncTimer();
           pauseAllVideos(videos);
@@ -1939,8 +2342,14 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
           gridVcrState.playing = false;
           stopSyncTimer();
           pauseAllVideos(videos);
+          const timeline = getPhysicalTimeline(sequences, plots);
+          if (timeline.length && !videos.length) {
+            applyPhysicalTimelineTime(timeline[0], sequences, videos, plots);
+            return;
+          }
           if (sequences.length) {
             gridVcrState.syncTime = setImageSequenceFrame(0, sequences);
+            gridVcrState.timelinePosition = gridVcrState.syncTime;
             updateVcrTimeLabelFromSeconds(gridVcrState.syncTime, videos, plots);
             return;
           }
@@ -2005,7 +2414,7 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
           childList: true,
           subtree: true,
           attributes: true,
-          attributeFilter: ["data-frame-count", "data-frame-indices", "data-frame-sources", "data-plot", "data-plot-settings"],
+          attributeFilter: ["data-frame-count", "data-frame-indices", "data-frame-sources", "data-time-values", "data-time-mode", "data-plot", "data-plot-settings", "data-timeline-driver"],
         });
         scheduleGridMediaSyncToCurrentVcrTime();
 
@@ -2248,6 +2657,57 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                   background: #eaf0f6;
                 }
                 .catnip-dropcell { transition: background 0.15s, outline-color 0.15s; }
+                .catnip-timeline-driver-btn {
+                  flex: 0 0 auto;
+                  width: 24px;
+                  height: 20px;
+                  padding: 0;
+                  display: inline-flex;
+                  align-items: center;
+                  justify-content: center;
+                  border: 1px solid rgba(0, 0, 0, 0.35);
+                  border-radius: 3px;
+                  background: rgba(255, 255, 255, 0.9);
+                  color: #222;
+                  font-size: 11px;
+                  font-family: Menlo, Consolas, monospace;
+                  font-weight: 700;
+                  line-height: 18px;
+                  cursor: pointer;
+                }
+                .catnip-timeline-driver-btn[aria-pressed="true"] {
+                  background: #263238;
+                  border-color: #263238;
+                  color: #fff;
+                }
+                .catnip-timeline-clock-icon {
+                  position: relative;
+                  display: block;
+                  width: 13px;
+                  height: 13px;
+                  border: 2px solid currentColor;
+                  border-radius: 50%;
+                  box-sizing: border-box;
+                }
+                .catnip-timeline-clock-icon::before,
+                .catnip-timeline-clock-icon::after {
+                  content: "";
+                  position: absolute;
+                  left: 50%;
+                  top: 50%;
+                  width: 2px;
+                  background: currentColor;
+                  border-radius: 1px;
+                  transform-origin: 50% 0;
+                }
+                .catnip-timeline-clock-icon::before {
+                  height: 4px;
+                  transform: translate(-50%, -1px) rotate(0deg);
+                }
+                .catnip-timeline-clock-icon::after {
+                  height: 5px;
+                  transform: translate(-50%, -1px) rotate(90deg);
+                }
                 .catnip-plot1d {
                   position: relative;
                   overflow: hidden;
@@ -3176,12 +3636,13 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                         with html.Div(
                                             click=(
                                                 ctrl.set_active_grid_cell,
-                                                "[i, (($event && $event.target && $event.target.closest && $event.target.closest('.catnip-cell-close')) ? 1 : 0), (($event && $event.shiftKey) ? 1 : 0)]",
+                                                "[i, (($event && $event.target && $event.target.closest && $event.target.closest('.catnip-cell-close, .catnip-timeline-driver-btn')) ? 1 : 0), (($event && $event.shiftKey) ? 1 : 0)]",
                                             ),
                                             classes="catnip-dropcell",
                                             raw_attrs=[
                                                 ':data-cell-index="i"',
                                                 ':data-cell-filled="((tile && tile.variable_name) ? 1 : 0)"',
+                                                ':data-timeline-driver="(timelineDriverCell === i ? 1 : 0)"',
                                                 ':draggable="!!(tile && tile.variable_name)"',
                                             ],
                                             style=(
@@ -3217,6 +3678,25 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                         "{{ tile.display_title || tile.variable_name || 'variable' }}",
                                                         style="flex:1 1 auto; min-width:0; font-size:0.9rem; font-weight:400; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;",
                                                     )
+                                                    with html.Button(
+                                                        v_if=(
+                                                            "(tile.time_values && tile.time_values.length)"
+                                                            " || (tile.plot && tile.plot.series && tile.plot.series.length"
+                                                            " && (String(tile.plot.x_label || '').toLowerCase() === 'time'"
+                                                            " || String(tile.plot.x_label || '').toLowerCase() === 'physical time'))"
+                                                        ),
+                                                        classes="catnip-timeline-driver-btn",
+                                                        click=(ctrl.toggle_timeline_driver_cell, "[i]"),
+                                                        raw_attrs=[
+                                                            'type="button"',
+                                                            ':aria-pressed="timelineDriverCell === i ? \'true\' : \'false\'"',
+                                                        ],
+                                                        title="Use as timeline driver",
+                                                    ):
+                                                        html.Span(
+                                                            classes="catnip-timeline-clock-icon",
+                                                            raw_attrs=['aria-hidden="true"'],
+                                                        )
                                                     html.Button(
                                                         "x",
                                                         classes="catnip-cell-close",
@@ -3311,6 +3791,8 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                                                     ':data-frame-count="tile.frame_count || 0"',
                                                                                     ':data-frame-indices="(tile.frame_indices || []).join(\',\')"',
                                                                                     ':data-frame-sources="JSON.stringify(tile.frame_sources || [])"',
+                                                                                    ':data-time-values="(tile.time_values || []).join(\',\')"',
+                                                                                    ':data-time-mode="tile.time_mode || \'timestep\'"',
                                                                                     'data-current-frame="0"',
                                                                                 ],
                                                                             )
@@ -3361,6 +3843,8 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                                         ':data-frame-count="tile.frame_count || 0"',
                                                                         ':data-frame-indices="(tile.frame_indices || []).join(\',\')"',
                                                                         ':data-frame-sources="JSON.stringify(tile.frame_sources || [])"',
+                                                                        ':data-time-values="(tile.time_values || []).join(\',\')"',
+                                                                        ':data-time-mode="tile.time_mode || \'timestep\'"',
                                                                         'data-current-frame="0"',
                                                                     ],
                                                                     style=(
@@ -3402,6 +3886,8 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                                         ':data-fps="tile.fps || 2"',
                                                                         ':data-frame-count="tile.frame_count || 0"',
                                                                         ':data-frame-indices="(tile.frame_indices || []).join(\',\')"',
+                                                                        ':data-time-values="(tile.time_values || []).join(\',\')"',
+                                                                        ':data-time-mode="tile.time_mode || \'timestep\'"',
                                                                         "playsinline",
                                                                         "webkit-playsinline",
                                                                     ],

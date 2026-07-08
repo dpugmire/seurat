@@ -1,4 +1,4 @@
-import os, re, json, sqlite3
+import os, re, json, sqlite3, fnmatch, zlib
 import argparse
 from pathlib import Path
 from adios2 import FileReader
@@ -56,6 +56,12 @@ _VISUALIZATION_API_TABLES = {
     "visualization_item",
     "dataset",
 }
+_CAMPAIGN_SCHEMA_TABLES = {
+    "dataset",
+    "replica",
+    "repfiles",
+    "file",
+}
 _DISPLAY_ROLE_PRIORITY = {
     "color-by": 0,
     "y-axis": 1,
@@ -68,6 +74,528 @@ _DISPLAY_ROLE_PRIORITY = {
 _NONDISPLAY_ROLES = {"x-axis"}
 SCALAR_FIELD_ITEM_TYPE = "SCALAR_FIELD"
 SCALAR_FIELD_VARIABLE_TYPE = "scalarField"
+
+
+def _sqlite_table_names(con: sqlite3.Connection) -> set[str]:
+    return {
+        str(row["name"])
+        for row in con.execute("select name from sqlite_master where type = 'table'")
+    }
+
+
+def _read_campaign_schema_text(campaign_path: str) -> Optional[str]:
+    path = Path(campaign_path).expanduser()
+    if not path.exists():
+        return None
+
+    try:
+        con = sqlite3.connect(str(path))
+        con.row_factory = sqlite3.Row
+    except sqlite3.Error as e:
+        print(f"[warn] could not open ACA SQLite metadata for campaign schema: {e}")
+        return None
+
+    try:
+        if not _CAMPAIGN_SCHEMA_TABLES.issubset(_sqlite_table_names(con)):
+            return None
+
+        row = con.execute(
+            """
+            select
+                r.keyid as keyid,
+                f.compression as compression,
+                f.data as data
+            from dataset as d
+            join replica as r on r.datasetid = d.rowid
+            join repfiles as rf on rf.replicaid = r.rowid
+            join file as f on f.fileid = rf.fileid
+            where d.name = ? and d.fileformat = 'TEXT' and d.deltime = 0 and r.deltime = 0
+            order by r.rowid desc, f.fileid desc
+            limit 1
+            """,
+            ("schema.yaml",),
+        ).fetchone()
+        if row is None:
+            return None
+
+        if int(row["keyid"] or 0) > 0:
+            raise ValueError("schema.yaml is encrypted; Seurat cannot read it without a keyfile")
+
+        data = bytes(row["data"])
+        if int(row["compression"] or 0):
+            data = zlib.decompress(data)
+        return data.decode("utf-8")
+    finally:
+        con.close()
+
+
+def _load_campaign_dataset_rows(campaign_path: str) -> List[Dict[str, str]]:
+    path = Path(campaign_path).expanduser()
+    if not path.exists():
+        return []
+
+    try:
+        con = sqlite3.connect(str(path))
+        con.row_factory = sqlite3.Row
+    except sqlite3.Error as e:
+        print(f"[warn] could not open ACA SQLite metadata for dataset list: {e}")
+        return []
+
+    try:
+        if "dataset" not in _sqlite_table_names(con):
+            return []
+        rows = con.execute(
+            """
+            select name, fileformat
+            from dataset
+            where deltime = 0
+            order by name
+            """
+        ).fetchall()
+        return [
+            {
+                "name": str(row["name"] or ""),
+                "fileformat": str(row["fileformat"] or ""),
+            }
+            for row in rows
+        ]
+    finally:
+        con.close()
+
+
+def _load_campaign_timeseries(campaign_path: str) -> Dict[str, List[str]]:
+    path = Path(campaign_path).expanduser()
+    if not path.exists():
+        return {}
+
+    try:
+        con = sqlite3.connect(str(path))
+        con.row_factory = sqlite3.Row
+    except sqlite3.Error as e:
+        print(f"[warn] could not open ACA SQLite metadata for time series: {e}")
+        return {}
+
+    try:
+        tables = _sqlite_table_names(con)
+        if "timeseries" not in tables or "dataset" not in tables:
+            return {}
+        rows = con.execute(
+            """
+            select t.name as timeseries_name, d.name as dataset_name
+            from timeseries as t
+            join dataset as d on d.tsid = t.tsid
+            where d.deltime = 0
+            order by t.name, d.tsorder
+            """
+        ).fetchall()
+        membership: Dict[str, List[str]] = {}
+        for row in rows:
+            name = str(row["timeseries_name"] or "")
+            dataset = str(row["dataset_name"] or "")
+            if name and dataset:
+                membership.setdefault(name, []).append(dataset)
+        return membership
+    finally:
+        con.close()
+
+
+def _schema_mapping(value: Any, field_name: str) -> Dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{field_name} must be a mapping")
+    return value
+
+
+def _schema_nonempty_string(value: Any, field_name: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        raise ValueError(f"{field_name} is required")
+    return text
+
+
+def _schema_time_fields(time_spec: Any, field_name: str) -> Dict[str, str]:
+    time_map = _schema_mapping(time_spec, field_name)
+    variable = str(time_map.get("variable", "") or "").strip()
+    index = str(time_map.get("index", "") or "").strip()
+    has_variable = bool(variable)
+    has_index = bool(index)
+    if has_variable == has_index:
+        raise ValueError(f"{field_name} requires exactly one of variable or index")
+    return {"variable": variable} if has_variable else {"index": index}
+
+
+def _schema_group_time(time_spec: Any, field_name: str) -> Dict[str, str]:
+    time_map = _schema_mapping(time_spec, field_name)
+    if "file" in time_map:
+        raise ValueError(f"{field_name}.file is not supported; file group is implicit")
+    return _schema_time_fields(time_map, field_name)
+
+
+def _schema_root_time(time_spec: Any, file_groups: Dict[str, Dict[str, Any]]) -> Dict[str, str]:
+    time_map = _schema_mapping(time_spec, "time")
+    result = _schema_time_fields(time_map, "time")
+    if "file" in time_map:
+        file_group = _schema_nonempty_string(time_map.get("file"), "time.file")
+        group = file_groups.get(file_group)
+        if group is None:
+            raise ValueError(f"time.file references unknown group: {file_group}")
+        if group.get("role") != "time_series":
+            raise ValueError(f"time.file references non-time_series group: {file_group}")
+        result["file"] = file_group
+    return result
+
+
+def _apply_root_time(time_spec: Any, file_groups: Dict[str, Dict[str, Any]]) -> None:
+    if time_spec in (None, {}):
+        return
+
+    root_time = _schema_root_time(time_spec, file_groups)
+    root_group = root_time.get("file", "")
+    group_time = {key: value for key, value in root_time.items() if key != "file"}
+
+    if root_group:
+        file_groups[root_group].setdefault("time", dict(group_time))
+        return
+
+    for group in file_groups.values():
+        if group.get("role") == "time_series":
+            group.setdefault("time", dict(group_time))
+
+
+def _schema_extract_step_indices(group_name: str, group: Dict[str, Any], datasets: List[str]) -> List[int]:
+    pattern = _schema_nonempty_string(group.get("step_from_filename"), f"files.{group_name}.step_from_filename")
+    try:
+        regex = re.compile(pattern)
+    except re.error as e:
+        raise ValueError(f"Invalid files.{group_name}.step_from_filename regex: {e}") from e
+
+    steps: List[int] = []
+    for dataset in datasets:
+        match = regex.search(dataset)
+        if match is None:
+            raise ValueError(f"files.{group_name}.step_from_filename did not match dataset: {dataset}")
+        if not match.groups():
+            raise ValueError(f"files.{group_name}.step_from_filename must capture a step number")
+        try:
+            steps.append(int(match.group(1)))
+        except Exception as e:
+            raise ValueError(
+                f"files.{group_name}.step_from_filename captured a non-integer step "
+                f"for {dataset}: {match.group(1)}"
+            ) from e
+    return steps
+
+
+def _resolve_schema_time_series_datasets(
+    group_name: str,
+    pattern: str,
+    dataset_names: List[str],
+    timeseries: Dict[str, List[str]],
+) -> List[str]:
+    matches = {name for name in dataset_names if fnmatch.fnmatch(name, pattern)}
+    if not matches:
+        return []
+
+    ordered = timeseries.get(group_name, [])
+    if not ordered:
+        return sorted(matches)
+
+    result: List[str] = []
+    for dataset in ordered:
+        if dataset not in matches:
+            raise ValueError(f"timeseries.{group_name} dataset does not match files.{group_name}.pattern: {dataset}")
+        result.append(dataset)
+    return result
+
+
+def _interpret_campaign_schema(
+    schema: Dict[str, Any],
+    dataset_names: List[str],
+    timeseries: Dict[str, List[str]],
+) -> Dict[str, Any]:
+    try:
+        schema_version = int(schema.get("schema_version", 0))
+    except Exception as e:
+        raise ValueError("schema_version must be an integer") from e
+    if schema_version != 1:
+        raise ValueError(f"Unsupported schema_version={schema_version}; expected 1")
+
+    files = _schema_mapping(schema.get("files"), "files")
+    file_groups: Dict[str, Dict[str, Any]] = {}
+
+    for raw_group_name, raw_group in files.items():
+        group_name = str(raw_group_name)
+        group = _schema_mapping(raw_group, f"files.{group_name}")
+        role = _schema_nonempty_string(group.get("role"), f"files.{group_name}.role")
+        if role not in {"static", "time_series"}:
+            raise ValueError(f"Unsupported files.{group_name}.role={role!r}")
+
+        if role == "static":
+            if "time" in group:
+                raise ValueError(f"files.{group_name}.time is only valid for time_series groups")
+            if group.get("path"):
+                path = _schema_nonempty_string(group.get("path"), f"files.{group_name}.path")
+                datasets = [path] if path in dataset_names else []
+            else:
+                pattern = _schema_nonempty_string(group.get("pattern"), f"files.{group_name}.path or pattern")
+                datasets = sorted(name for name in dataset_names if fnmatch.fnmatch(name, pattern))
+            result: Dict[str, Any] = {"role": role, "mode": "none", "datasets": datasets}
+        else:
+            mode = _schema_nonempty_string(group.get("mode"), f"files.{group_name}.mode")
+            if mode == "append":
+                path = _schema_nonempty_string(group.get("path"), f"files.{group_name}.path")
+                datasets = [path] if path in dataset_names else []
+                result = {"role": role, "mode": mode, "datasets": datasets}
+            elif mode == "file_per_timestep":
+                pattern = _schema_nonempty_string(group.get("pattern"), f"files.{group_name}.pattern")
+                datasets = _resolve_schema_time_series_datasets(group_name, pattern, dataset_names, timeseries)
+                result = {
+                    "role": role,
+                    "mode": mode,
+                    "datasets": datasets,
+                    "step_indices": _schema_extract_step_indices(group_name, group, datasets) if datasets else [],
+                }
+            else:
+                raise ValueError(f"Unsupported files.{group_name}.mode={mode!r}")
+
+        associations = group.get("associations", {}) or {}
+        if associations:
+            assoc_map = _schema_mapping(associations, f"files.{group_name}.associations")
+            result["associations"] = {str(role_name): str(target) for role_name, target in assoc_map.items()}
+        if "time" in group:
+            result["time"] = _schema_group_time(group.get("time"), f"files.{group_name}.time")
+        file_groups[group_name] = result
+
+    _apply_root_time(schema.get("time"), file_groups)
+    return {
+        "schema_version": schema_version,
+        "schema_name": str(schema.get("name", "") or ""),
+        "file_groups": file_groups,
+    }
+
+
+def _load_campaign_schema(
+    campaign_path: str,
+    dataset_names: List[str],
+    timeseries: Dict[str, List[str]],
+) -> Dict[str, Any]:
+    schema_text = _read_campaign_schema_text(campaign_path)
+    if not schema_text:
+        return {}
+
+    try:
+        import yaml  # type: ignore
+    except Exception as e:
+        raise RuntimeError("Campaign schema requires PyYAML. Install with: pip install pyyaml") from e
+
+    try:
+        schema = yaml.safe_load(schema_text)
+    except Exception as e:
+        raise ValueError(f"Invalid embedded schema.yaml: {e}") from e
+
+    if not isinstance(schema, dict):
+        raise ValueError("Embedded schema.yaml must contain a mapping")
+
+    return _interpret_campaign_schema(schema, dataset_names, timeseries)
+
+
+def _read_numeric_array(fr: FileReader, varpath: str, varinfo: Optional[Dict[str, Any]] = None) -> List[float]:
+    try:
+        steps = 0
+        if isinstance(varinfo, dict):
+            try:
+                steps = int(str(varinfo.get("AvailableStepsCount", "0") or "0"))
+            except Exception:
+                steps = 0
+        data = fr.read(varpath, step_selection=[0, steps]) if steps > 1 else fr.read(varpath)
+    except Exception as e:
+        print(f"[warn] could not read time variable {varpath!r}: {type(e).__name__}: {e}")
+        return []
+
+    try:
+        arr = np.asarray(data).reshape(-1)
+    except Exception:
+        return []
+
+    values: List[float] = []
+    for value in arr:
+        fvalue = _to_float(value)
+        if fvalue is None:
+            return []
+        values.append(fvalue)
+    return values
+
+
+def _build_schema_time_context(
+    schema_layout: Dict[str, Any],
+    fr: FileReader,
+    vars_dict: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    if not schema_layout:
+        return {}
+
+    context: Dict[str, Any] = {
+        "schema_name": str(schema_layout.get("schema_name", "") or ""),
+        "dataset_metadata": {},
+        "group_metadata": {},
+        "group_step_metadata": {},
+        "group_frame_metadata": {},
+        "file_groups": schema_layout.get("file_groups", {}) or {},
+    }
+
+    for group_name, group in context["file_groups"].items():
+        datasets = [str(name) for name in (group.get("datasets", []) or [])]
+        step_indices = list(group.get("step_indices", []) or [])
+        mode = str(group.get("mode", "") or "")
+        role = str(group.get("role", "") or "")
+        time_spec = group.get("time", {}) if isinstance(group.get("time", {}), dict) else {}
+        group_time_values: List[float] = []
+        time_source = ""
+
+        if "variable" in time_spec:
+            time_var = str(time_spec.get("variable", "") or "").strip()
+            if time_var:
+                time_source = f"variable:{time_var}"
+                if mode == "append" and len(datasets) == 1:
+                    time_path = f"{datasets[0]}/{time_var}"
+                    if not vars_dict or time_path in vars_dict:
+                        group_time_values = _read_numeric_array(fr, time_path, (vars_dict or {}).get(time_path))
+                elif mode == "file_per_timestep":
+                    time_path = f"{group_name}/{time_var}"
+                    if not vars_dict or time_path in vars_dict:
+                        group_time_values = _read_numeric_array(fr, time_path, (vars_dict or {}).get(time_path))
+        elif "index" in time_spec:
+            time_source = f"index:{str(time_spec.get('index', '') or '').strip()}"
+
+        group_metadata: Dict[str, Any] = {
+            "schema_name": context["schema_name"],
+            "schema_file_group": str(group_name),
+            "schema_role": role,
+            "schema_mode": mode,
+            "schema_num_timesteps": len(datasets),
+        }
+        if time_source:
+            group_metadata["time_source"] = time_source
+        if group_time_values:
+            group_metadata["time_values"] = list(group_time_values)
+        context["group_metadata"][str(group_name)] = group_metadata
+
+        for index, dataset in enumerate(datasets):
+            step_index = step_indices[index] if index < len(step_indices) else None
+            metadata: Dict[str, Any] = {
+                "schema_name": context["schema_name"],
+                "schema_file_group": str(group_name),
+                "schema_role": role,
+                "schema_mode": mode,
+                "schema_num_timesteps": len(datasets),
+                "schema_frame_index": index,
+                "time_index": index,
+            }
+            if isinstance(step_index, int):
+                metadata["schema_step_index"] = step_index
+            if isinstance(group.get("associations", None), dict):
+                metadata["schema_associations"] = dict(group.get("associations") or {})
+            if time_source:
+                metadata["time_source"] = time_source
+
+            if "variable" in time_spec:
+                time_var = str(time_spec.get("variable", "") or "").strip()
+                if time_var and mode == "file_per_timestep":
+                    if index < len(group_time_values):
+                        metadata["physical_time"] = group_time_values[index]
+                    else:
+                        time_path = f"{dataset}/{time_var}"
+                        values = []
+                        if not vars_dict or time_path in vars_dict:
+                            values = _read_numeric_array(fr, time_path, (vars_dict or {}).get(time_path))
+                        if values:
+                            metadata["physical_time"] = values[0]
+                elif group_time_values:
+                    metadata["time_values"] = list(group_time_values)
+            elif str(time_spec.get("index", "") or "").strip() == "step_index" and isinstance(step_index, int):
+                metadata["time_index"] = step_index
+
+            context["dataset_metadata"][dataset] = metadata
+            context["group_frame_metadata"].setdefault(str(group_name), {})[index] = metadata
+            if isinstance(step_index, int):
+                context["group_step_metadata"].setdefault(str(group_name), {})[step_index] = metadata
+
+    return context
+
+
+def _schema_metadata_for_file(
+    schema_context: Dict[str, Any],
+    file_name: str,
+    frame_index: Optional[int] = None,
+    include_time_values: bool = True,
+) -> Dict[str, Any]:
+    if not schema_context:
+        return {}
+
+    base = schema_context.get("dataset_metadata", {}).get(str(file_name or ""), None)
+    if base is None:
+        base = schema_context.get("group_metadata", {}).get(str(file_name or ""), None)
+    if not isinstance(base, dict):
+        return {}
+
+    metadata = dict(base)
+    if frame_index is not None and metadata.get("schema_mode") == "file_per_timestep":
+        try:
+            frame_value = int(frame_index)
+        except Exception:
+            frame_value = -1
+        group_name = str(metadata.get("schema_file_group", "") or "")
+        step_metadata = schema_context.get("group_step_metadata", {}).get(group_name, {}).get(frame_value)
+        if isinstance(step_metadata, dict):
+            metadata = dict(step_metadata)
+        else:
+            frame_metadata = schema_context.get("group_frame_metadata", {}).get(group_name, {}).get(frame_value)
+            if isinstance(frame_metadata, dict):
+                metadata = dict(frame_metadata)
+
+    time_values = metadata.pop("time_values", None)
+    if include_time_values and isinstance(time_values, list):
+        metadata["time_values"] = list(time_values)
+
+    if isinstance(time_values, list) and frame_index is not None:
+        try:
+            idx = int(frame_index)
+        except Exception:
+            idx = -1
+        if 0 <= idx < len(time_values):
+            metadata["physical_time"] = time_values[idx]
+            metadata["time_index"] = idx
+
+    return metadata
+
+
+def _visualization_record_matches_frame(
+    schema_context: Dict[str, Any],
+    source_dataset: str,
+    frame_index: Optional[int],
+    item_order: Optional[int],
+) -> bool:
+    if not schema_context:
+        return True
+
+    base = schema_context.get("dataset_metadata", {}).get(str(source_dataset or ""), None)
+    if not isinstance(base, dict) or base.get("schema_mode") != "file_per_timestep":
+        return True
+
+    step_index = base.get("schema_step_index", None)
+    if frame_index is not None and step_index is not None:
+        try:
+            return int(step_index) == int(frame_index)
+        except Exception:
+            return True
+
+    schema_frame_index = base.get("schema_frame_index", None)
+    if item_order is not None and schema_frame_index is not None:
+        try:
+            return int(schema_frame_index) == int(item_order)
+        except Exception:
+            return True
+
+    return True
 
 
 def _compile_path_template(path_template: str) -> Pattern[str]:
@@ -851,11 +1379,27 @@ def parse_campaign(
     if visualization_api_index:
         print("visualization API item associations:", len(visualization_api_index))
 
+    dataset_rows = _load_campaign_dataset_rows(campaign_path)
+    dataset_names = [row["name"] for row in dataset_rows if row.get("name")]
+    campaign_timeseries = _load_campaign_timeseries(campaign_path)
+    campaign_schema = _load_campaign_schema(campaign_path, dataset_names, campaign_timeseries)
+    if campaign_schema:
+        print(
+            "campaign schema:",
+            campaign_schema.get("schema_name", ""),
+            "groups:",
+            len(campaign_schema.get("file_groups", {}) or {}),
+        )
+
     with FileReader(campaign_path) as fr:
         vars_dict = fr.available_variables()
         attrs_dict = fr.available_attributes()
+        schema_context = _build_schema_time_context(campaign_schema, fr, vars_dict)
 
         for varname, varinfo in vars_dict.items():
+            if varname == "schema.yaml" or varname.startswith("schema.yaml/"):
+                continue
+
             type_key = varname + "/__dataset_type__"
             loc_key = varname + "/__dataset_location__"
 
@@ -1002,6 +1546,25 @@ def parse_campaign(
                     if candidate:
                         digits = re.findall(r"(\d+)", candidate)
                         frame_index = int(digits[-1]) if digits else None
+                frame_index_value = int(frame_index) if frame_index is not None else None
+                item_order_value = None
+                if visualization_api_entry is not None:
+                    try:
+                        item_order_value = int(visualization_api_entry.get("item_order", 0) or 0)
+                    except Exception:
+                        item_order_value = None
+                    filtered_records = [
+                        record
+                        for record in image_variable_records
+                        if _visualization_record_matches_frame(
+                            schema_context,
+                            str(record.get("source_dataset", "") or source_dataset),
+                            frame_index_value,
+                            item_order_value,
+                        )
+                    ]
+                    if filtered_records:
+                        image_variable_records = filtered_records
 
                 base_document = {
                     "campaign_path": campaign_path,
@@ -1014,7 +1577,7 @@ def parse_campaign(
                     "variable_location": var_location,
                     "metadata": metadata,
                     "movie_cache": 1,
-                    "frame_index": int(frame_index) if frame_index is not None else 0,
+                    "frame_index": frame_index_value if frame_index_value is not None else 0,
                     "image_storage": "aca",
                     "association_source": association_source,
                     "association_rule_id": association_rule_id,
@@ -1067,6 +1630,14 @@ def parse_campaign(
                             "visualization_source_dataset": record_source_dataset,
                         }
                     )
+                    document.update(
+                        _schema_metadata_for_file(
+                            schema_context,
+                            record_source_dataset or source_dataset,
+                            frame_index=frame_index_value,
+                            include_time_values=False,
+                        )
+                    )
                     collection.insert_one(document)
                 continue
             else:
@@ -1091,6 +1662,13 @@ def parse_campaign(
                     "min": fmin,
                     "max": fmax,
                 }
+                document.update(
+                    _schema_metadata_for_file(
+                        schema_context,
+                        source_dataset or file,
+                        include_time_values=True,
+                    )
+                )
 
             collection.insert_one(document)
 
@@ -1183,6 +1761,14 @@ def parse_campaign(
                     "visualization_roles": record["roles"],
                     "visualization_source_dataset": record_source_dataset,
                 }
+            )
+            document.update(
+                _schema_metadata_for_file(
+                    schema_context,
+                    record_source_dataset,
+                    frame_index=int(visualization_api_entry.get("item_order", 0) or 0),
+                    include_time_values=False,
+                )
             )
             collection.insert_one(document)
             scalar_field_visualization_count += 1
