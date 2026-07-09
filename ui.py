@@ -3198,6 +3198,58 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                   overflow: auto;
                   max-height: calc(100vh - 136px);
                 }
+                .catnip-plugin-options-list {
+                  display: flex;
+                  flex-direction: column;
+                  gap: 10px;
+                  min-width: 0;
+                }
+                .catnip-plugin-option-row {
+                  display: grid;
+                  grid-template-columns: minmax(120px, 180px) minmax(0, 1fr);
+                  align-items: center;
+                  gap: 8px 12px;
+                  min-width: 0;
+                }
+                .catnip-plugin-option-label {
+                  min-width: 0;
+                  font-weight: 600;
+                  line-height: 20px;
+                  overflow: hidden;
+                  text-overflow: ellipsis;
+                }
+                .catnip-plugin-option-control {
+                  min-width: 0;
+                  width: 100%;
+                }
+                .catnip-plugin-option-input {
+                  width: 100%;
+                  min-width: 0;
+                  height: 26px;
+                  border: 1px solid #9d9d9d;
+                  border-radius: 3px;
+                  background: #fff;
+                  color: #222;
+                  font-size: 12px;
+                  padding: 0 6px;
+                }
+                .catnip-plugin-option-checkbox {
+                  width: 14px;
+                  height: 14px;
+                  margin: 0;
+                }
+                .catnip-plugin-option-select {
+                  width: min(180px, 100%);
+                }
+                @media (max-width: 560px) {
+                  .catnip-plugin-option-row {
+                    grid-template-columns: minmax(0, 1fr);
+                    align-items: start;
+                  }
+                  .catnip-plugin-option-select {
+                    width: 100%;
+                  }
+                }
                 .catnip-plot-settings-axis-row.catnip-scalar-field-range-row {
                   display: flex;
                   align-items: center;
@@ -4474,10 +4526,70 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                             html.Option("Dash-dot", value="dash-dot")
 
                                 with vuetify.VCardActions():
+                                    with vuetify.Template(v_if="plotSettingsCanPluginOptions"):
+                                        vuetify.VBtn("Plugin options...", variant="text", click=ctrl.open_plot_settings_plugin_options)
                                     vuetify.VSpacer()
                                     vuetify.VBtn("Reset", variant="text", click=ctrl.reset_plot_settings)
                                     vuetify.VBtn("Cancel", variant="text", click=ctrl.cancel_plot_settings)
                                     vuetify.VBtn("Apply", variant="tonal", click=ctrl.apply_plot_settings)
+
+                        with html.Div(
+                            id="catnip-plugin-options-panel",
+                            v_show=("showPluginOptionsModal",),
+                            classes="catnip-floating-options-panel",
+                        ):
+                            with vuetify.VCard(classes="catnip-floating-options-card", elevation=6):
+                                with vuetify.VCardTitle(classes="catnip-floating-options-titlebar"):
+                                    with html.Div(style="display:flex; align-items:center; gap:8px; width:100%;"):
+                                        html.Div(
+                                            "{{ 'Plugin Options: ' + (pluginOptionsTitle || '') }}",
+                                            classes="catnip-floating-panel-drag-handle",
+                                        )
+                                        vuetify.VSpacer()
+                                        vuetify.VBtn("Close", variant="text", size="small", click=ctrl.cancel_plugin_options)
+
+                                with vuetify.VCardText(classes="catnip-floating-options-content"):
+                                    with vuetify.Template(v_if="pluginOptionsStatus"):
+                                        html.Div("{{ pluginOptionsStatus }}", class_="text-caption mb-2", style="color:#b00020;")
+                                    with vuetify.Template(v_if="!(pluginOptionsRows || []).length"):
+                                        html.Div("No plugin-specific options.", class_="text-caption")
+                                    with html.Div(classes="catnip-plugin-options-list"):
+                                        with vuetify.Template(v_for="row in pluginOptionsRows", key="row.key"):
+                                            with html.Div(classes="catnip-plugin-option-row"):
+                                                html.Span("{{ row.label }}", classes="catnip-plugin-option-label")
+                                                with html.Div(classes="catnip-plugin-option-control"):
+                                                    with vuetify.Template(v_if="row.type === 'bool'"):
+                                                        html.Input(
+                                                            classes="catnip-plugin-option-checkbox",
+                                                            raw_attrs=[
+                                                                'type="checkbox"',
+                                                                ':checked="!!row.value"',
+                                                            ],
+                                                            change=(ctrl.update_plugin_option_value, "[row.key, $event.target.checked]"),
+                                                        )
+                                                    with vuetify.Template(v_if="row.type === 'select'"):
+                                                        with html.Select(
+                                                            classes="catnip-scalar-plot-policy catnip-plugin-option-select",
+                                                            raw_attrs=[':value="row.value"'],
+                                                            change=(ctrl.update_plugin_option_value, "[row.key, $event.target.value]"),
+                                                        ):
+                                                            with vuetify.Template(v_for="choice in row.choices", key="choice"):
+                                                                html.Option("{{ choice }}", raw_attrs=[':value="choice"'])
+                                                    with vuetify.Template(v_if="row.type !== 'bool' && row.type !== 'select'"):
+                                                        html.Input(
+                                                            classes="catnip-plugin-option-input",
+                                                            raw_attrs=[
+                                                                ':type="row.type === \'number\' ? \'number\' : \'text\'"',
+                                                                ':value="row.value"',
+                                                            ],
+                                                            change=(ctrl.update_plugin_option_value, "[row.key, $event.target.value]"),
+                                                        )
+
+                                with vuetify.VCardActions():
+                                    vuetify.VSpacer()
+                                    vuetify.VBtn("Reset", variant="text", click=ctrl.reset_plugin_options)
+                                    vuetify.VBtn("Cancel", variant="text", click=ctrl.cancel_plugin_options)
+                                    vuetify.VBtn("Apply", variant="tonal", click=ctrl.apply_plugin_options)
 
                         with html.Div(
                             id="catnip-scalar-field-settings-panel",

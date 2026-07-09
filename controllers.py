@@ -10,6 +10,15 @@ from db import (
     SCALAR_FIELD_VARIABLE_TYPE,
     VISUALIZATION_PAYLOAD_VARIABLE_TYPES,
 )
+from plugin_runtime import (
+    build_plugin_meta,
+    is_plugin_visualization,
+    plugin_id_from_visualization,
+    plugin_options_schema,
+    render_plugin_tile,
+    supported_plugin_visualizations,
+    normalize_plugin_options,
+)
 from query_parser import and_filter, mongo_filter_matches, python_query_to_filters
 from state_init import clear_right_panes, fmt
 
@@ -282,12 +291,126 @@ def attach_controllers(
     def visualization_names_for_source_filter(variable_id: str, source_filter: Dict[str, Any]) -> List[str]:
         qf = active_query_filter()
         active_filter = and_filter(qf, source_filter) if qf and source_filter else (qf or source_filter or None)
-        return db.distinct_visualization_names_for_variable(variable_id, extra_filter=active_filter)
+        return visualization_names_with_plugins(variable_id, source_filter=source_filter, extra_filter=active_filter)
+
+    def merge_visualization_names(base_names: List[str], plugin_names: List[str]) -> List[str]:
+        out: List[str] = []
+        for raw_name in list(base_names or []) + list(plugin_names or []):
+            name = str(raw_name or "").strip()
+            if name and name not in out:
+                out.append(name)
+        return out
+
+    plugin_source_variables_cache: Dict[Tuple[str, str, str, str, str, str], List[Dict[str, Any]]] = {}
+
+    def plugin_source_variables_cache_key(source_fields: Dict[str, Any]) -> Tuple[str, str, str, str, str, str]:
+        fields = dict(source_fields or {})
+        return tuple(
+            str(fields.get(key, "") or "")
+            for key in ("source_dataset", "schema_file_group", "schema_mode", "producer", "casename", "file")
+        )
+
+    def plugin_source_variables(candidate: Dict[str, Any]) -> List[Dict[str, Any]]:
+        source_fields = dict((candidate or {}).get("source_fields", {}) or {})
+        cache_key = plugin_source_variables_cache_key(source_fields)
+        if cache_key in plugin_source_variables_cache:
+            return list(plugin_source_variables_cache[cache_key])
+
+        query: Dict[str, Any] = {"variable_type": "variable"}
+        source_dataset = str(source_fields.get("source_dataset", "") or "")
+        schema_file_group = str(source_fields.get("schema_file_group", "") or "")
+        schema_mode = str(source_fields.get("schema_mode", "") or "")
+        if schema_file_group and schema_mode == "file_per_timestep":
+            query["schema_file_group"] = schema_file_group
+            query["schema_mode"] = schema_mode
+        elif source_dataset:
+            query["source_dataset"] = source_dataset
+        else:
+            for key in ("producer", "casename", "file"):
+                value = str(source_fields.get(key, "") or "")
+                if value:
+                    query[key] = value
+
+        proj = {
+            "_id": 0,
+            "variable_id": 1,
+            "variable_name": 1,
+            "variable_path": 1,
+            "source_dataset": 1,
+            "metadata": 1,
+        }
+        variables: List[Dict[str, Any]] = []
+        try:
+            for doc in db.collection.find(query, proj):
+                variable_id = str(doc.get("variable_id", "") or "")
+                variable_name = str(doc.get("variable_name", "") or variable_id)
+                variable_path = str(doc.get("variable_path", "") or "")
+                if not variable_id and not variable_name and not variable_path:
+                    continue
+                metadata = doc.get("metadata", {}) or {}
+                if not isinstance(metadata, dict):
+                    metadata = {}
+                variables.append(
+                    {
+                        "variable_id": variable_id,
+                        "variable_name": variable_name,
+                        "variable_path": variable_path,
+                        "source_dataset": str(doc.get("source_dataset", "") or ""),
+                        "metadata": metadata,
+                    }
+                )
+        except Exception:
+            variables = []
+
+        plugin_source_variables_cache[cache_key] = list(variables)
+        return variables
+
+    def plugin_candidate(
+        variable_id: str,
+        source_filter: Optional[Dict[str, Any]] = None,
+        extra_filter: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        try:
+            candidate = db.scalar_plot_candidate(
+                variable_id,
+                source_filter=source_filter or None,
+                extra_filter=extra_filter,
+            )
+            if candidate:
+                candidate["source_variables"] = plugin_source_variables(candidate)
+            return candidate
+        except Exception:
+            return {}
+
+    def plugin_visualization_names_for_variable(
+        variable_id: str,
+        source_filter: Optional[Dict[str, Any]] = None,
+        extra_filter: Optional[Dict[str, Any]] = None,
+    ) -> List[str]:
+        candidate = plugin_candidate(variable_id, source_filter=source_filter, extra_filter=extra_filter)
+        if not candidate:
+            return []
+        return supported_plugin_visualizations(build_plugin_meta(candidate))
+
+    def visualization_names_with_plugins(
+        variable_id: str,
+        source_filter: Optional[Dict[str, Any]] = None,
+        extra_filter: Optional[Dict[str, Any]] = None,
+    ) -> List[str]:
+        base_names = db.distinct_visualization_names_for_variable(variable_id, extra_filter=extra_filter)
+        plugin_names = plugin_visualization_names_for_variable(
+            variable_id,
+            source_filter=source_filter,
+            extra_filter=extra_filter,
+        )
+        return merge_visualization_names(base_names, plugin_names)
 
     def source_row_for_visualization_pick(variable_id: str, visualization_name: str) -> Dict[str, str]:
         var_id = str(variable_id or "").strip()
         vis = str(visualization_name or "").strip()
         if not var_id or not vis:
+            return {}
+        if is_plugin_visualization(vis):
             return {}
 
         query = {
@@ -361,6 +484,10 @@ def attach_controllers(
             "time_mode": "timestep",
             "plot": {},
             "plot_settings": {},
+            "plugin_id": "",
+            "plugin_label": "",
+            "plugin_options": {},
+            "plugin_options_schema": [],
             "scalar_field_settings": {},
             "scalar_field_colorbar_min": "",
             "scalar_field_colorbar_max": "",
@@ -980,6 +1107,9 @@ def attach_controllers(
         state.plotSettingsCellIndex = idx
         state.plotSettingsTitle = str(cell.get("variable_name", "") or f"Cell {idx + 1}")
         state.plotSettingsStatus = ""
+        state.plotSettingsCanPluginOptions = is_plugin_visualization(
+            str(cell.get("selected_visualization", "") or cell.get("visualization_name", "") or "")
+        )
         state.plotSettingsXAuto = bool(settings.get("x_auto", True))
         state.plotSettingsXMin = settings_value_text(settings.get("x_min", None))
         state.plotSettingsXMax = settings_value_text(settings.get("x_max", None))
@@ -996,6 +1126,61 @@ def attach_controllers(
         state.plotSettingsCursorColor = clean_plot_color(settings.get("cursor_color", ""), "#111111")
         state.plotSettingsSeriesRows = plot_series_rows_for_tile(cell, settings)
         state.showPlotSettingsModal = True
+
+    def plugin_option_rows(schema: List[Dict[str, Any]], values: Dict[str, Any]) -> List[Dict[str, Any]]:
+        rows: List[Dict[str, Any]] = []
+        for item in schema or []:
+            spec = dict(item or {})
+            key = str(spec.get("key", "") or "").strip()
+            if not key:
+                continue
+            option_type = str(spec.get("type", "text") or "text")
+            value = values.get(key, spec.get("default", False if option_type == "bool" else ""))
+            if option_type == "bool":
+                value = bool(value)
+            else:
+                value = str(value or "")
+            rows.append(
+                {
+                    "key": key,
+                    "label": str(spec.get("label", "") or key),
+                    "type": option_type,
+                    "value": value,
+                    "choices": list(spec.get("choices", []) or []),
+                }
+            )
+        return rows
+
+    def plugin_options_from_rows(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+        options: Dict[str, Any] = {}
+        for raw_row in rows or []:
+            row = dict(raw_row or {})
+            key = str(row.get("key", "") or "").strip()
+            if not key:
+                continue
+            if str(row.get("type", "") or "") == "bool":
+                options[key] = bool(row.get("value", False))
+            else:
+                options[key] = str(row.get("value", "") or "").strip()
+        return options
+
+    def load_plugin_options_dialog(idx: int, reset: bool = False) -> None:
+        cells = normalize_grid_cells(state.gridCells)
+        if not is_valid_grid_index(idx):
+            return
+        cell = dict(cells[idx] or {})
+        selected_vis = str(cell.get("selected_visualization", "") or cell.get("visualization_name", "") or "")
+        if not is_plugin_visualization(selected_vis):
+            return
+
+        schema = list(cell.get("plugin_options_schema", []) or [])
+        options = {} if reset else dict(cell.get("plugin_options", {}) or {})
+        options = normalize_plugin_options(schema, options)
+        state.pluginOptionsCellIndex = idx
+        state.pluginOptionsTitle = str(cell.get("display_title", "") or cell.get("variable_name", "") or f"Cell {idx + 1}")
+        state.pluginOptionsStatus = ""
+        state.pluginOptionsRows = plugin_option_rows(schema, options)
+        state.showPluginOptionsModal = True
 
     def clear_context_menu_state() -> None:
         state.contextMenuVisible = False
@@ -1520,6 +1705,68 @@ Notes:
             "file": str(source_filter.get("file", "") or ""),
         }
 
+    def build_plugin_grid_cell(
+        variable_id: str,
+        plugin_visualization: str,
+        source_row: Optional[Dict[str, str]] = None,
+        existing_cell: Optional[Dict[str, Any]] = None,
+        plugin_options: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        var_id = str(variable_id or "").strip()
+        plugin_vis = str(plugin_visualization or "").strip()
+        plugin_id = plugin_id_from_visualization(plugin_vis)
+        if not var_id or not plugin_id:
+            raise ValueError("Missing plugin visualization")
+
+        if source_row:
+            source_filter = source_filter_from_row(source_row)
+        elif existing_cell:
+            source_filter = source_filter_from_cell(existing_cell)
+        else:
+            source_filter = active_source_filter_for_variable(var_id)
+
+        query_filter = active_query_filter()
+        candidate = plugin_candidate(
+            var_id,
+            source_filter=source_filter or None,
+            extra_filter=query_filter,
+        )
+        if not candidate:
+            raise ValueError("No plugin-compatible source for this variable")
+
+        meta = build_plugin_meta(candidate)
+        schema = plugin_options_schema(plugin_id, meta)
+        raw_options = (
+            plugin_options
+            if plugin_options is not None
+            else dict((existing_cell or {}).get("plugin_options", {}) or {})
+        )
+        options = normalize_plugin_options(schema, raw_options)
+        tile = render_plugin_tile(campaign_path, plugin_id, candidate, options=options)
+        label = variable_label(var_id)
+        source_fields = source_fields_for_assignment(var_id, source_row=source_row, candidate=candidate)
+        if existing_cell and not source_fields.get("_source_key"):
+            source_fields["_source_key"] = str(existing_cell.get("_source_key", "") or "")
+        tile.update({k: v for k, v in source_fields.items() if v})
+        source_key = str(source_fields.get("_source_key", "") or "")
+        tile["_source_keys"] = [source_key] if source_key else []
+        tile["_source_fields_list"] = [source_fields] if source_fields else []
+        if str(tile.get("media_type", "") or "") == "plot1d":
+            assign_plot_series_keys(tile, [source_key] if source_key else [])
+            tile["plot_settings"] = normalize_plot_settings(tile, existing_plot_settings(existing_cell, var_id))
+        active_filter = and_filter(query_filter, source_filter) if query_filter and source_filter else (query_filter or source_filter or None)
+        base_vis = db.distinct_visualization_names_for_variable(var_id, extra_filter=active_filter)
+        plugin_vis_names = supported_plugin_visualizations(meta)
+        tile["visualization_options"] = merge_visualization_names(base_vis, plugin_vis_names)
+        tile["visualization_name"] = plugin_vis
+        tile["selected_visualization"] = plugin_vis
+        tile["variable_id"] = var_id
+        tile["variable_name"] = label
+        tile["plugin_options_schema"] = schema
+        tile["plugin_options"] = options
+        tile.setdefault("src", "")
+        return tile
+
     def build_grid_cell_for_variable(
         variable_id: str,
         preferred_vis: str = "",
@@ -1552,16 +1799,31 @@ Notes:
         else:
             source_filter = active_source_filter_for_variable(var_id)
         active_filter = and_filter(qf, source_filter) if qf and source_filter else (qf or source_filter or None)
-        vis_names = db.distinct_visualization_names_for_variable(var_id, extra_filter=active_filter)
+        vis_names = visualization_names_with_plugins(
+            var_id,
+            source_filter=source_filter,
+            extra_filter=active_filter,
+        )
         if existing_cell and source_filter and not vis_names:
             fallback_row = first_query_source_row_for_variable(var_id, preferred_vis)
             if fallback_row:
                 source_fields = source_fields_from_row(fallback_row)
                 source_filter = source_filter_from_row(fallback_row)
                 active_filter = and_filter(qf, source_filter) if qf and source_filter else (qf or source_filter or None)
-                vis_names = db.distinct_visualization_names_for_variable(var_id, extra_filter=active_filter)
+                vis_names = visualization_names_with_plugins(
+                    var_id,
+                    source_filter=source_filter,
+                    extra_filter=active_filter,
+                )
 
         selected_vis = choose_visualization_default(vis_names, preferred_vis)
+        if selected_vis and is_plugin_visualization(selected_vis):
+            return build_plugin_grid_cell(
+                var_id,
+                selected_vis,
+                source_row=source_row,
+                existing_cell=existing_cell,
+            )
 
         cell.update(
             {
@@ -1941,7 +2203,7 @@ Notes:
         source_filter = source_filter_for_assignment(variable_id, source_row=source_row)
         qf = active_query_filter()
         active_filter = and_filter(qf, source_filter) if qf and source_filter else (qf or source_filter or None)
-        if db.distinct_visualization_names_for_variable(variable_id, extra_filter=active_filter):
+        if visualization_names_with_plugins(variable_id, source_filter=source_filter, extra_filter=active_filter):
             return False
 
         candidate = db.scalar_plot_candidate(
@@ -1999,6 +2261,21 @@ Notes:
             var_id = str(c.get("variable_id", "") or c.get("variable_name", "") or "").strip()
             if not var_id:
                 updated.append(empty_grid_cell_like(c))
+                continue
+
+            if is_plugin_visualization(str(c.get("visualization_name", "") or c.get("selected_visualization", "") or "")):
+                selected_vis = str(c.get("selected_visualization", "") or c.get("visualization_name", "") or "")
+                try:
+                    tile = build_plugin_grid_cell(
+                        var_id,
+                        selected_vis,
+                        existing_cell=c,
+                        plugin_options=dict(c.get("plugin_options", {}) or {}),
+                    )
+                    updated.append(preserve_grid_geometry(tile, c))
+                except Exception as e:
+                    err_cell = no_visualization_grid_cell(var_id, f"{type(e).__name__}: {e}")
+                    updated.append(preserve_grid_geometry(err_cell, c))
                 continue
 
             if str(c.get("visualization_name", "") or "") == GENERATED_SCALAR_PLOT_VIS:
@@ -3254,6 +3531,99 @@ Notes:
         state.showPlotSettingsModal = False
         state.plotSettingsCellIndex = -1
         state.plotSettingsStatus = ""
+        state.plotSettingsCanPluginOptions = False
+
+    @ctrl.add("open_plot_settings_plugin_options")
+    def open_plot_settings_plugin_options(**_):
+        try:
+            idx = int(state.plotSettingsCellIndex)
+        except Exception:
+            idx = -1
+        if not is_valid_grid_index(idx):
+            state.plotSettingsStatus = "No plot cell selected."
+            return
+
+        cells = normalize_grid_cells(state.gridCells)
+        cell = dict(cells[idx] or {})
+        selected_vis = str(cell.get("selected_visualization", "") or cell.get("visualization_name", "") or "")
+        if not is_plugin_visualization(selected_vis):
+            state.plotSettingsStatus = "Selected cell is not a plugin visualization."
+            return
+
+        state.showPlotSettingsModal = False
+        load_plugin_options_dialog(idx)
+
+    @ctrl.add("cancel_plugin_options")
+    def cancel_plugin_options(**_):
+        state.showPluginOptionsModal = False
+        state.pluginOptionsCellIndex = -1
+        state.pluginOptionsStatus = ""
+        state.pluginOptionsRows = []
+
+    @ctrl.add("reset_plugin_options")
+    def reset_plugin_options(**_):
+        try:
+            idx = int(state.pluginOptionsCellIndex)
+        except Exception:
+            idx = -1
+        if is_valid_grid_index(idx):
+            load_plugin_options_dialog(idx, reset=True)
+
+    @ctrl.add("update_plugin_option_value")
+    def update_plugin_option_value(key: str, value: Any, **_):
+        target_key = str(key or "").strip()
+        if not target_key:
+            return
+        rows = []
+        for raw_row in state.pluginOptionsRows or []:
+            row = dict(raw_row or {})
+            if str(row.get("key", "") or "") == target_key:
+                if str(row.get("type", "") or "") == "bool":
+                    row["value"] = bool(value)
+                else:
+                    row["value"] = str(value or "")
+            rows.append(row)
+        state.pluginOptionsRows = rows
+
+    @ctrl.add("apply_plugin_options")
+    def apply_plugin_options(**_):
+        try:
+            idx = int(state.pluginOptionsCellIndex)
+        except Exception:
+            idx = -1
+        if not is_valid_grid_index(idx):
+            state.pluginOptionsStatus = "No plugin cell selected."
+            return
+
+        cells = normalize_grid_cells(state.gridCells)
+        cell = dict(cells[idx] or {})
+        selected_vis = str(cell.get("selected_visualization", "") or cell.get("visualization_name", "") or "")
+        if not is_plugin_visualization(selected_vis):
+            state.pluginOptionsStatus = "Selected cell is not a plugin visualization."
+            return
+
+        var_id = str(cell.get("variable_id", "") or cell.get("variable_name", "") or "").strip()
+        if not var_id:
+            state.pluginOptionsStatus = "Selected cell has no variable."
+            return
+
+        options = plugin_options_from_rows(list(state.pluginOptionsRows or []))
+        try:
+            new_cell = build_plugin_grid_cell(
+                var_id,
+                selected_vis,
+                existing_cell=cell,
+                plugin_options=options,
+            )
+            assign_cell(cells, idx, new_cell)
+        except Exception as e:
+            state.pluginOptionsStatus = f"{type(e).__name__}: {e}"
+            return
+
+        state.gridCells = normalize_grid_cells(cells)
+        state.activeGridCell = idx
+        state.pluginOptionsStatus = ""
+        state.showPluginOptionsModal = False
 
     @ctrl.add("cancel_scalar_field_settings")
     def cancel_scalar_field_settings(**_):

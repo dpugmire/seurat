@@ -83,6 +83,7 @@ def init_state(state, db) -> None:
     state.plotSettingsCellIndex = -1
     state.plotSettingsTitle = ""
     state.plotSettingsStatus = ""
+    state.plotSettingsCanPluginOptions = False
     state.plotSettingsXAuto = True
     state.plotSettingsXMin = ""
     state.plotSettingsXMax = ""
@@ -111,6 +112,11 @@ def init_state(state, db) -> None:
         "#7030a0",
         "#000000",
     ]
+    state.showPluginOptionsModal = False
+    state.pluginOptionsCellIndex = -1
+    state.pluginOptionsTitle = ""
+    state.pluginOptionsStatus = ""
+    state.pluginOptionsRows = []
     state.showScalarFieldSettingsModal = False
     state.scalarFieldSettingsCellIndex = -1
     state.scalarFieldSettingsTitle = ""
@@ -161,6 +167,10 @@ def init_state(state, db) -> None:
             "time_mode": "timestep",
             "plot": {},
             "plot_settings": {},
+            "plugin_id": "",
+            "plugin_label": "",
+            "plugin_options": {},
+            "plugin_options_schema": [],
             "scalar_field_settings": {},
             "grid_row": 1,
             "grid_col": 1,
@@ -244,10 +254,16 @@ def clear_right_panes(state) -> None:
     state.plotSettingsCellIndex = -1
     state.plotSettingsTitle = ""
     state.plotSettingsStatus = ""
+    state.plotSettingsCanPluginOptions = False
     state.plotSettingsBackgroundColor = "#ffffff"
     state.plotSettingsGridColor = "#e8e8e8"
     state.plotSettingsCursorColor = "#111111"
     state.plotSettingsSeriesRows = []
+    state.showPluginOptionsModal = False
+    state.pluginOptionsCellIndex = -1
+    state.pluginOptionsTitle = ""
+    state.pluginOptionsStatus = ""
+    state.pluginOptionsRows = []
     state.showScalarFieldSettingsModal = False
     state.scalarFieldSettingsCellIndex = -1
     state.scalarFieldSettingsTitle = ""
