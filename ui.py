@@ -4723,6 +4723,14 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                         html.Div("Plot settings...", classes="menu-item", click=ctrl.context_menu_cell_plot_settings)
                     with vuetify.Template(v_if="contextMenuCellCanScalarFieldSettings"):
                         html.Div("Plot options...", classes="menu-item", click=ctrl.context_menu_cell_scalar_field_settings)
+                    with vuetify.Template(v_if="(contextMenuCellSourcePlugins || []).length"):
+                        html.Div("Run Plugin", classes="menu-section")
+                        with vuetify.Template(v_for="plugin in contextMenuCellSourcePlugins", key="plugin.plugin_id"):
+                            html.Div(
+                                "{{ plugin.label }}",
+                                classes="menu-item",
+                                click=(ctrl.context_menu_cell_run_source_plugin, "[plugin.plugin_id]"),
+                            )
                     with vuetify.Template(v_if="(contextMenuCellVisualizationOptions || []).length"):
                         html.Div("Visualization Type", classes="menu-section")
                         with vuetify.Template(v_for="vis in contextMenuCellVisualizationOptions", key="vis"):

@@ -74,6 +74,66 @@ physical_to_logical:
       replace: "\\1"
 ```
 
+## Plugins
+
+Seurat loads built-in plugins from `seurat_plugins/` and personal plugins from:
+
+```text
+~/.seurat/plugins
+```
+
+Add more personal plugin search directories with a colon-separated environment
+variable:
+
+```bash
+export SEURAT_PLUGIN_PATH=~/.seurat/plugins:/path/to/other/plugins
+```
+
+Each plugin is a Python file. Files whose names start with `_` are ignored.
+Broken personal plugins are skipped and reported on stderr so one bad local
+plugin does not prevent Seurat from starting.
+
+Minimal variable plugin:
+
+```python
+PLUGIN_ID = "my_profile_plugin"
+LABEL = "My profile plugin"
+PLUGIN_SCOPE = "variable"  # default
+
+def supports(meta):
+    return meta.get("ndims") == 1
+
+def options_schema(meta):
+    return []
+
+def render(ctx):
+    helpers = ctx["helpers"]
+    # Return a Seurat tile dict, for example media_type="plot1d".
+    ...
+```
+
+Minimal source/run plugin:
+
+```python
+PLUGIN_ID = "my_source_plugin"
+LABEL = "My source plugin"
+PLUGIN_SCOPE = "source"
+
+def supports_context(meta):
+    return "my_file.bp" in meta.get("source_dataset", "")
+
+def options_schema(meta):
+    return []
+
+def render(ctx):
+    # Return a Seurat tile dict, for example media_type="image".
+    ...
+```
+
+Variable plugins appear as `plugin:<id>` visualization choices for compatible
+variables. Source plugins appear in the tile right-click menu under `Run
+Plugin` for compatible source contexts.
+
 Current cache note: the app currently drops and re-ingests the sidecar each time
 it starts. The sidecar is metadata-only for image frames, but the next cache
 phase should skip ingest when the ACA file is unchanged.

@@ -14,8 +14,11 @@ from plugin_runtime import (
     build_plugin_meta,
     is_plugin_visualization,
     plugin_id_from_visualization,
+    plugin_scope,
     plugin_options_schema,
     render_plugin_tile,
+    render_source_plugin_tile,
+    supported_source_plugins,
     supported_plugin_visualizations,
     normalize_plugin_options,
 )
@@ -381,6 +384,85 @@ def attach_controllers(
             return candidate
         except Exception:
             return {}
+
+    def source_plugin_context_for_cell(cell: Dict[str, Any]) -> Dict[str, Any]:
+        source_fields_items = source_fields_list_from_cell(cell)
+        source_fields = dict(source_fields_items[0] if source_fields_items else {})
+        if not source_fields:
+            source_fields = {
+                "_source_key": str(cell.get("_source_key", "") or ""),
+                "source_dataset": str(cell.get("source_dataset", "") or ""),
+                "schema_file_group": str(cell.get("schema_file_group", "") or ""),
+                "schema_mode": str(cell.get("schema_mode", "") or ""),
+                "producer": str(cell.get("producer", "") or ""),
+                "casename": str(cell.get("casename", "") or ""),
+                "file": str(cell.get("file", "") or ""),
+            }
+
+        source_variables = plugin_source_variables({"source_fields": source_fields}) if source_fields else []
+        metadata = cell.get("metadata", {}) or {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+        return {
+            "variable_id": str(cell.get("variable_id", "") or ""),
+            "variable_name": str(cell.get("variable_name", "") or cell.get("variable_id", "") or ""),
+            "variable_path": str(cell.get("variable_path", "") or ""),
+            "source_dataset": str(source_fields.get("source_dataset", "") or cell.get("source_dataset", "") or ""),
+            "source_fields": source_fields,
+            "source_variables": source_variables,
+            "metadata": dict(metadata),
+            "ndims": None,
+            "steps_count": 1,
+            "shape": [],
+            "min": cell.get("min", None),
+            "max": cell.get("max", None),
+        }
+
+    def source_plugin_menu_entries_for_cell(cell: Dict[str, Any]) -> List[Dict[str, str]]:
+        try:
+            meta = source_plugin_context_for_cell(cell)
+            plugins = supported_source_plugins(meta)
+        except Exception:
+            plugins = []
+        return [
+            {
+                "plugin_id": info.plugin_id,
+                "label": info.label,
+                "visualization_name": f"plugin:{info.plugin_id}",
+            }
+            for info in plugins
+        ]
+
+    def build_source_plugin_grid_cell(
+        plugin_id: str,
+        existing_cell: Dict[str, Any],
+        plugin_options: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        plugin = str(plugin_id or "").strip()
+        if not plugin:
+            raise ValueError("Missing plugin")
+        existing = dict(existing_cell or {})
+        meta = source_plugin_context_for_cell(existing)
+        schema = plugin_options_schema(plugin, meta)
+        raw_options = (
+            plugin_options
+            if plugin_options is not None
+            else dict(existing.get("plugin_options", {}) or {})
+        )
+        options = normalize_plugin_options(schema, raw_options)
+        tile = render_source_plugin_tile(campaign_path, plugin, meta, options=options)
+
+        source_fields = dict(meta.get("source_fields", {}) or {})
+        tile.update({k: v for k, v in source_fields.items() if v})
+        source_key = str(source_fields.get("_source_key", "") or "")
+        tile["_source_keys"] = [source_key] if source_key else []
+        tile["_source_fields_list"] = [source_fields] if source_fields else []
+        tile["variable_id"] = str(existing.get("variable_id", "") or meta.get("variable_id", "") or "")
+        tile["variable_name"] = str(existing.get("variable_name", "") or meta.get("variable_name", "") or tile.get("display_title", "") or plugin)
+        tile["plugin_options_schema"] = schema
+        tile["plugin_options"] = options
+        tile["plugin_scope"] = "source"
+        return tile
 
     def plugin_visualization_names_for_variable(
         variable_id: str,
@@ -1194,6 +1276,7 @@ def attach_controllers(
         state.contextMenuCellCanScalarFieldSettings = False
         state.contextMenuCellVisualizationOptions = []
         state.contextMenuCellSelectedVisualization = ""
+        state.contextMenuCellSourcePlugins = []
 
     def show_help(title: str) -> None:
         state.helpModalTitle = title
@@ -3285,6 +3368,7 @@ Notes:
         state.contextMenuCellCanAddSource = False
         state.contextMenuCellVisualizationOptions = []
         state.contextMenuCellSelectedVisualization = ""
+        state.contextMenuCellSourcePlugins = []
         state.contextMenuX = px
         state.contextMenuY = py
         state.contextMenuVisible = True
@@ -3320,8 +3404,12 @@ Notes:
             vis_opts.append(selected_vis)
         targets = source_dialog_targets_for_anchor(idx, cells)
         can_add_source = bool(targets) and all(is_generated_plot1d_cell(cells[target]) for target in targets)
-        can_plot_settings = has_var and str(cell.get("media_type", "") or "") == "plot1d"
+        is_plugin_cell = is_plugin_visualization(selected_vis)
+        can_plot_settings = has_var and (
+            str(cell.get("media_type", "") or "") == "plot1d" or is_plugin_cell
+        )
         can_scalar_field_settings = has_var and is_scalar_field_cell(cell)
+        source_plugin_entries = source_plugin_menu_entries_for_cell(cell) if has_var else []
 
         state.contextMenuKind = "cell"
         state.contextMenuItem = label
@@ -3333,6 +3421,7 @@ Notes:
         state.contextMenuCellCanScalarFieldSettings = can_scalar_field_settings
         state.contextMenuCellVisualizationOptions = vis_opts
         state.contextMenuCellSelectedVisualization = selected_vis
+        state.contextMenuCellSourcePlugins = source_plugin_entries
         state.contextMenuX = px
         state.contextMenuY = py
         state.contextMenuVisible = True
@@ -3452,7 +3541,13 @@ Notes:
 
         cells = normalize_grid_cells(state.gridCells)
         cell = dict(cells[idx] or {})
+        selected_vis = str(cell.get("selected_visualization", "") or cell.get("visualization_name", "") or "")
         if str(cell.get("media_type", "") or "") != "plot1d":
+            if is_plugin_visualization(selected_vis):
+                state.activeGridCell = idx
+                load_plugin_options_dialog(idx)
+                hide_context_menu()
+                return
             hide_context_menu()
             return
 
@@ -3496,6 +3591,45 @@ Notes:
             return
 
         pick_grid_cell_visualization(idx, picked)
+        hide_context_menu()
+
+    @ctrl.add("context_menu_cell_run_source_plugin")
+    def context_menu_cell_run_source_plugin(plugin_id: str = "", **_):
+        try:
+            idx = int(state.contextMenuCellIndex)
+        except Exception:
+            idx = -1
+        if not is_valid_grid_index(idx):
+            hide_context_menu()
+            return
+
+        plugin = str(plugin_id or "").strip()
+        if not plugin:
+            hide_context_menu()
+            return
+
+        cells = normalize_grid_cells(state.gridCells)
+        existing = dict(cells[idx] or {})
+        try:
+            tile = build_source_plugin_grid_cell(plugin, existing)
+            assign_cell(cells, idx, preserve_grid_geometry(tile, existing))
+            state.gridCells = normalize_grid_cells(cells)
+            state.activeGridCell = idx
+        except Exception as e:
+            err_cell = no_visualization_grid_cell(
+                str(existing.get("variable_id", "") or existing.get("variable_name", "") or ""),
+                f"Plugin {plugin} failed: {type(e).__name__}: {e}",
+            )
+            err_cell.update(
+                {
+                    k: v
+                    for k, v in existing.items()
+                    if k in {"source_dataset", "schema_file_group", "schema_mode", "producer", "casename", "file", "_source_key"}
+                }
+            )
+            assign_cell(cells, idx, preserve_grid_geometry(err_cell, existing))
+            state.gridCells = normalize_grid_cells(cells)
+            state.activeGridCell = idx
         hide_context_menu()
 
     @ctrl.add("cancel_scalar_plot_generation")
@@ -3609,12 +3743,16 @@ Notes:
 
         options = plugin_options_from_rows(list(state.pluginOptionsRows or []))
         try:
-            new_cell = build_plugin_grid_cell(
-                var_id,
-                selected_vis,
-                existing_cell=cell,
-                plugin_options=options,
-            )
+            plugin_id = plugin_id_from_visualization(selected_vis)
+            if plugin_scope(plugin_id) == "source":
+                new_cell = build_source_plugin_grid_cell(plugin_id, cell, plugin_options=options)
+            else:
+                new_cell = build_plugin_grid_cell(
+                    var_id,
+                    selected_vis,
+                    existing_cell=cell,
+                    plugin_options=options,
+                )
             assign_cell(cells, idx, new_cell)
         except Exception as e:
             state.pluginOptionsStatus = f"{type(e).__name__}: {e}"

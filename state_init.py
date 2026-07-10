@@ -199,6 +199,7 @@ def init_state(state, db) -> None:
     state.contextMenuCellCanScalarFieldSettings = False
     state.contextMenuCellVisualizationOptions = []
     state.contextMenuCellSelectedVisualization = ""
+    state.contextMenuCellSourcePlugins = []
 
 
 def clear_details(state) -> None:
@@ -241,6 +242,7 @@ def clear_right_panes(state) -> None:
     state.contextMenuVisible = False
     state.contextMenuCellVisualizationOptions = []
     state.contextMenuCellSelectedVisualization = ""
+    state.contextMenuCellSourcePlugins = []
     state.contextMenuItemLabel = ""
     state.contextMenuCellHasVariable = False
     state.contextMenuCellCanAddSource = False
