@@ -1277,6 +1277,7 @@ def attach_controllers(
         state.contextMenuCellCanAddSource = False
         state.contextMenuCellCanPlotSettings = False
         state.contextMenuCellCanScalarFieldSettings = False
+        state.contextMenuCellCanResetView = False
         state.contextMenuCellVisualizationOptions = []
         state.contextMenuCellSelectedVisualization = ""
         state.contextMenuCellSourcePlugins = []
@@ -3568,6 +3569,11 @@ Notes:
             str(cell.get("media_type", "") or "") == "plot1d" or is_plugin_cell
         )
         can_scalar_field_settings = has_var and is_scalar_field_cell(cell)
+        media_type = str(cell.get("media_type", "") or "")
+        can_reset_view = has_var and (
+            media_type == "plot1d"
+            or (bool(str(cell.get("src", "") or "").strip()) and media_type != "plot1d")
+        )
         source_plugin_entries = source_plugin_menu_entries_for_cell(cell) if has_var else []
 
         state.contextMenuKind = "cell"
@@ -3578,6 +3584,7 @@ Notes:
         state.contextMenuCellCanAddSource = can_add_source
         state.contextMenuCellCanPlotSettings = can_plot_settings
         state.contextMenuCellCanScalarFieldSettings = can_scalar_field_settings
+        state.contextMenuCellCanResetView = can_reset_view
         state.contextMenuCellVisualizationOptions = vis_opts
         state.contextMenuCellSelectedVisualization = selected_vis
         state.contextMenuCellSourcePlugins = source_plugin_entries
@@ -3618,6 +3625,17 @@ Notes:
             idx = -1
         if is_valid_grid_index(idx):
             set_active_grid_cell(idx, 0)
+        hide_context_menu()
+
+    @ctrl.add("context_menu_cell_reset_view")
+    def context_menu_cell_reset_view(**_):
+        try:
+            idx = int(state.contextMenuCellIndex)
+        except Exception:
+            idx = -1
+        if is_valid_grid_index(idx):
+            state.resetViewRequest = {"cell_index": idx, "nonce": int(getattr(state, "resetViewRequestNonce", 0) or 0) + 1}
+            state.resetViewRequestNonce = state.resetViewRequest["nonce"]
         hide_context_menu()
 
     def context_menu_cell_index() -> int:

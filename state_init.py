@@ -209,9 +209,12 @@ def init_state(state, db) -> None:
     state.contextMenuCellCanAddSource = False
     state.contextMenuCellCanPlotSettings = False
     state.contextMenuCellCanScalarFieldSettings = False
+    state.contextMenuCellCanResetView = False
     state.contextMenuCellVisualizationOptions = []
     state.contextMenuCellSelectedVisualization = ""
     state.contextMenuCellSourcePlugins = []
+    state.resetViewRequest = {}
+    state.resetViewRequestNonce = 0
 
 
 def clear_details(state) -> None:
@@ -259,6 +262,7 @@ def clear_right_panes(state) -> None:
     state.contextMenuCellHasVariable = False
     state.contextMenuCellCanAddSource = False
     state.contextMenuCellCanScalarFieldSettings = False
+    state.contextMenuCellCanResetView = False
     state.showScalarPlotDialog = False
     state.pendingScalarPlotVariableId = ""
     state.pendingScalarPlotCellIndex = -1

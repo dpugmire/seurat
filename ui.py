@@ -1276,6 +1276,242 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
           }, true);
         }
 
+        if (!window.__catnipPanZoomInit) {
+          window.__catnipPanZoomInit = true;
+          let panZoomDrag = null;
+          let suppressPanZoomClick = false;
+          const PAN_ZOOM_MIN_SCALE = 0.25;
+          const PAN_ZOOM_MAX_SCALE = 8;
+
+          function panZoomContent(viewport) {
+            if (!viewport || !viewport.children) return null;
+            for (const child of viewport.children) {
+              if (child.classList && child.classList.contains("catnip-panzoom-content")) {
+                return child;
+              }
+            }
+            return viewport.querySelector ? viewport.querySelector(".catnip-panzoom-content") : null;
+          }
+
+          function panZoomState(viewport) {
+            if (!viewport.__catnipPanZoomState) {
+              viewport.__catnipPanZoomState = { scale: 1, tx: 0, ty: 0 };
+            }
+            return viewport.__catnipPanZoomState;
+          }
+
+          function clampPanZoomScale(scale) {
+            const value = Number(scale);
+            if (!Number.isFinite(value)) return 1;
+            return Math.max(PAN_ZOOM_MIN_SCALE, Math.min(PAN_ZOOM_MAX_SCALE, value));
+          }
+
+          function applyPanZoom(viewport) {
+            const content = panZoomContent(viewport);
+            if (!content) return;
+            const state = panZoomState(viewport);
+            content.style.transform = "translate(" + state.tx.toFixed(2) + "px, " + state.ty.toFixed(2) + "px) scale(" + state.scale.toFixed(6) + ")";
+            viewport.classList.toggle(
+              "is-panzoomed",
+              Math.abs(state.scale - 1) > 1e-6 || Math.abs(state.tx) > 0.5 || Math.abs(state.ty) > 0.5
+            );
+          }
+
+          function resetPanZoom(viewport) {
+            const state = panZoomState(viewport);
+            state.scale = 1;
+            state.tx = 0;
+            state.ty = 0;
+            applyPanZoom(viewport);
+          }
+
+          function resetPanZoomForCellIndex(cellIndex) {
+            const idx = Number(cellIndex);
+            if (!Number.isInteger(idx) || idx < 0) return;
+            const cell = document.querySelector('.catnip-dropcell[data-cell-index="' + String(idx) + '"]');
+            if (!cell) return;
+            const viewports = cell.querySelectorAll ? cell.querySelectorAll(".catnip-panzoom-viewport") : [];
+            for (const viewport of viewports) {
+              resetPanZoom(viewport);
+            }
+            if (window.catnipResetPlotViewForCellIndex) {
+              window.catnipResetPlotViewForCellIndex(idx);
+            }
+          }
+
+          function setPanZoomScaleAt(viewport, base, clientX, clientY, scale) {
+            const rect = viewport.getBoundingClientRect();
+            const state = panZoomState(viewport);
+            const nextScale = clampPanZoomScale(scale);
+            const localX = (Number(clientX) || 0) - rect.left;
+            const localY = (Number(clientY) || 0) - rect.top;
+            const contentX = (localX - base.tx) / base.scale;
+            const contentY = (localY - base.ty) / base.scale;
+            state.scale = nextScale;
+            state.tx = localX - contentX * nextScale;
+            state.ty = localY - contentY * nextScale;
+            applyPanZoom(viewport);
+          }
+
+          function zoomPanZoomAt(viewport, clientX, clientY, factor) {
+            const base = Object.assign({}, panZoomState(viewport));
+            setPanZoomScaleAt(viewport, base, clientX, clientY, base.scale * factor);
+          }
+
+          function panZoomViewportFromEvent(e) {
+            const target = e && e.target;
+            const viewport = target && target.closest ? target.closest(".catnip-panzoom-viewport") : null;
+            if (!viewport || target.closest(".catnip-grid-track-resize-handle")) return null;
+            return viewport;
+          }
+
+          document.addEventListener("pointerdown", function(e) {
+            const viewport = panZoomViewportFromEvent(e);
+            if (!viewport) return;
+            const isShiftPan = e.button === 0 && e.shiftKey;
+            const isMiddleZoom = e.button === 1;
+            if (!isShiftPan && !isMiddleZoom) return;
+
+            const state = Object.assign({}, panZoomState(viewport));
+            panZoomDrag = {
+              viewport,
+              mode: isMiddleZoom ? "zoom" : "pan",
+              startX: Number(e.clientX) || 0,
+              startY: Number(e.clientY) || 0,
+              base: state,
+              pointerId: e.pointerId,
+              moved: false,
+            };
+            viewport.classList.add(isMiddleZoom ? "is-zooming" : "is-panning");
+            document.body.classList.add(isMiddleZoom ? "catnip-panzoom-zooming" : "catnip-panzoom-panning");
+            try {
+              viewport.setPointerCapture(e.pointerId);
+            } catch (_) {
+              // Pointer capture is best-effort; document listeners keep the drag alive.
+            }
+            e.preventDefault();
+            e.stopPropagation();
+          }, true);
+
+          document.addEventListener("pointermove", function(e) {
+            if (!panZoomDrag) return;
+            const dx = (Number(e.clientX) || 0) - panZoomDrag.startX;
+            const dy = (Number(e.clientY) || 0) - panZoomDrag.startY;
+            if (Math.abs(dx) > 2 || Math.abs(dy) > 2) {
+              panZoomDrag.moved = true;
+            }
+            const state = panZoomState(panZoomDrag.viewport);
+            if (panZoomDrag.mode === "pan") {
+              state.scale = panZoomDrag.base.scale;
+              state.tx = panZoomDrag.base.tx + dx;
+              state.ty = panZoomDrag.base.ty + dy;
+              applyPanZoom(panZoomDrag.viewport);
+            } else {
+              const factor = Math.exp(-dy * 0.01);
+              setPanZoomScaleAt(
+                panZoomDrag.viewport,
+                panZoomDrag.base,
+                panZoomDrag.startX,
+                panZoomDrag.startY,
+                panZoomDrag.base.scale * factor
+              );
+            }
+            e.preventDefault();
+            e.stopPropagation();
+          }, true);
+
+          function finishPanZoomDrag(e) {
+            if (!panZoomDrag) return;
+            const current = panZoomDrag;
+            current.viewport.classList.remove("is-panning");
+            current.viewport.classList.remove("is-zooming");
+            document.body.classList.remove("catnip-panzoom-panning");
+            document.body.classList.remove("catnip-panzoom-zooming");
+            try {
+              if (current.pointerId !== undefined) {
+                current.viewport.releasePointerCapture(current.pointerId);
+              }
+            } catch (_) {
+              // Ignore release failures for pointers that were not captured.
+            }
+            suppressPanZoomClick = !!current.moved;
+            panZoomDrag = null;
+            if (e) {
+              e.preventDefault();
+              e.stopPropagation();
+            }
+          }
+
+          document.addEventListener("pointerup", finishPanZoomDrag, true);
+          document.addEventListener("pointercancel", finishPanZoomDrag, true);
+          document.addEventListener("wheel", function(e) {
+            const viewport = panZoomViewportFromEvent(e);
+            if (!viewport) return;
+            const factor = Math.exp(-(Number(e.deltaY) || 0) * 0.0015);
+            zoomPanZoomAt(viewport, e.clientX, e.clientY, factor);
+            e.preventDefault();
+            e.stopPropagation();
+          }, { capture: true, passive: false });
+          document.addEventListener("dblclick", function(e) {
+            const viewport = panZoomViewportFromEvent(e);
+            if (!viewport) return;
+            resetPanZoom(viewport);
+            e.preventDefault();
+            e.stopPropagation();
+          }, true);
+          document.addEventListener("dragstart", function(e) {
+            const viewport = panZoomViewportFromEvent(e);
+            if (viewport && (panZoomDrag || e.shiftKey)) {
+              e.preventDefault();
+              e.stopPropagation();
+            }
+          }, true);
+          document.addEventListener("auxclick", function(e) {
+            const viewport = panZoomViewportFromEvent(e);
+            if (viewport && e.button === 1) {
+              e.preventDefault();
+              e.stopPropagation();
+            }
+          }, true);
+          document.addEventListener("click", function(e) {
+            if (!suppressPanZoomClick) return;
+            suppressPanZoomClick = false;
+            const viewport = panZoomViewportFromEvent(e);
+            if (!viewport) return;
+            e.preventDefault();
+            e.stopPropagation();
+          }, true);
+          window.catnipResetPanZoomForCellIndex = resetPanZoomForCellIndex;
+
+          let lastResetViewRequest = "";
+          function handleResetViewRequest(raw) {
+            const text = String(raw || "");
+            if (!text || text === lastResetViewRequest) return;
+            lastResetViewRequest = text;
+            try {
+              const request = JSON.parse(text);
+              resetPanZoomForCellIndex(request && request.cell_index);
+            } catch (_err) {
+              // Ignore malformed transient reset requests.
+            }
+          }
+          function scanResetViewRequest() {
+            const el = document.getElementById("catnip-reset-view-request");
+            if (!el) return;
+            handleResetViewRequest(el.getAttribute("data-reset-view-request") || "");
+          }
+          const resetViewObserver = new MutationObserver(function() {
+            scanResetViewRequest();
+          });
+          resetViewObserver.observe(document.body, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: ["data-reset-view-request"],
+          });
+          scanResetViewRequest();
+        }
+
         if (window.__catnipDnDInit) return;
         window.__catnipDnDInit = true;
         const gridVcrState = {
@@ -1348,6 +1584,10 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
           const raw = el.getAttribute("data-plot") || "{}";
           if (el.__catnipPlotRaw === raw && el.__catnipPlotData) {
             return el.__catnipPlotData;
+          }
+          if (el.__catnipPlotRaw !== undefined && el.__catnipPlotRaw !== raw) {
+            el.__catnipPlotViewState = null;
+            el.__catnipPlotRenderKey = "";
           }
           try {
             el.__catnipPlotData = JSON.parse(raw);
@@ -1524,13 +1764,200 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
           };
         }
 
+        function plotViewRenderKey(el) {
+          const state = el && el.__catnipPlotViewState;
+          if (!state) return "view:default";
+          const values = [
+            state.xScale,
+            state.yScale,
+            state.xMin,
+            state.xMax,
+            state.yMin,
+            state.yMax,
+          ];
+          return "view:" + values.map(function(value) {
+            const n = Number(value);
+            return Number.isFinite(n) ? n.toPrecision(16) : String(value || "");
+          }).join(",");
+        }
+
+        function plotAxisFromRange(axis, minValue, maxValue) {
+          if (!axis) return null;
+          let min = Number(minValue);
+          let max = Number(maxValue);
+          if (!Number.isFinite(min) || !Number.isFinite(max) || min >= max) return null;
+
+          if (axis.scale === "log") {
+            if (min <= 0 || max <= 0) return null;
+            let tMin = Math.log10(min);
+            let tMax = Math.log10(max);
+            if (!Number.isFinite(tMin) || !Number.isFinite(tMax) || tMin >= tMax) return null;
+            if (Math.abs(tMax - tMin) <= 1e-12) {
+              const center = (tMin + tMax) * 0.5;
+              tMin = center - 0.5;
+              tMax = center + 0.5;
+              min = Math.pow(10, tMin);
+              max = Math.pow(10, tMax);
+            }
+            return {
+              min,
+              max,
+              tMin,
+              tMax,
+              scale: "log",
+              transform: axis.transform,
+              inverse: axis.inverse,
+            };
+          }
+
+          if (Math.abs(max - min) <= 1e-12) {
+            const center = (min + max) * 0.5;
+            min = center - 0.5;
+            max = center + 0.5;
+          }
+          return {
+            min,
+            max,
+            tMin: min,
+            tMax: max,
+            scale: "linear",
+            transform: axis.transform,
+            inverse: axis.inverse,
+          };
+        }
+
+        function plotAxisFromTransformRange(axis, tMin, tMax) {
+          if (!axis) return null;
+          let nextTMin = Number(tMin);
+          let nextTMax = Number(tMax);
+          if (!Number.isFinite(nextTMin) || !Number.isFinite(nextTMax) || nextTMin >= nextTMax) return null;
+          const span = nextTMax - nextTMin;
+          if (span <= 1e-12) {
+            const center = (nextTMin + nextTMax) * 0.5;
+            nextTMin = center - 0.5;
+            nextTMax = center + 0.5;
+          }
+          return plotAxisFromRange(axis, axis.inverse(nextTMin), axis.inverse(nextTMax));
+        }
+
+        function plotViewStateForAxes(el, xAxis, yAxis) {
+          const state = el && el.__catnipPlotViewState;
+          if (!state) return null;
+          if (state.xScale !== xAxis.scale || state.yScale !== yAxis.scale) {
+            el.__catnipPlotViewState = null;
+            return null;
+          }
+          const viewXAxis = plotAxisFromRange(xAxis, state.xMin, state.xMax);
+          const viewYAxis = plotAxisFromRange(yAxis, state.yMin, state.yMax);
+          if (!viewXAxis || !viewYAxis) {
+            el.__catnipPlotViewState = null;
+            return null;
+          }
+          return { xAxis: viewXAxis, yAxis: viewYAxis };
+        }
+
+        function setPlotViewStateFromAxes(el, xAxis, yAxis) {
+          if (!el || !xAxis || !yAxis) return;
+          el.__catnipPlotViewState = {
+            xScale: xAxis.scale,
+            yScale: yAxis.scale,
+            xMin: xAxis.min,
+            xMax: xAxis.max,
+            yMin: yAxis.min,
+            yMax: yAxis.max,
+          };
+          el.__catnipPlotRenderKey = "";
+        }
+
+        function rerenderPlotView(el) {
+          if (!el) return;
+          renderPlot1d(el);
+          if (typeof updatePlotCursors === "function") {
+            updatePlotCursors(window.__catnipGridSyncTime || 0, getGridVideos());
+          }
+        }
+
+        function resetPlotView(el) {
+          if (!el) return;
+          el.__catnipPlotViewState = null;
+          el.__catnipPlotRenderKey = "";
+          renderPlot1d(el);
+          if (typeof updatePlotCursors === "function") {
+            updatePlotCursors(window.__catnipGridSyncTime || 0, getGridVideos());
+          }
+        }
+
+        function resetPlotViewForCellIndex(cellIndex) {
+          const idx = Number(cellIndex);
+          if (!Number.isInteger(idx) || idx < 0) return;
+          const cell = document.querySelector('.catnip-dropcell[data-cell-index="' + String(idx) + '"]');
+          if (!cell) return;
+          const plots = cell.querySelectorAll ? cell.querySelectorAll(".catnip-plot1d") : [];
+          for (const el of plots) {
+            resetPlotView(el);
+          }
+        }
+        window.catnipResetPlotViewForCellIndex = resetPlotViewForCellIndex;
+
+        function plotLocalPoint(el, event) {
+          const rect = el.getBoundingClientRect ? el.getBoundingClientRect() : { left: 0, top: 0 };
+          return {
+            x: (Number(event && event.clientX) || 0) - rect.left,
+            y: (Number(event && event.clientY) || 0) - rect.top,
+          };
+        }
+
+        function clampPlotLocalPoint(meta, point) {
+          const left = meta.pad.left;
+          const right = meta.pad.left + meta.plotW;
+          const top = meta.pad.top;
+          const bottom = meta.pad.top + meta.plotH;
+          return {
+            x: Math.max(left, Math.min(right, Number(point && point.x) || left)),
+            y: Math.max(top, Math.min(bottom, Number(point && point.y) || top)),
+          };
+        }
+
+        function plotAxisTForLocalPoint(axis, meta, point, axisName) {
+          const safePoint = clampPlotLocalPoint(meta, point);
+          const span = axis.tMax - axis.tMin;
+          if (axisName === "y") {
+            const fracY = (safePoint.y - meta.pad.top) / Math.max(1, meta.plotH);
+            return axis.tMax - fracY * span;
+          }
+          const fracX = (safePoint.x - meta.pad.left) / Math.max(1, meta.plotW);
+          return axis.tMin + fracX * span;
+        }
+
+        function zoomPlotAxisAround(axis, centerT, rangeFactor) {
+          const factor = Math.max(0.02, Math.min(50, Number(rangeFactor) || 1));
+          const nextTMin = centerT - (centerT - axis.tMin) * factor;
+          const nextTMax = centerT + (axis.tMax - centerT) * factor;
+          return plotAxisFromTransformRange(axis, nextTMin, nextTMax);
+        }
+
+        function zoomPlotViewAt(el, event, rangeFactor) {
+          if (!el) return;
+          renderPlot1d(el);
+          const meta = el.__catnipPlotMeta;
+          if (!meta || !meta.xAxis || !meta.yAxis) return;
+          const point = plotLocalPoint(el, event);
+          const centerX = plotAxisTForLocalPoint(meta.xAxis, meta, point, "x");
+          const centerY = plotAxisTForLocalPoint(meta.yAxis, meta, point, "y");
+          const nextXAxis = zoomPlotAxisAround(meta.xAxis, centerX, rangeFactor);
+          const nextYAxis = zoomPlotAxisAround(meta.yAxis, centerY, rangeFactor);
+          if (!nextXAxis || !nextYAxis) return;
+          setPlotViewStateFromAxes(el, nextXAxis, nextYAxis);
+          rerenderPlotView(el);
+        }
+
         function renderPlot1d(el) {
           const plot = parsePlotData(el);
           const settings = normalizePlotSettings(parsePlotSettings(el));
           const rect = el.getBoundingClientRect ? el.getBoundingClientRect() : { width: 0, height: 0 };
           const width = Math.max(240, Math.round(rect.width || el.clientWidth || 300));
           const height = Math.max(180, Math.round(rect.height || el.clientHeight || 300));
-          const renderKey = String(el.__catnipPlotRaw || "") + "|" + String(el.__catnipPlotSettingsRaw || "") + "|" + width + "x" + height;
+          const renderKey = String(el.__catnipPlotRaw || "") + "|" + String(el.__catnipPlotSettingsRaw || "") + "|" + width + "x" + height + "|" + plotViewRenderKey(el);
           if (el.__catnipPlotRenderKey === renderKey && el.querySelector("svg")) {
             return;
           }
@@ -1562,8 +1989,15 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
           const pad = { left: 52, right: 14, top: 12, bottom: 40 };
           const plotW = Math.max(1, width - pad.left - pad.right);
           const plotH = Math.max(1, height - pad.top - pad.bottom);
-          const xAxis = resolvePlotAxis(plot, series, settings, "x");
-          const yAxis = resolvePlotAxis(plot, series, settings, "y");
+          let xAxis = resolvePlotAxis(plot, series, settings, "x");
+          let yAxis = resolvePlotAxis(plot, series, settings, "y");
+          const defaultXAxis = xAxis;
+          const defaultYAxis = yAxis;
+          const viewAxes = plotViewStateForAxes(el, xAxis, yAxis);
+          if (viewAxes) {
+            xAxis = viewAxes.xAxis;
+            yAxis = viewAxes.yAxis;
+          }
           const dataXMin = finiteNumber(plot.data_x_min, xAxis.min);
           const dataXMax = finiteNumber(plot.data_x_max, xAxis.max);
 
@@ -1740,9 +2174,16 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
           el.__catnipPlotMeta = {
             xMin: xAxis.min,
             xMax: xAxis.max,
+            yMin: yAxis.min,
+            yMax: yAxis.max,
             dataXMin,
             dataXMax,
+            xAxis,
+            yAxis,
+            defaultXAxis,
+            defaultYAxis,
             sx,
+            sy,
             pad,
             plotW,
             plotH,
@@ -1896,8 +2337,8 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
           if (!el || !event) return;
           renderPlot1d(el);
           const meta = el.__catnipPlotMeta;
-          const shiftActive = !!(event.shiftKey || window.__catnipPlotShiftDown);
-          if (!meta || !meta.hoverGroup || !meta.hoverTip || !shiftActive) {
+          const ctrlActive = !!(event.ctrlKey || window.__catnipPlotCtrlDown) && !event.shiftKey;
+          if (!meta || !meta.hoverGroup || !meta.hoverTip || !ctrlActive) {
             hidePlotHover(el);
             return;
           }
@@ -1958,37 +2399,188 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
         function setupPlotHoverHandlers() {
           if (window.__catnipPlotHoverHandlersInit) return;
           window.__catnipPlotHoverHandlersInit = true;
-          window.__catnipPlotShiftDown = false;
+          window.__catnipPlotCtrlDown = false;
+          let plotViewDrag = null;
+          let suppressPlotViewClick = false;
+
+          function plotElementFromEvent(e) {
+            const target = e && e.target;
+            return target && target.closest ? target.closest(".catnip-plot1d") : null;
+          }
+
+          function beginPlotViewDrag(e, el, mode) {
+            renderPlot1d(el);
+            const meta = el.__catnipPlotMeta;
+            if (!meta || !meta.xAxis || !meta.yAxis) return;
+            const point = plotLocalPoint(el, e);
+            plotViewDrag = {
+              el,
+              mode,
+              startX: Number(e.clientX) || 0,
+              startY: Number(e.clientY) || 0,
+              pointerId: e.pointerId,
+              moved: false,
+              xAxis: meta.xAxis,
+              yAxis: meta.yAxis,
+              plotW: Math.max(1, meta.plotW),
+              plotH: Math.max(1, meta.plotH),
+              centerX: plotAxisTForLocalPoint(meta.xAxis, meta, point, "x"),
+              centerY: plotAxisTForLocalPoint(meta.yAxis, meta, point, "y"),
+            };
+            el.classList.add(mode === "zoom" ? "is-zooming" : "is-panning");
+            document.body.classList.add(mode === "zoom" ? "catnip-plot-zooming" : "catnip-plot-panning");
+            hidePlotHover(el);
+            try {
+              el.setPointerCapture(e.pointerId);
+            } catch (_) {
+              // Pointer capture is best-effort; document listeners keep the drag alive.
+            }
+            e.preventDefault();
+            e.stopPropagation();
+          }
+
+          function updatePlotViewDrag(e) {
+            if (!plotViewDrag) return;
+            const drag = plotViewDrag;
+            const dx = (Number(e.clientX) || 0) - drag.startX;
+            const dy = (Number(e.clientY) || 0) - drag.startY;
+            if (Math.abs(dx) > 2 || Math.abs(dy) > 2) {
+              drag.moved = true;
+            }
+
+            let nextXAxis = null;
+            let nextYAxis = null;
+            if (drag.mode === "pan") {
+              const xSpan = drag.xAxis.tMax - drag.xAxis.tMin;
+              const ySpan = drag.yAxis.tMax - drag.yAxis.tMin;
+              const nextXMin = drag.xAxis.tMin - (dx / drag.plotW) * xSpan;
+              const nextXMax = drag.xAxis.tMax - (dx / drag.plotW) * xSpan;
+              const nextYMin = drag.yAxis.tMin + (dy / drag.plotH) * ySpan;
+              const nextYMax = drag.yAxis.tMax + (dy / drag.plotH) * ySpan;
+              nextXAxis = plotAxisFromTransformRange(drag.xAxis, nextXMin, nextXMax);
+              nextYAxis = plotAxisFromTransformRange(drag.yAxis, nextYMin, nextYMax);
+            } else {
+              const rangeFactor = Math.exp(dy * 0.01);
+              nextXAxis = zoomPlotAxisAround(drag.xAxis, drag.centerX, rangeFactor);
+              nextYAxis = zoomPlotAxisAround(drag.yAxis, drag.centerY, rangeFactor);
+            }
+
+            if (nextXAxis && nextYAxis) {
+              setPlotViewStateFromAxes(drag.el, nextXAxis, nextYAxis);
+              rerenderPlotView(drag.el);
+            }
+            e.preventDefault();
+            e.stopPropagation();
+          }
+
+          function finishPlotViewDrag(e) {
+            if (!plotViewDrag) return;
+            const drag = plotViewDrag;
+            drag.el.classList.remove("is-panning");
+            drag.el.classList.remove("is-zooming");
+            document.body.classList.remove("catnip-plot-panning");
+            document.body.classList.remove("catnip-plot-zooming");
+            try {
+              if (drag.pointerId !== undefined) {
+                drag.el.releasePointerCapture(drag.pointerId);
+              }
+            } catch (_) {
+              // Ignore release failures for pointers that were not captured.
+            }
+            suppressPlotViewClick = !!drag.moved;
+            plotViewDrag = null;
+            if (e) {
+              e.preventDefault();
+              e.stopPropagation();
+            }
+          }
 
           document.addEventListener("keydown", function(e) {
-            if (e && e.key === "Shift") {
-              window.__catnipPlotShiftDown = true;
+            if (e && e.key === "Control") {
+              window.__catnipPlotCtrlDown = true;
             }
           });
           document.addEventListener("keyup", function(e) {
-            if (e && e.key === "Shift") {
-              window.__catnipPlotShiftDown = false;
+            if (e && e.key === "Control") {
+              window.__catnipPlotCtrlDown = false;
               hideAllPlotHovers();
             }
           });
           window.addEventListener("blur", function() {
-            window.__catnipPlotShiftDown = false;
+            window.__catnipPlotCtrlDown = false;
             hideAllPlotHovers();
           });
           document.addEventListener("pointermove", function(e) {
-            const target = e && e.target;
-            const el = target && target.closest ? target.closest(".catnip-plot1d") : null;
+            if (plotViewDrag) {
+              updatePlotViewDrag(e);
+              return;
+            }
+            const el = plotElementFromEvent(e);
             if (!el) return;
-            const shiftActive = !!(e.shiftKey || window.__catnipPlotShiftDown);
-            if (!shiftActive) {
+            const ctrlActive = !!(e.ctrlKey || window.__catnipPlotCtrlDown) && !e.shiftKey;
+            if (!ctrlActive) {
               hidePlotHover(el);
               return;
             }
             updatePlotHover(el, e);
           });
+          document.addEventListener("pointerdown", function(e) {
+            const el = plotElementFromEvent(e);
+            if (!el) return;
+            const ctrlActive = !!(e.ctrlKey || window.__catnipPlotCtrlDown);
+            const isShiftPan = e.button === 0 && e.shiftKey && !ctrlActive;
+            const isMiddleZoom = e.button === 1;
+            if (isShiftPan || isMiddleZoom) {
+              beginPlotViewDrag(e, el, isMiddleZoom ? "zoom" : "pan");
+              return;
+            }
+            if (el && e.ctrlKey && e.button === 0) {
+              e.preventDefault();
+              e.stopPropagation();
+            }
+          }, true);
+          document.addEventListener("pointerup", finishPlotViewDrag, true);
+          document.addEventListener("pointercancel", finishPlotViewDrag, true);
+          document.addEventListener("wheel", function(e) {
+            const el = plotElementFromEvent(e);
+            if (!el) return;
+            const rangeFactor = Math.exp((Number(e.deltaY) || 0) * 0.0015);
+            zoomPlotViewAt(el, e, rangeFactor);
+            hidePlotHover(el);
+            e.preventDefault();
+            e.stopPropagation();
+          }, { capture: true, passive: false });
+          document.addEventListener("dblclick", function(e) {
+            const el = plotElementFromEvent(e);
+            if (!el) return;
+            resetPlotView(el);
+            e.preventDefault();
+            e.stopPropagation();
+          }, true);
+          document.addEventListener("auxclick", function(e) {
+            const el = plotElementFromEvent(e);
+            if (el && e.button === 1) {
+              e.preventDefault();
+              e.stopPropagation();
+            }
+          }, true);
+          document.addEventListener("click", function(e) {
+            if (!suppressPlotViewClick) return;
+            suppressPlotViewClick = false;
+            const el = plotElementFromEvent(e);
+            if (!el) return;
+            e.preventDefault();
+            e.stopPropagation();
+          }, true);
+          document.addEventListener("contextmenu", function(e) {
+            const el = plotElementFromEvent(e);
+            if (el && e.ctrlKey) {
+              e.preventDefault();
+              e.stopPropagation();
+            }
+          }, true);
           document.addEventListener("pointerout", function(e) {
-            const target = e && e.target;
-            const el = target && target.closest ? target.closest(".catnip-plot1d") : null;
+            const el = plotElementFromEvent(e);
             if (!el) return;
             if (!e.relatedTarget || !el.contains(e.relatedTarget)) {
               hidePlotHover(el);
@@ -3040,6 +3632,17 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                 .catnip-plot1d {
                   position: relative;
                   overflow: hidden;
+                  touch-action: none;
+                }
+                .catnip-plot1d.is-panning {
+                  cursor: grabbing;
+                }
+                .catnip-plot1d.is-zooming {
+                  cursor: ns-resize;
+                }
+                body.catnip-plot-panning,
+                body.catnip-plot-zooming {
+                  user-select: none;
                 }
                 .catnip-plot1d svg {
                   font-family: Arial, Helvetica, sans-serif;
@@ -3283,6 +3886,43 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                 body.catnip-grid-corner-nesw-resizing,
                 body.catnip-grid-corner-nesw-resizing * {
                   cursor: nesw-resize !important;
+                  user-select: none !important;
+                }
+                .catnip-panzoom-viewport {
+                  width: 100%;
+                  height: 100%;
+                  min-width: 0;
+                  min-height: 0;
+                  position: relative;
+                  overflow: hidden;
+                  background: #111;
+                  touch-action: none;
+                }
+                .catnip-panzoom-content {
+                  width: 100%;
+                  height: 100%;
+                  min-width: 0;
+                  min-height: 0;
+                  transform-origin: 0 0;
+                  will-change: transform;
+                }
+                .catnip-panzoom-viewport.is-panzoomed .catnip-panzoom-content {
+                  cursor: grab;
+                }
+                .catnip-panzoom-viewport.is-panning .catnip-panzoom-content {
+                  cursor: grabbing;
+                }
+                .catnip-panzoom-viewport.is-zooming .catnip-panzoom-content {
+                  cursor: zoom-in;
+                }
+                body.catnip-panzoom-panning,
+                body.catnip-panzoom-panning * {
+                  cursor: grabbing !important;
+                  user-select: none !important;
+                }
+                body.catnip-panzoom-zooming,
+                body.catnip-panzoom-zooming * {
+                  cursor: zoom-in !important;
                   user-select: none !important;
                 }
                 .catnip-empty-cell {
@@ -3936,6 +4576,12 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                             hide_details=True,
                         )
             with vuetify.VContainer(fluid=True, class_="pa-2"):
+                html.Div(
+                    "",
+                    id="catnip-reset-view-request",
+                    style="display:none;",
+                    raw_attrs=[':data-reset-view-request="JSON.stringify(resetViewRequest || {})"'],
+                )
                 with vuetify.VRow():
                     with vuetify.VCol(cols=2, style="display:flex; flex-direction:column; height:80vh;"):
                         with vuetify.VCard(
@@ -4369,28 +5015,30 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                             ):
                                                                 with html.Div(classes="catnip-scalar-field-view"):
                                                                     with html.Div(
-                                                                        classes="catnip-scalar-field-plot-frame",
+                                                                        classes="catnip-scalar-field-plot-frame catnip-panzoom-viewport",
                                                                         raw_attrs=[
                                                                             ":class=\"{ 'catnip-scalar-field-show-axes': tile.scalar_field_settings && tile.scalar_field_settings.show_axes }\"",
                                                                         ],
                                                                     ):
-                                                                        with vuetify.Template(v_if="tile.media_type === 'image_sequence'"):
-                                                                            html.Img(
-                                                                                src=("tile.src",),
-                                                                                class_="catnip-grid-image-sequence",
-                                                                                raw_attrs=[
-                                                                                    'data-grid-image-sequence="1"',
-                                                                                    ':data-fps="tile.fps || 2"',
-                                                                                    ':data-frame-count="tile.frame_count || 0"',
-                                                                                    ':data-frame-indices="(tile.frame_indices || []).join(\',\')"',
-                                                                                    ':data-frame-sources="JSON.stringify(tile.frame_sources || [])"',
-                                                                                    ':data-time-values="(tile.time_values || []).join(\',\')"',
-                                                                                    ':data-time-mode="tile.time_mode || \'timestep\'"',
-                                                                                    'data-current-frame="0"',
-                                                                                ],
-                                                                            )
-                                                                        with vuetify.Template(v_if="tile.media_type === 'image'"):
-                                                                            html.Img(src=("tile.src",))
+                                                                        with html.Div(classes="catnip-panzoom-content"):
+                                                                            with vuetify.Template(v_if="tile.media_type === 'image_sequence'"):
+                                                                                html.Img(
+                                                                                    src=("tile.src",),
+                                                                                    class_="catnip-grid-image-sequence",
+                                                                                    raw_attrs=[
+                                                                                        'data-grid-image-sequence="1"',
+                                                                                        ':data-fps="tile.fps || 2"',
+                                                                                        ':data-frame-count="tile.frame_count || 0"',
+                                                                                        ':data-frame-indices="(tile.frame_indices || []).join(\',\')"',
+                                                                                        ':data-frame-sources="JSON.stringify(tile.frame_sources || [])"',
+                                                                                        ':data-time-values="(tile.time_values || []).join(\',\')"',
+                                                                                        ':data-time-mode="tile.time_mode || \'timestep\'"',
+                                                                                        'data-current-frame="0"',
+                                                                                        'draggable="false"',
+                                                                                    ],
+                                                                                )
+                                                                            with vuetify.Template(v_if="tile.media_type === 'image'"):
+                                                                                html.Img(src=("tile.src",), raw_attrs=['draggable="false"'])
                                                                     with vuetify.Template(
                                                                         v_if=(
                                                                             "tile.scalar_field_settings"
@@ -4427,27 +5075,30 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                                     " || tile.visualization_item_type === 'SCALAR_FIELD')"
                                                                 )
                                                             ):
-                                                                html.Img(
-                                                                    src=("tile.src",),
-                                                                    class_="catnip-grid-image-sequence",
-                                                                    raw_attrs=[
-                                                                        'data-grid-image-sequence="1"',
-                                                                        ':data-fps="tile.fps || 2"',
-                                                                        ':data-frame-count="tile.frame_count || 0"',
-                                                                        ':data-frame-indices="(tile.frame_indices || []).join(\',\')"',
-                                                                        ':data-frame-sources="JSON.stringify(tile.frame_sources || [])"',
-                                                                        ':data-time-values="(tile.time_values || []).join(\',\')"',
-                                                                        ':data-time-mode="tile.time_mode || \'timestep\'"',
-                                                                        'data-current-frame="0"',
-                                                                    ],
-                                                                    style=(
-                                                                        "display:block;"
-                                                                        "width:100%;"
-                                                                        "height:100%;"
-                                                                        "object-fit:contain;"
-                                                                        "background:#111;"
-                                                                    ),
-                                                                )
+                                                                with html.Div(classes="catnip-panzoom-viewport"):
+                                                                    with html.Div(classes="catnip-panzoom-content"):
+                                                                        html.Img(
+                                                                            src=("tile.src",),
+                                                                            class_="catnip-grid-image-sequence",
+                                                                            raw_attrs=[
+                                                                                'data-grid-image-sequence="1"',
+                                                                                ':data-fps="tile.fps || 2"',
+                                                                                ':data-frame-count="tile.frame_count || 0"',
+                                                                                ':data-frame-indices="(tile.frame_indices || []).join(\',\')"',
+                                                                                ':data-frame-sources="JSON.stringify(tile.frame_sources || [])"',
+                                                                                ':data-time-values="(tile.time_values || []).join(\',\')"',
+                                                                                ':data-time-mode="tile.time_mode || \'timestep\'"',
+                                                                                'data-current-frame="0"',
+                                                                                'draggable="false"',
+                                                                            ],
+                                                                            style=(
+                                                                                "display:block;"
+                                                                                "width:100%;"
+                                                                                "height:100%;"
+                                                                                "object-fit:contain;"
+                                                                                "background:#111;"
+                                                                            ),
+                                                                        )
                                                             with vuetify.Template(
                                                                 v_if=(
                                                                     "tile.media_type === 'image'"
@@ -4456,42 +5107,47 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                                     " || tile.visualization_item_type === 'SCALAR_FIELD')"
                                                                 )
                                                             ):
-                                                                html.Img(
-                                                                    src=("tile.src",),
-                                                                    style=(
-                                                                        "display:block;"
-                                                                        "width:100%;"
-                                                                        "height:100%;"
-                                                                        "object-fit:contain;"
-                                                                        "background:#111;"
-                                                                    ),
-                                                                )
+                                                                with html.Div(classes="catnip-panzoom-viewport"):
+                                                                    with html.Div(classes="catnip-panzoom-content"):
+                                                                        html.Img(
+                                                                            src=("tile.src",),
+                                                                            raw_attrs=['draggable="false"'],
+                                                                            style=(
+                                                                                "display:block;"
+                                                                                "width:100%;"
+                                                                                "height:100%;"
+                                                                                "object-fit:contain;"
+                                                                                "background:#111;"
+                                                                            ),
+                                                                        )
                                                             with vuetify.Template(v_if="tile.media_type !== 'image' && tile.media_type !== 'image_sequence'"):
-                                                                html.Video(
-                                                                    src=("tile.src",),
-                                                                    class_="catnip-grid-video",
-                                                                    controls=False,
-                                                                    autoplay=False,
-                                                                    loop=False,
-                                                                    muted=True,
-                                                                    raw_attrs=[
-                                                                        'data-grid-video="1"',
-                                                                        ':data-fps="tile.fps || 2"',
-                                                                        ':data-frame-count="tile.frame_count || 0"',
-                                                                        ':data-frame-indices="(tile.frame_indices || []).join(\',\')"',
-                                                                        ':data-time-values="(tile.time_values || []).join(\',\')"',
-                                                                        ':data-time-mode="tile.time_mode || \'timestep\'"',
-                                                                        "playsinline",
-                                                                        "webkit-playsinline",
-                                                                    ],
-                                                                    style=(
-                                                                        "display:block;"
-                                                                        "width:100%;"
-                                                                        "height:100%;"
-                                                                        "object-fit:contain;"
-                                                                        "background:#111;"
-                                                                    ),
-                                                                )
+                                                                with html.Div(classes="catnip-panzoom-viewport"):
+                                                                    with html.Div(classes="catnip-panzoom-content"):
+                                                                        html.Video(
+                                                                            src=("tile.src",),
+                                                                            class_="catnip-grid-video",
+                                                                            controls=False,
+                                                                            autoplay=False,
+                                                                            loop=False,
+                                                                            muted=True,
+                                                                            raw_attrs=[
+                                                                                'data-grid-video="1"',
+                                                                                ':data-fps="tile.fps || 2"',
+                                                                                ':data-frame-count="tile.frame_count || 0"',
+                                                                                ':data-frame-indices="(tile.frame_indices || []).join(\',\')"',
+                                                                                ':data-time-values="(tile.time_values || []).join(\',\')"',
+                                                                                ':data-time-mode="tile.time_mode || \'timestep\'"',
+                                                                                "playsinline",
+                                                                                "webkit-playsinline",
+                                                                            ],
+                                                                            style=(
+                                                                                "display:block;"
+                                                                                "width:100%;"
+                                                                                "height:100%;"
+                                                                                "object-fit:contain;"
+                                                                                "background:#111;"
+                                                                            ),
+                                                                        )
                                                         with vuetify.Template(v_if="!tile.src"):
                                                             html.Div(
                                                                 "{{ tile.note ? tile.note : 'No movie src' }}",
@@ -5244,6 +5900,8 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
 
                 with html.Div(v_if="contextMenuKind === 'cell'"):
                     html.Div("Select Cell", classes="menu-item", click=ctrl.context_menu_cell_select)
+                    with vuetify.Template(v_if="contextMenuCellCanResetView"):
+                        html.Div("Reset View", classes="menu-item", click=ctrl.context_menu_cell_reset_view)
                     html.Div("Clear Cell", classes="menu-item danger", click=ctrl.context_menu_cell_clear)
                     with vuetify.Template(v_if="gridLayoutMode === 'spanning'"):
                         with html.Div(classes="menu-submenu"):
