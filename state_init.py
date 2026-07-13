@@ -142,6 +142,18 @@ def init_state(state, db) -> None:
     state.gridMaxCellSize = 5000
     state.gridFitMinCellSize = 180
     state.gridMaxFitMinCellSize = 5000
+    state.gridColumnSizes = [state.gridCellSize for _ in range(state.gridCols)]
+    state.gridRowSizes = [state.gridCellSize + 32 for _ in range(state.gridRows)]
+    state.gridColumnWeights = [1.0 for _ in range(state.gridCols)]
+    state.gridRowWeights = [1.0 for _ in range(state.gridRows)]
+    state.gridColumnTemplate = " ".join(f"{state.gridCellSize}px" for _ in range(state.gridCols))
+    state.gridRowTemplate = " ".join(f"{state.gridCellSize + 32}px" for _ in range(state.gridRows))
+    state.gridFitColumnTemplate = " ".join(
+        f"minmax({state.gridFitMinCellSize}px, 1fr)" for _ in range(state.gridCols)
+    )
+    state.gridFitRowTemplate = " ".join(
+        f"minmax({state.gridFitMinCellSize + 32}px, 1fr)" for _ in range(state.gridRows)
+    )
     state.gridCells = [
         {
             "variable_name": "",

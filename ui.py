@@ -153,6 +153,13 @@ def _build_grid_settings_popover(ctrl):
                     title="Increase cell size",
                 )
                 html.Span("px", classes="catnip-size-stepper-unit")
+            html.Button(
+                "Reset track sizes",
+                classes="catnip-grid-reset-tracks-btn",
+                click=ctrl.reset_grid_track_sizes,
+                raw_attrs=['type="button"'],
+                title="Reset all rows and columns to the current cell size",
+            )
         with vuetify.Template(v_if="gridSizingMode === 'fit'"):
             html.Div("Minimum cell size", classes="catnip-grid-sizing-section-label")
             with html.Div(classes="catnip-size-stepper"):
@@ -966,6 +973,309 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
           });
         }
 
+        if (!window.__catnipGridTrackResizeInit) {
+          window.__catnipGridTrackResizeInit = true;
+          let trackResize = null;
+
+          function parseTrackSizes(raw, count, fallback) {
+            const text = String(raw || "").trim();
+            const pxParts = Array.from(text.matchAll(/(-?\\d+(?:\\.\\d+)?)px\\b/g))
+              .map(function(match) { return Number.parseFloat(match[1]); });
+            const parts = pxParts.length >= count
+              ? pxParts
+              : text.split(/[,\\s]+/).map(function(part) { return Number.parseFloat(part); });
+            const sizes = [];
+            for (let i = 0; i < count; i += 1) {
+              const value = parts[i];
+              sizes.push(Number.isFinite(value) && value > 0 ? value : fallback);
+            }
+            return sizes;
+          }
+
+          function clampTrackSize(value, minimum, maximum) {
+            const safeMin = Number.isFinite(minimum) ? minimum : 40;
+            const safeMax = Number.isFinite(maximum) ? maximum : 10000;
+            return Math.max(safeMin, Math.min(safeMax, value));
+          }
+
+          function trackTemplate(sizes) {
+            return sizes.map(function(size) {
+              return String(Math.round(Number(size) || 0)) + "px";
+            }).join(" ");
+          }
+
+          function fitTrackTemplate(weights, minimum) {
+            const safeMin = Number.isFinite(minimum) && minimum > 0 ? minimum : 1;
+            return weights.map(function(weight) {
+              const safeWeight = Number.isFinite(weight) && weight > 0 ? weight : 1;
+              return "minmax(" + String(Math.round(safeMin)) + "px, " + String(Number(safeWeight.toFixed(6))) + "fr)";
+            }).join(" ");
+          }
+
+          function clearTrackResizeClasses() {
+            document.body.classList.remove("catnip-grid-col-resizing");
+            document.body.classList.remove("catnip-grid-row-resizing");
+            document.body.classList.remove("catnip-grid-corner-resizing");
+            document.body.classList.remove("catnip-grid-corner-nwse-resizing");
+            document.body.classList.remove("catnip-grid-corner-nesw-resizing");
+          }
+
+          function schedulePlotRerenderForTrackResize(delayMs) {
+            const run = function() {
+              if (typeof scheduleRenderAllPlot1d === "function") {
+                scheduleRenderAllPlot1d();
+              } else if (typeof window.catnipScheduleRenderAllPlot1d === "function") {
+                window.catnipScheduleRenderAllPlot1d();
+              }
+            };
+            const delay = Number(delayMs);
+            if (Number.isFinite(delay) && delay > 0) {
+              window.setTimeout(run, delay);
+            } else if (window.requestAnimationFrame) {
+              window.requestAnimationFrame(run);
+            } else {
+              run();
+            }
+          }
+
+          function buildTrackResizeAction(grid, axis, edge, index, startX, startY, mode) {
+            const isColumn = axis === "column";
+            const count = Number(grid.getAttribute(isColumn ? "data-grid-cols" : "data-grid-rows"));
+            if (!Number.isInteger(index) || !Number.isInteger(count) || index < 0 || index >= count) return null;
+
+            if (mode === "fit") {
+              const neighborIndex = (edge === "left" || edge === "top") ? index - 1 : index + 1;
+              if (neighborIndex < 0 || neighborIndex >= count) return null;
+              const weights = parseTrackSizes(
+                grid.getAttribute(isColumn ? "data-grid-column-weights" : "data-grid-row-weights"),
+                count,
+                1
+              );
+              const computed = window.getComputedStyle(grid);
+              const renderedSizes = parseTrackSizes(
+                isColumn ? computed.gridTemplateColumns : computed.gridTemplateRows,
+                count,
+                Number(grid.getAttribute(isColumn ? "data-grid-column-fallback" : "data-grid-row-fallback")) || 300
+              );
+              const rawMinSize = Number(grid.getAttribute(isColumn ? "data-grid-fit-min-column-size" : "data-grid-fit-min-row-size"));
+              const minSize = Number.isFinite(rawMinSize) && rawMinSize > 0 ? rawMinSize : 1;
+              const currentSize = renderedSizes[index];
+              const neighborSize = renderedSizes[neighborIndex];
+              const pairSize = currentSize + neighborSize;
+              if (!Number.isFinite(pairSize) || pairSize <= (2 * minSize)) return null;
+              const pairWeight = weights[index] + weights[neighborIndex];
+              return {
+                axis,
+                mode,
+                grid,
+                index,
+                neighborIndex,
+                weights,
+                startSize: currentSize,
+                pairSize,
+                pairWeight: Number.isFinite(pairWeight) && pairWeight > 0 ? pairWeight : 2,
+                startX,
+                startY,
+                direction: (edge === "left" || edge === "top") ? -1 : 1,
+                minSize,
+              };
+            }
+
+            const fallback = Number(grid.getAttribute(isColumn ? "data-grid-column-fallback" : "data-grid-row-fallback"));
+            const sizes = parseTrackSizes(
+              grid.getAttribute(isColumn ? "data-grid-column-sizes" : "data-grid-row-sizes"),
+              count,
+              Number.isFinite(fallback) ? fallback : 300
+            );
+            return {
+              axis,
+              mode,
+              grid,
+              index,
+              sizes,
+              startSize: sizes[index],
+              startX,
+              startY,
+              direction: (edge === "left" || edge === "top") ? -1 : 1,
+              minSize: Number(grid.getAttribute(isColumn ? "data-grid-min-column-size" : "data-grid-min-row-size")),
+              maxSize: Number(grid.getAttribute(isColumn ? "data-grid-max-column-size" : "data-grid-max-row-size")),
+            };
+          }
+
+          function beginTrackResize(e, grid, handle, actions) {
+            if (!actions || !actions.length) return false;
+            trackResize = {
+              grid,
+              handle,
+              actions,
+              pointerId: e.pointerId,
+            };
+            handle.classList.add("active");
+            grid.classList.add("is-resizing");
+            clearTrackResizeClasses();
+            const hasColumn = actions.some(function(action) { return action.axis === "column"; });
+            const hasRow = actions.some(function(action) { return action.axis === "row"; });
+            if (hasColumn && hasRow) {
+              document.body.classList.add("catnip-grid-corner-resizing");
+              document.body.classList.add(
+                handle.classList.contains("catnip-grid-corner-bottom-left")
+                  ? "catnip-grid-corner-nesw-resizing"
+                  : "catnip-grid-corner-nwse-resizing"
+              );
+            } else {
+              document.body.classList.add(hasColumn ? "catnip-grid-col-resizing" : "catnip-grid-row-resizing");
+            }
+            try {
+              handle.setPointerCapture(e.pointerId);
+            } catch (_) {
+              // Pointer capture is best-effort; document-level listeners still handle the drag.
+            }
+            e.preventDefault();
+            e.stopPropagation();
+            return true;
+          }
+
+          function applyTrackResizeAction(action, e) {
+            const delta = action.axis === "column"
+              ? ((Number(e.clientX) || 0) - action.startX)
+              : ((Number(e.clientY) || 0) - action.startY);
+            if (action.mode === "fit") {
+              const minSize = Number.isFinite(action.minSize) ? action.minSize : 1;
+              const nextSize = clampTrackSize(
+                action.startSize + (delta * action.direction),
+                minSize,
+                action.pairSize - minSize
+              );
+              const currentWeight = action.pairWeight * (nextSize / action.pairSize);
+              action.weights[action.index] = currentWeight;
+              action.weights[action.neighborIndex] = action.pairWeight - currentWeight;
+              const template = fitTrackTemplate(action.weights, minSize);
+              if (action.axis === "column") {
+                action.grid.style.gridTemplateColumns = template;
+                action.grid.setAttribute("data-grid-column-weights", action.weights.join(","));
+              } else {
+                action.grid.style.gridTemplateRows = template;
+                action.grid.setAttribute("data-grid-row-weights", action.weights.join(","));
+              }
+              return;
+            }
+
+            const nextSize = clampTrackSize(
+              action.startSize + (delta * action.direction),
+              action.minSize,
+              action.maxSize
+            );
+            action.sizes[action.index] = nextSize;
+            const template = trackTemplate(action.sizes);
+            if (action.axis === "column") {
+              action.grid.style.gridTemplateColumns = template;
+              action.grid.setAttribute("data-grid-column-sizes", action.sizes.join(","));
+            } else {
+              action.grid.style.gridTemplateRows = template;
+              action.grid.setAttribute("data-grid-row-sizes", action.sizes.join(","));
+            }
+          }
+
+          function commitTrackResizeAction(action) {
+            if (!window.trame || !window.trame.trigger) return;
+            if (action.mode === "fit") {
+              window.trame.trigger("set_grid_track_weights_trigger", [action.axis, action.weights.join(",")]);
+            } else {
+              window.trame.trigger("set_grid_track_sizes_trigger", [action.axis, action.sizes.join(",")]);
+            }
+          }
+
+          document.addEventListener("pointerdown", function(e) {
+            const target = e && e.target;
+            const handle = target && target.closest ? target.closest(".catnip-grid-track-resize-handle") : null;
+            if (!handle) return;
+            if (e.button !== undefined && e.button !== 0) return;
+            const grid = handle.closest(".catnip-main-grid");
+            if (!grid) return;
+
+            const mode = String(grid.getAttribute("data-grid-sizing-mode") || "static");
+            const startX = Number(e.clientX) || 0;
+            const startY = Number(e.clientY) || 0;
+
+            if (handle.classList.contains("catnip-grid-corner-resize-handle")) {
+              const colEdge = String(handle.getAttribute("data-col-edge") || "right");
+              const rowEdge = String(handle.getAttribute("data-row-edge") || "bottom");
+              const colIndex = Number(handle.getAttribute("data-col-index"));
+              const rowIndex = Number(handle.getAttribute("data-row-index"));
+              const actions = [
+                buildTrackResizeAction(grid, "column", colEdge, colIndex, startX, startY, mode),
+                buildTrackResizeAction(grid, "row", rowEdge, rowIndex, startX, startY, mode),
+              ].filter(Boolean);
+              if (actions.length === 2) {
+                beginTrackResize(e, grid, handle, actions);
+              }
+              return;
+            }
+
+            const isColumn = handle.classList.contains("catnip-grid-col-resize-handle");
+            const axis = isColumn ? "column" : "row";
+            const edge = String(handle.getAttribute("data-resize-edge") || (isColumn ? "right" : "bottom"));
+            const index = Number(handle.getAttribute(isColumn ? "data-col-index" : "data-row-index"));
+            const action = buildTrackResizeAction(grid, axis, edge, index, startX, startY, mode);
+            if (action) {
+              beginTrackResize(e, grid, handle, [action]);
+            }
+          }, true);
+
+          document.addEventListener("pointermove", function(e) {
+            if (!trackResize) return;
+            for (const action of (trackResize.actions || [])) {
+              applyTrackResizeAction(action, e);
+            }
+            schedulePlotRerenderForTrackResize();
+            e.preventDefault();
+            e.stopPropagation();
+          }, true);
+
+          function finishTrackResize(e) {
+            if (!trackResize) return;
+            const current = trackResize;
+            if (current.handle) current.handle.classList.remove("active");
+            if (current.grid) current.grid.classList.remove("is-resizing");
+            clearTrackResizeClasses();
+            try {
+              if (current.handle && current.pointerId !== undefined) {
+                current.handle.releasePointerCapture(current.pointerId);
+              }
+            } catch (_) {
+              // Ignore release failures for pointers that were not captured.
+            }
+            for (const action of (current.actions || [])) {
+              commitTrackResizeAction(action);
+            }
+            schedulePlotRerenderForTrackResize();
+            schedulePlotRerenderForTrackResize(80);
+            schedulePlotRerenderForTrackResize(180);
+            trackResize = null;
+            if (e) {
+              e.preventDefault();
+              e.stopPropagation();
+            }
+          }
+
+          document.addEventListener("pointerup", finishTrackResize, true);
+          document.addEventListener("pointercancel", finishTrackResize, true);
+          document.addEventListener("dragstart", function(e) {
+            const target = e && e.target;
+            if (target && target.closest && target.closest(".catnip-grid-track-resize-handle")) {
+              e.preventDefault();
+              e.stopPropagation();
+            }
+          }, true);
+          document.addEventListener("click", function(e) {
+            const target = e && e.target;
+            if (target && target.closest && target.closest(".catnip-grid-track-resize-handle")) {
+              e.preventDefault();
+              e.stopPropagation();
+            }
+          }, true);
+        }
+
         if (window.__catnipDnDInit) return;
         window.__catnipDnDInit = true;
         const gridVcrState = {
@@ -1695,16 +2005,35 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
             updatePlotCursors(window.__catnipGridSyncTime || 0, getGridVideos());
           }, 30);
         }
+        window.catnipScheduleRenderAllPlot1d = scheduleRenderAllPlot1d;
+
+        function observePlot1dSizes() {
+          if (!window.ResizeObserver) return;
+          if (!window.__catnipPlotResizeObserver) {
+            window.__catnipPlotResizeObserver = new ResizeObserver(function() {
+              scheduleRenderAllPlot1d();
+            });
+          }
+          const resizeObserver = window.__catnipPlotResizeObserver;
+          for (const el of getGridPlots()) {
+            if (!el.__catnipPlotResizeObserved) {
+              resizeObserver.observe(el);
+              el.__catnipPlotResizeObserved = true;
+            }
+          }
+        }
 
         function setupPlot1dObserver() {
           setupPlotHoverHandlers();
           if (window.__catnipPlotObserverInit) return;
           window.__catnipPlotObserverInit = true;
           const observer = new MutationObserver(function() {
+            observePlot1dSizes();
             scheduleRenderAllPlot1d();
           });
           observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-plot", "data-plot-settings"] });
           window.addEventListener("resize", scheduleRenderAllPlot1d);
+          observePlot1dSizes();
           scheduleRenderAllPlot1d();
         }
 
@@ -2880,6 +3209,82 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                   background: #e3f2fd !important;
                   box-shadow: inset 0 0 0 2px #1976d2 !important;
                 }
+                .catnip-main-grid {
+                  position: relative;
+                }
+                .catnip-grid-track-resize-handle {
+                  position: absolute;
+                  z-index: 6;
+                  opacity: 0;
+                  background: rgba(21, 101, 192, 0.3);
+                  transition: opacity 0.12s ease, background 0.12s ease;
+                }
+                .catnip-dropcell:hover > .catnip-grid-track-resize-handle,
+                .catnip-grid-track-resize-handle.active,
+                .catnip-main-grid.is-resizing .catnip-grid-track-resize-handle {
+                  opacity: 1;
+                }
+                .catnip-grid-track-resize-handle:hover,
+                .catnip-grid-track-resize-handle.active {
+                  background: rgba(21, 101, 192, 0.65);
+                }
+                .catnip-grid-col-resize-handle {
+                  top: 32px;
+                  right: 0;
+                  bottom: 0;
+                  width: 8px;
+                  cursor: col-resize;
+                }
+                .catnip-grid-left-resize-handle {
+                  left: 0;
+                  right: auto;
+                }
+                .catnip-grid-row-resize-handle {
+                  left: 0;
+                  right: 0;
+                  bottom: 0;
+                  height: 8px;
+                  cursor: row-resize;
+                }
+                .catnip-grid-top-resize-handle {
+                  top: 0;
+                  bottom: auto;
+                }
+                .catnip-grid-corner-resize-handle {
+                  width: 12px;
+                  height: 12px;
+                  z-index: 7;
+                }
+                .catnip-grid-corner-bottom-left {
+                  left: 0;
+                  bottom: 0;
+                  cursor: nesw-resize;
+                }
+                .catnip-grid-corner-bottom-right {
+                  right: 0;
+                  bottom: 0;
+                  cursor: nwse-resize;
+                }
+                body.catnip-grid-col-resizing,
+                body.catnip-grid-col-resizing * {
+                  cursor: col-resize !important;
+                  user-select: none !important;
+                }
+                body.catnip-grid-row-resizing,
+                body.catnip-grid-row-resizing * {
+                  cursor: row-resize !important;
+                  user-select: none !important;
+                }
+                body.catnip-grid-corner-nwse-resizing,
+                body.catnip-grid-corner-nwse-resizing * {
+                  cursor: nwse-resize !important;
+                  user-select: none !important;
+                }
+                body.catnip-grid-corner-nesw-resizing,
+                body.catnip-grid-corner-nesw-resizing * {
+                  cursor: nesw-resize !important;
+                  user-select: none !important;
+                }
                 .catnip-empty-cell {
                   height: 100%;
                   display: flex;
@@ -3057,6 +3462,20 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                   color: #555;
                   font-size: 12px;
                   min-width: 16px;
+                }
+                .catnip-grid-reset-tracks-btn {
+                  width: 100%;
+                  margin-top: 8px;
+                  min-height: 26px;
+                  border: 1px solid #9d9d9d;
+                  border-radius: 3px;
+                  background: #fff;
+                  color: #222;
+                  font-size: 12px;
+                  cursor: pointer;
+                }
+                .catnip-grid-reset-tracks-btn:hover {
+                  background: #f2f2f2;
                 }
                 .catnip-grid-size-trigger {
                   width: 100%;
@@ -3664,15 +4083,33 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                 with vuetify.Template(v_if="scalarPlotStatus"):
                                     html.Div("{{ scalarPlotStatus }}", class_="text-caption mb-2", style="color:#8a4b00;")
                                 with html.Div(
+                                    classes="catnip-main-grid",
+                                    raw_attrs=[
+                                        ':data-grid-sizing-mode="gridSizingMode"',
+                                        ':data-grid-cols="gridCols"',
+                                        ':data-grid-rows="gridRows"',
+                                        ':data-grid-column-sizes="(gridColumnSizes || []).join(\',\')"',
+                                        ':data-grid-row-sizes="(gridRowSizes || []).join(\',\')"',
+                                        ':data-grid-column-weights="(gridColumnWeights || []).join(\',\')"',
+                                        ':data-grid-row-weights="(gridRowWeights || []).join(\',\')"',
+                                        ':data-grid-min-column-size="gridMinCellSize"',
+                                        ':data-grid-max-column-size="gridMaxCellSize"',
+                                        ':data-grid-min-row-size="Number(gridMinCellSize || 80) + 32"',
+                                        ':data-grid-max-row-size="Number(gridMaxCellSize || 5000) + 32"',
+                                        ':data-grid-fit-min-column-size="gridFitMinCellSize"',
+                                        ':data-grid-fit-min-row-size="Number(gridFitMinCellSize || 180) + 32"',
+                                        ':data-grid-column-fallback="gridCellSize"',
+                                        ':data-grid-row-fallback="Number(gridCellSize || 300) + 32"',
+                                    ],
                                     style=(
                                         "('display:grid;'"
                                         " + ((gridSizingMode === 'fit')"
-                                        " ? ('grid-template-columns:repeat(' + gridCols + ', minmax(' + Number(gridFitMinCellSize || 180) + 'px, 1fr));'"
-                                        " + 'grid-template-rows:repeat(' + gridRows + ', minmax(' + (Number(gridFitMinCellSize || 180) + 32) + 'px, 1fr));'"
+                                        " ? ('grid-template-columns:' + String(gridFitColumnTemplate || ('repeat(' + gridCols + ', minmax(' + Number(gridFitMinCellSize || 180) + 'px, 1fr))')) + ';'"
+                                        " + 'grid-template-rows:' + String(gridFitRowTemplate || ('repeat(' + gridRows + ', minmax(' + (Number(gridFitMinCellSize || 180) + 32) + 'px, 1fr))')) + ';'"
                                         " + 'justify-content:stretch;'"
                                         " + 'align-content:stretch;')"
-                                        " : ('grid-template-columns:repeat(' + gridCols + ', ' + Number(gridCellSize || 300) + 'px);'"
-                                        " + 'grid-template-rows:repeat(' + gridRows + ', ' + (Number(gridCellSize || 300) + 32) + 'px);'"
+                                        " : ('grid-template-columns:' + String(gridColumnTemplate || ('repeat(' + gridCols + ', ' + Number(gridCellSize || 300) + 'px)')) + ';'"
+                                        " + 'grid-template-rows:' + String(gridRowTemplate || ('repeat(' + gridRows + ', ' + (Number(gridCellSize || 300) + 32) + 'px)')) + ';'"
                                         " + 'justify-content:center;'"
                                         " + 'align-content:start;'))"
                                         " + 'flex:1 1 auto;'"
@@ -3688,7 +4125,7 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                         with html.Div(
                                             click=(
                                                 ctrl.set_active_grid_cell,
-                                                "[i, (($event && $event.target && $event.target.closest && $event.target.closest('.catnip-cell-close, .catnip-timeline-driver-btn')) ? 1 : 0), (($event && $event.shiftKey) ? 1 : 0)]",
+                                                "[i, (($event && $event.target && $event.target.closest && $event.target.closest('.catnip-cell-close, .catnip-timeline-driver-btn, .catnip-grid-track-resize-handle')) ? 1 : 0), (($event && $event.shiftKey) ? 1 : 0)]",
                                             ),
                                             classes="catnip-dropcell",
                                             raw_attrs=[
@@ -3705,7 +4142,7 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                 " ? 'width:100%; height:100%; min-width:0; min-height:0;'"
                                                 " : ((gridSizingMode === 'fit')"
                                                 " ? ('width:100%; height:100%; min-width:' + Number(gridFitMinCellSize || 180) + 'px; min-height:' + (Number(gridFitMinCellSize || 180) + 32) + 'px;')"
-                                                " : ('width:' + Number(gridCellSize || 300) + 'px; height:' + (Number(gridCellSize || 300) + 32) + 'px;')))"
+                                                " : 'width:100%; height:100%; min-width:0; min-height:0;'))"
                                                 " + 'overflow:hidden; cursor:pointer; display:flex; flex-direction:column; position:relative; box-sizing:border-box;'"
                                                 " + ((gridLayoutMode === 'spanning') ? 'border:1px solid #cfcfcf;' : ('border-left:1px solid #cfcfcf; border-top:1px solid #cfcfcf;'"
                                                 " + (((i % gridCols) === (gridCols - 1)) ? 'border-right:1px solid #cfcfcf;' : '')"
@@ -3714,6 +4151,110 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                 " + ((gridLayoutMode === 'spanning' && tile && tile.grid_hidden) ? 'display:none;' : '')",
                                             ),
                                         ):
+                                            html.Div(
+                                                classes="catnip-grid-track-resize-handle catnip-grid-col-resize-handle catnip-grid-left-resize-handle",
+                                                v_if=(
+                                                    "gridSizingMode !== 'fit'"
+                                                    " && !(gridLayoutMode === 'spanning' && tile && tile.grid_hidden)"
+                                                    " && ((gridLayoutMode === 'spanning'"
+                                                    " ? Number((tile && tile.grid_col) || ((i % gridCols) + 1))"
+                                                    " : ((i % gridCols) + 1)) === 1)"
+                                                ),
+                                                raw_attrs=[
+                                                    'role="separator"',
+                                                    'aria-orientation="vertical"',
+                                                    'title="Drag to resize column"',
+                                                    'data-resize-edge="left"',
+                                                    'data-col-index="0"',
+                                                ],
+                                            )
+                                            html.Div(
+                                                classes="catnip-grid-track-resize-handle catnip-grid-col-resize-handle",
+                                                v_if=(
+                                                    "!(gridLayoutMode === 'spanning' && tile && tile.grid_hidden)"
+                                                    " && (gridSizingMode !== 'fit' || ((gridLayoutMode === 'spanning'"
+                                                    " ? (Number((tile && tile.grid_col) || ((i % gridCols) + 1)) + Number((tile && tile.col_span) || 1) - 1)"
+                                                    " : ((i % gridCols) + 1)) < Number(gridCols || 0)))"
+                                                ),
+                                                raw_attrs=[
+                                                    'role="separator"',
+                                                    'aria-orientation="vertical"',
+                                                    'title="Drag to resize column"',
+                                                    'data-resize-edge="right"',
+                                                    ':data-col-index="gridLayoutMode === \'spanning\' ? (Number((tile && tile.grid_col) || ((i % gridCols) + 1)) + Number((tile && tile.col_span) || 1) - 2) : (i % gridCols)"',
+                                                ],
+                                            )
+                                            html.Div(
+                                                classes="catnip-grid-track-resize-handle catnip-grid-row-resize-handle catnip-grid-top-resize-handle",
+                                                v_if=(
+                                                    "gridSizingMode !== 'fit'"
+                                                    " && !(gridLayoutMode === 'spanning' && tile && tile.grid_hidden)"
+                                                    " && ((gridLayoutMode === 'spanning'"
+                                                    " ? Number((tile && tile.grid_row) || (Math.floor(i / gridCols) + 1))"
+                                                    " : (Math.floor(i / gridCols) + 1)) === 1)"
+                                                ),
+                                                raw_attrs=[
+                                                    'role="separator"',
+                                                    'aria-orientation="horizontal"',
+                                                    'title="Drag to resize row"',
+                                                    'data-resize-edge="top"',
+                                                    'data-row-index="0"',
+                                                ],
+                                            )
+                                            html.Div(
+                                                classes="catnip-grid-track-resize-handle catnip-grid-row-resize-handle",
+                                                v_if=(
+                                                    "!(gridLayoutMode === 'spanning' && tile && tile.grid_hidden)"
+                                                    " && (gridSizingMode !== 'fit' || ((gridLayoutMode === 'spanning'"
+                                                    " ? (Number((tile && tile.grid_row) || (Math.floor(i / gridCols) + 1)) + Number((tile && tile.row_span) || 1) - 1)"
+                                                    " : (Math.floor(i / gridCols) + 1)) < Number(gridRows || 0)))"
+                                                ),
+                                                raw_attrs=[
+                                                    'role="separator"',
+                                                    'aria-orientation="horizontal"',
+                                                    'title="Drag to resize row"',
+                                                    'data-resize-edge="bottom"',
+                                                    ':data-row-index="gridLayoutMode === \'spanning\' ? (Number((tile && tile.grid_row) || (Math.floor(i / gridCols) + 1)) + Number((tile && tile.row_span) || 1) - 2) : Math.floor(i / gridCols)"',
+                                                ],
+                                            )
+                                            html.Div(
+                                                classes="catnip-grid-track-resize-handle catnip-grid-corner-resize-handle catnip-grid-corner-bottom-left",
+                                                v_if=(
+                                                    "!(gridLayoutMode === 'spanning' && tile && tile.grid_hidden)"
+                                                    " && (gridSizingMode !== 'fit' || ("
+                                                    "((gridLayoutMode === 'spanning' ? Number((tile && tile.grid_col) || ((i % gridCols) + 1)) : ((i % gridCols) + 1)) > 1)"
+                                                    " && ((gridLayoutMode === 'spanning' ? (Number((tile && tile.grid_row) || (Math.floor(i / gridCols) + 1)) + Number((tile && tile.row_span) || 1) - 1) : (Math.floor(i / gridCols) + 1)) < Number(gridRows || 0))"
+                                                    "))"
+                                                ),
+                                                raw_attrs=[
+                                                    'role="separator"',
+                                                    'aria-orientation="vertical"',
+                                                    'title="Drag to resize row and column"',
+                                                    'data-col-edge="left"',
+                                                    'data-row-edge="bottom"',
+                                                    ':data-col-index="gridLayoutMode === \'spanning\' ? (Number((tile && tile.grid_col) || ((i % gridCols) + 1)) - 1) : (i % gridCols)"',
+                                                    ':data-row-index="gridLayoutMode === \'spanning\' ? (Number((tile && tile.grid_row) || (Math.floor(i / gridCols) + 1)) + Number((tile && tile.row_span) || 1) - 2) : Math.floor(i / gridCols)"',
+                                                ],
+                                            )
+                                            html.Div(
+                                                classes="catnip-grid-track-resize-handle catnip-grid-corner-resize-handle catnip-grid-corner-bottom-right",
+                                                v_if=(
+                                                    "!(gridLayoutMode === 'spanning' && tile && tile.grid_hidden)"
+                                                    " && (gridSizingMode !== 'fit' || ("
+                                                    "((gridLayoutMode === 'spanning' ? (Number((tile && tile.grid_col) || ((i % gridCols) + 1)) + Number((tile && tile.col_span) || 1) - 1) : ((i % gridCols) + 1)) < Number(gridCols || 0))"
+                                                    " && ((gridLayoutMode === 'spanning' ? (Number((tile && tile.grid_row) || (Math.floor(i / gridCols) + 1)) + Number((tile && tile.row_span) || 1) - 1) : (Math.floor(i / gridCols) + 1)) < Number(gridRows || 0))"
+                                                    "))"
+                                                ),
+                                                raw_attrs=[
+                                                    'role="separator"',
+                                                    'aria-orientation="vertical"',
+                                                    'title="Drag to resize row and column"',
+                                                    'data-col-edge="right"',
+                                                    'data-row-edge="bottom"',
+                                                    ':data-col-index="gridLayoutMode === \'spanning\' ? (Number((tile && tile.grid_col) || ((i % gridCols) + 1)) + Number((tile && tile.col_span) || 1) - 2) : (i % gridCols)"',
+                                                    ':data-row-index="gridLayoutMode === \'spanning\' ? (Number((tile && tile.grid_row) || (Math.floor(i / gridCols) + 1)) + Number((tile && tile.row_span) || 1) - 2) : Math.floor(i / gridCols)"',
+                                                ],
+                                            )
                                             with vuetify.Template(v_if="tile && tile.variable_name"):
                                                 with html.Div(
                                                     style=(

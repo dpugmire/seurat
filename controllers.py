@@ -39,6 +39,9 @@ def attach_controllers(
     GRID_MIN_COLS = 1
     GRID_MAX_ROWS = 8
     GRID_MAX_COLS = 8
+    GRID_HEADER_HEIGHT = 32
+    GRID_MIN_TRACK_WEIGHT = 0.05
+    GRID_MAX_TRACK_WEIGHT = 100.0
 
     def active_query_filter() -> Optional[Dict[str, Any]]:
         query_filter = state.queryFilter or None
@@ -1512,6 +1515,112 @@ Notes:
             state.gridMaxFitMinCellSize,
         )
 
+    def size_values(raw_sizes) -> List[Any]:
+        if isinstance(raw_sizes, str):
+            return [part.strip() for part in raw_sizes.replace(";", ",").split(",")]
+        if isinstance(raw_sizes, (list, tuple)):
+            return list(raw_sizes)
+        return []
+
+    def normalize_size_list(raw_sizes, count: int, default: int, minimum: int, maximum: int) -> List[int]:
+        values = size_values(raw_sizes)
+        sizes: List[int] = []
+        for idx in range(count):
+            raw = values[idx] if idx < len(values) else default
+            sizes.append(clamp_int(raw, default, minimum, maximum))
+        return sizes
+
+    def normalize_weight_list(raw_weights, count: int, default: float = 1.0) -> List[float]:
+        values = size_values(raw_weights)
+        weights: List[float] = []
+        for idx in range(count):
+            raw = values[idx] if idx < len(values) else default
+            value = finite_float(raw)
+            if value is None or value <= 0:
+                value = default
+            value = max(GRID_MIN_TRACK_WEIGHT, min(GRID_MAX_TRACK_WEIGHT, float(value)))
+            weights.append(round(value, 6))
+        return weights
+
+    def grid_template_from_sizes(sizes: List[int]) -> str:
+        return " ".join(f"{int(size)}px" for size in sizes)
+
+    def grid_fit_template_from_weights(weights: List[float], min_size: int) -> str:
+        safe_min = max(1, int(min_size))
+        return " ".join(f"minmax({safe_min}px, {float(weight):.6g}fr)" for weight in weights)
+
+    def publish_grid_track_templates() -> None:
+        state.gridColumnTemplate = grid_template_from_sizes(list(state.gridColumnSizes or []))
+        state.gridRowTemplate = grid_template_from_sizes(list(state.gridRowSizes or []))
+        state.gridFitColumnTemplate = grid_fit_template_from_weights(
+            list(state.gridColumnWeights or []),
+            int(state.gridFitMinCellSize),
+        )
+        state.gridFitRowTemplate = grid_fit_template_from_weights(
+            list(state.gridRowWeights or []),
+            int(state.gridFitMinCellSize) + GRID_HEADER_HEIGHT,
+        )
+
+    def normalize_grid_track_sizes(rows: Optional[int] = None, cols: Optional[int] = None) -> None:
+        normalize_grid_sizing()
+        if rows is None or cols is None:
+            rows, cols = grid_dimensions()
+
+        col_default = int(state.gridCellSize)
+        row_default = int(state.gridCellSize) + GRID_HEADER_HEIGHT
+        state.gridColumnSizes = normalize_size_list(
+            getattr(state, "gridColumnSizes", []),
+            int(cols),
+            col_default,
+            int(state.gridMinCellSize),
+            int(state.gridMaxCellSize),
+        )
+        state.gridRowSizes = normalize_size_list(
+            getattr(state, "gridRowSizes", []),
+            int(rows),
+            row_default,
+            int(state.gridMinCellSize) + GRID_HEADER_HEIGHT,
+            int(state.gridMaxCellSize) + GRID_HEADER_HEIGHT,
+        )
+        state.gridColumnWeights = normalize_weight_list(
+            getattr(state, "gridColumnWeights", []),
+            int(cols),
+        )
+        state.gridRowWeights = normalize_weight_list(
+            getattr(state, "gridRowWeights", []),
+            int(rows),
+        )
+        publish_grid_track_templates()
+
+    def reset_grid_track_sizes() -> None:
+        normalize_grid_sizing()
+        rows, cols = grid_dimensions()
+        state.gridColumnSizes = [int(state.gridCellSize) for _ in range(cols)]
+        state.gridRowSizes = [int(state.gridCellSize) + GRID_HEADER_HEIGHT for _ in range(rows)]
+        state.gridColumnWeights = [1.0 for _ in range(cols)]
+        state.gridRowWeights = [1.0 for _ in range(rows)]
+        publish_grid_track_templates()
+
+    def drop_grid_track(axis: str, index: int) -> None:
+        if axis == "row":
+            sizes = list(getattr(state, "gridRowSizes", []) or [])
+            if 0 <= index < len(sizes):
+                del sizes[index]
+            state.gridRowSizes = sizes
+            weights = list(getattr(state, "gridRowWeights", []) or [])
+            if 0 <= index < len(weights):
+                del weights[index]
+            state.gridRowWeights = weights
+        elif axis == "column":
+            sizes = list(getattr(state, "gridColumnSizes", []) or [])
+            if 0 <= index < len(sizes):
+                del sizes[index]
+            state.gridColumnSizes = sizes
+            weights = list(getattr(state, "gridColumnWeights", []) or [])
+            if 0 <= index < len(weights):
+                del weights[index]
+            state.gridColumnWeights = weights
+
     def grid_cell_count() -> int:
         rows, cols = grid_dimensions()
         return rows * cols
@@ -1644,6 +1753,7 @@ Notes:
         cells = normalize_grid_cells(cells, rows, cols)
         state.gridRows = rows
         state.gridCols = cols
+        normalize_grid_track_sizes(rows, cols)
         state.gridCells = normalize_grid_cells(cells)
         state.activeGridCell = active if 0 <= active < rows * cols else -1
         try:
@@ -1667,6 +1777,7 @@ Notes:
     def set_grid_cell_size(size: int, **_):
         normalize_grid_sizing()
         state.gridCellSize = clamp_int(size, 300, state.gridMinCellSize, state.gridMaxCellSize)
+        reset_grid_track_sizes()
 
     @ctrl.add("set_grid_fit_min_cell_size")
     def set_grid_fit_min_cell_size(size: int, **_):
@@ -1677,11 +1788,57 @@ Notes:
             state.gridMinCellSize,
             state.gridMaxFitMinCellSize,
         )
+        normalize_grid_track_sizes()
 
     @ctrl.add("set_grid_sizing_mode")
     def set_grid_sizing_mode(mode: str, **_):
         state.gridSizingMode = "fit" if str(mode or "").strip().lower() == "fit" else "static"
         normalize_grid_sizing()
+        normalize_grid_track_sizes()
+
+    @ctrl.add("reset_grid_track_sizes")
+    def reset_grid_track_sizes_action(**_):
+        reset_grid_track_sizes()
+
+    @ctrl.trigger("set_grid_track_sizes_trigger")
+    def set_grid_track_sizes_trigger(axis: str, sizes="", **_):
+        axis_name = str(axis or "").strip().lower()
+        normalize_grid_sizing()
+        rows, cols = grid_dimensions()
+        if axis_name == "column":
+            state.gridColumnSizes = normalize_size_list(
+                sizes,
+                cols,
+                int(state.gridCellSize),
+                int(state.gridMinCellSize),
+                int(state.gridMaxCellSize),
+            )
+        elif axis_name == "row":
+            state.gridRowSizes = normalize_size_list(
+                sizes,
+                rows,
+                int(state.gridCellSize) + GRID_HEADER_HEIGHT,
+                int(state.gridMinCellSize) + GRID_HEADER_HEIGHT,
+                int(state.gridMaxCellSize) + GRID_HEADER_HEIGHT,
+            )
+        else:
+            return
+        state.gridSizingMode = "static"
+        normalize_grid_track_sizes(rows, cols)
+
+    @ctrl.trigger("set_grid_track_weights_trigger")
+    def set_grid_track_weights_trigger(axis: str, weights="", **_):
+        axis_name = str(axis or "").strip().lower()
+        normalize_grid_sizing()
+        rows, cols = grid_dimensions()
+        if axis_name == "column":
+            state.gridColumnWeights = normalize_weight_list(weights, cols)
+        elif axis_name == "row":
+            state.gridRowWeights = normalize_weight_list(weights, rows)
+        else:
+            return
+        state.gridSizingMode = "fit"
+        normalize_grid_track_sizes(rows, cols)
 
     @ctrl.add("set_grid_layout_size")
     def set_grid_layout_size(rows: int, cols: int, **_):
@@ -3002,6 +3159,7 @@ Notes:
         cells = normalize_grid_cells(state.gridCells, rows, cols)
         active = active_grid_index(rows * cols)
         remove_row = (active // cols) if active >= 0 else rows - 1
+        drop_grid_track("row", remove_row)
 
         if normalize_grid_layout_mode() == "spanning":
             new_active = active_after_spanning_axis_removal(
@@ -3071,6 +3229,7 @@ Notes:
         cells = normalize_grid_cells(state.gridCells, rows, cols)
         active = active_grid_index(rows * cols)
         remove_col = (active % cols) if active >= 0 else cols - 1
+        drop_grid_track("column", remove_col)
 
         if normalize_grid_layout_mode() == "spanning":
             new_active = active_after_spanning_axis_removal(
