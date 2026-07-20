@@ -49,6 +49,39 @@ export SEURAT_CACHE_DIR=/path/to/cache-dir
 export SEURAT_SQLITE_DB=/path/to/viewer-cache.sqlite
 ```
 
+## Embedded Campaign Schema
+
+Seurat reads a text dataset named `schema.yaml` from the campaign archive. A
+time-series group written by appending steps to one ADIOS dataset can select
+either one exact campaign dataset with `path` or multiple datasets with
+`pattern`. Each matched append-mode dataset resolves its time variable relative
+to itself.
+
+For example, this schema associates every BOUT++ simulation and analysis
+dataset with its own appended `wtime` values:
+
+```yaml
+schema_version: 1
+name: boutpp-selected-runs
+
+time:
+  variable: wtime
+
+files:
+  simulations:
+    role: time_series
+    mode: append
+    pattern: "runs/**/simulation"
+
+  analyses:
+    role: time_series
+    mode: append
+    pattern: "runs/**/analysis"
+```
+
+The schema must be stored in the campaign, rather than merely referenced, so
+it remains available when the campaign is copied to another system.
+
 Visualization association notes:
 
 - Campaigns created with the new hpc-campaign visualization API are associated through the ACA `visualization_*` metadata tables.

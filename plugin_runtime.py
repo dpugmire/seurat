@@ -33,6 +33,9 @@ _BUILTIN_PLUGIN_MODULES = (
     "seurat_plugins.paired_species_profile",
     "seurat_plugins.radial_flux_corrected",
     "seurat_plugins.divertor_eich_profile",
+    "seurat_plugins.divertor_lambda_q_timeseries",
+    "seurat_plugins.divertor_load_map",
+    "seurat_plugins.divertor_target_totals_timeseries",
 )
 
 

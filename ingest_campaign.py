@@ -342,8 +342,16 @@ def _interpret_campaign_schema(
         else:
             mode = _schema_nonempty_string(group.get("mode"), f"files.{group_name}.mode")
             if mode == "append":
-                path = _schema_nonempty_string(group.get("path"), f"files.{group_name}.path")
-                datasets = [path] if path in dataset_names else []
+                path = str(group.get("path", "") or "").strip()
+                pattern = str(group.get("pattern", "") or "").strip()
+                if bool(path) == bool(pattern):
+                    raise ValueError(
+                        f"files.{group_name} requires exactly one of path or pattern for append mode"
+                    )
+                if path:
+                    datasets = [path] if path in dataset_names else []
+                else:
+                    datasets = sorted(name for name in dataset_names if fnmatch.fnmatch(name, pattern))
                 result = {"role": role, "mode": mode, "datasets": datasets}
             elif mode == "file_per_timestep":
                 pattern = _schema_nonempty_string(group.get("pattern"), f"files.{group_name}.pattern")
@@ -449,16 +457,22 @@ def _build_schema_time_context(
         role = str(group.get("role", "") or "")
         time_spec = group.get("time", {}) if isinstance(group.get("time", {}), dict) else {}
         group_time_values: List[float] = []
+        append_time_values: Dict[str, List[float]] = {}
         time_source = ""
 
         if "variable" in time_spec:
             time_var = str(time_spec.get("variable", "") or "").strip()
             if time_var:
                 time_source = f"variable:{time_var}"
-                if mode == "append" and len(datasets) == 1:
-                    time_path = f"{datasets[0]}/{time_var}"
-                    if not vars_dict or time_path in vars_dict:
-                        group_time_values = _read_numeric_array(fr, time_path, (vars_dict or {}).get(time_path))
+                if mode == "append":
+                    for dataset in datasets:
+                        time_path = f"{dataset}/{time_var}"
+                        if not vars_dict or time_path in vars_dict:
+                            values = _read_numeric_array(fr, time_path, (vars_dict or {}).get(time_path))
+                            if values:
+                                append_time_values[dataset] = values
+                    if len(datasets) == 1:
+                        group_time_values = list(append_time_values.get(datasets[0], []))
                 elif mode == "file_per_timestep":
                     time_path = f"{group_name}/{time_var}"
                     if not vars_dict or time_path in vars_dict:
@@ -466,12 +480,17 @@ def _build_schema_time_context(
         elif "index" in time_spec:
             time_source = f"index:{str(time_spec.get('index', '') or '').strip()}"
 
+        group_num_timesteps = len(datasets)
+        if mode == "append":
+            append_lengths = {len(values) for values in append_time_values.values()}
+            group_num_timesteps = append_lengths.pop() if len(append_lengths) == 1 else 0
+
         group_metadata: Dict[str, Any] = {
             "schema_name": context["schema_name"],
             "schema_file_group": str(group_name),
             "schema_role": role,
             "schema_mode": mode,
-            "schema_num_timesteps": len(datasets),
+            "schema_num_timesteps": group_num_timesteps,
         }
         if time_source:
             group_metadata["time_source"] = time_source
@@ -481,14 +500,20 @@ def _build_schema_time_context(
 
         for index, dataset in enumerate(datasets):
             step_index = step_indices[index] if index < len(step_indices) else None
+            dataset_time_values = append_time_values.get(dataset, [])
+            dataset_num_timesteps = (
+                len(dataset_time_values)
+                if mode == "append"
+                else len(datasets)
+            )
             metadata: Dict[str, Any] = {
                 "schema_name": context["schema_name"],
                 "schema_file_group": str(group_name),
                 "schema_role": role,
                 "schema_mode": mode,
-                "schema_num_timesteps": len(datasets),
-                "schema_frame_index": index,
-                "time_index": index,
+                "schema_num_timesteps": dataset_num_timesteps,
+                "schema_frame_index": 0 if mode == "append" else index,
+                "time_index": 0 if mode == "append" else index,
             }
             if isinstance(step_index, int):
                 metadata["schema_step_index"] = step_index
@@ -509,8 +534,8 @@ def _build_schema_time_context(
                             values = _read_numeric_array(fr, time_path, (vars_dict or {}).get(time_path))
                         if values:
                             metadata["physical_time"] = values[0]
-                elif group_time_values:
-                    metadata["time_values"] = list(group_time_values)
+                elif mode == "append" and dataset_time_values:
+                    metadata["time_values"] = list(dataset_time_values)
             elif str(time_spec.get("index", "") or "").strip() == "step_index" and isinstance(step_index, int):
                 metadata["time_index"] = step_index
 
