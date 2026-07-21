@@ -26,6 +26,7 @@ seurat = "app:main"
 
 [tool.setuptools]
 py-modules = [
+    "application",
     "app",
     "catnip_db_app",
     "catnip_parse_db",
