@@ -910,6 +910,90 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
           }, true);
         }
 
+        if (!window.__catnipVariablePanelResizeInit) {
+          window.__catnipVariablePanelResizeInit = true;
+          const MIN_VARIABLE_PANEL_WIDTH = 180;
+          const MIN_CONTENT_PANEL_WIDTH = 360;
+          let variablePanelResize = null;
+
+          function variablePanelBounds(panel) {
+            const row = panel && panel.parentElement;
+            const rowWidth = row ? row.getBoundingClientRect().width : window.innerWidth;
+            return {
+              min: MIN_VARIABLE_PANEL_WIDTH,
+              max: Math.max(
+                MIN_VARIABLE_PANEL_WIDTH,
+                Math.min(rowWidth * 0.5, rowWidth - MIN_CONTENT_PANEL_WIDTH)
+              ),
+            };
+          }
+
+          function setVariablePanelWidth(panel, rawWidth) {
+            if (!panel) return;
+            const bounds = variablePanelBounds(panel);
+            const width = Math.max(bounds.min, Math.min(Number(rawWidth) || bounds.min, bounds.max));
+            panel.style.flexBasis = width + "px";
+            panel.style.width = width + "px";
+            const handle = document.querySelector("[data-variable-panel-resizer]");
+            if (handle) {
+              handle.setAttribute("aria-valuemin", String(Math.round(bounds.min)));
+              handle.setAttribute("aria-valuemax", String(Math.round(bounds.max)));
+              handle.setAttribute("aria-valuenow", String(Math.round(width)));
+            }
+          }
+
+          function finishVariablePanelResize() {
+            if (!variablePanelResize) return;
+            variablePanelResize.handle.classList.remove("catnip-variable-resizer-active");
+            document.body.classList.remove("catnip-variable-panel-resizing");
+            variablePanelResize = null;
+          }
+
+          document.addEventListener("pointerdown", function(e) {
+            const target = e && e.target;
+            const handle = target && target.closest
+              ? target.closest("[data-variable-panel-resizer]")
+              : null;
+            if (!handle) return;
+            const panel = document.getElementById("catnip-variable-column");
+            if (!panel) return;
+            e.preventDefault();
+            variablePanelResize = {
+              handle: handle,
+              panel: panel,
+              startX: e.clientX,
+              startWidth: panel.getBoundingClientRect().width,
+            };
+            handle.classList.add("catnip-variable-resizer-active");
+            document.body.classList.add("catnip-variable-panel-resizing");
+          }, true);
+
+          document.addEventListener("pointermove", function(e) {
+            if (!variablePanelResize) return;
+            e.preventDefault();
+            setVariablePanelWidth(
+              variablePanelResize.panel,
+              variablePanelResize.startWidth + e.clientX - variablePanelResize.startX
+            );
+          }, true);
+
+          document.addEventListener("pointerup", finishVariablePanelResize, true);
+          document.addEventListener("pointercancel", finishVariablePanelResize, true);
+          window.addEventListener("blur", finishVariablePanelResize);
+
+          document.addEventListener("keydown", function(e) {
+            const target = e && e.target;
+            if (!target || !target.matches || !target.matches("[data-variable-panel-resizer]")) return;
+            if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+            const panel = document.getElementById("catnip-variable-column");
+            if (!panel) return;
+            e.preventDefault();
+            const step = e.shiftKey ? 40 : 10;
+            const direction = e.key === "ArrowLeft" ? -1 : 1;
+            setVariablePanelWidth(panel, panel.getBoundingClientRect().width + direction * step);
+          }, true);
+        }
+
         if (!window.__catnipFloatingPanelDragInit) {
           window.__catnipFloatingPanelDragInit = true;
           let floatingDrag = null;
@@ -3577,6 +3661,53 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                 .catnip-var-item:hover {
                   background: #eaf0f6;
                 }
+                .catnip-main-row {
+                  flex-wrap: nowrap;
+                }
+                .catnip-main-row > .catnip-variable-column {
+                  flex: 0 0 max(200px, 16.666667%);
+                  width: max(200px, 16.666667%);
+                  max-width: 50%;
+                }
+                .catnip-main-row > .catnip-content-column {
+                  flex: 1 1 0;
+                  width: auto;
+                  max-width: none;
+                  min-width: 0;
+                }
+                .catnip-variable-resizer {
+                  position: relative;
+                  align-self: stretch;
+                  flex: 0 0 2px;
+                  z-index: 5;
+                  width: 2px;
+                  min-width: 2px;
+                  min-height: 80vh;
+                  background: #aeb8c2;
+                  cursor: col-resize;
+                  touch-action: none;
+                  outline: none;
+                  user-select: none;
+                  transition: background 0.15s;
+                }
+                .catnip-variable-resizer::before {
+                  content: "";
+                  position: absolute;
+                  top: 0;
+                  right: -3px;
+                  bottom: 0;
+                  left: -3px;
+                  cursor: col-resize;
+                }
+                .catnip-variable-resizer:hover,
+                .catnip-variable-resizer:focus-visible,
+                .catnip-variable-resizer-active {
+                  background: #1976d2;
+                }
+                .catnip-variable-panel-resizing {
+                  cursor: col-resize;
+                  user-select: none;
+                }
                 .catnip-dropcell { transition: background 0.15s, outline-color 0.15s; }
                 .catnip-timeline-driver-btn {
                   flex: 0 0 auto;
@@ -4582,8 +4713,12 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                     style="display:none;",
                     raw_attrs=[':data-reset-view-request="JSON.stringify(resetViewRequest || {})"'],
                 )
-                with vuetify.VRow():
-                    with vuetify.VCol(cols=2, style="display:flex; flex-direction:column; height:80vh;"):
+                with vuetify.VRow(classes="catnip-main-row", no_gutters=True):
+                    with vuetify.VCol(
+                        id="catnip-variable-column",
+                        classes="catnip-variable-column",
+                        style="display:flex; flex-direction:column; height:80vh;",
+                    ):
                         with vuetify.VCard(
                             variant="outlined",
                             style="flex:1 1 auto; min-height:0; display:flex; flex-direction:column;",
@@ -4637,7 +4772,23 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                     ):
                                                         html.Span("{{ v.label || v.name || v.id }}")
 
-                    with vuetify.VCol(cols=10, style="display:flex; flex-direction:column; height:80vh;"):
+                    html.Div(
+                        classes="catnip-variable-resizer",
+                        raw_attrs=[
+                            "data-variable-panel-resizer",
+                            'role="separator"',
+                            'aria-label="Resize variable list"',
+                            'aria-orientation="vertical"',
+                            'aria-valuemin="180"',
+                            'tabindex="0"',
+                        ],
+                        title="Drag to resize the variable list",
+                    )
+
+                    with vuetify.VCol(
+                        classes="catnip-content-column",
+                        style="display:flex; flex-direction:column; height:80vh;",
+                    ):
                         with vuetify.VCard(
                             variant="outlined",
                             style="flex:1 1 auto; min-height:0; display:flex; flex-direction:column;",
