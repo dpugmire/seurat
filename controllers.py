@@ -2,6 +2,7 @@ import math
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
+from application import NavigationNode, SeuratApplication
 from config import MAX_MOVIE_FRAMES, MOVIE_FPS
 from db import (
     GENERATED_SCALAR_PLOT_VIS,
@@ -26,6 +27,35 @@ from query_parser import and_filter, mongo_filter_matches, python_query_to_filte
 from state_init import clear_right_panes, fmt
 
 
+def _variable_groups_from_navigation(nodes: List[NavigationNode]) -> List[Dict[str, Any]]:
+    groups: List[Dict[str, Any]] = []
+    for node in nodes:
+        variables: List[Dict[str, str]] = []
+        for child in node.get("children", []) or []:
+            if child.get("kind") != "variable":
+                continue
+            resource = child.get("resource") or {}
+            variable_id = str(resource.get("variable_id", "") or "")
+            if not variable_id:
+                continue
+            variables.append(
+                {
+                    "id": variable_id,
+                    "name": str(resource.get("name", "") or ""),
+                    "label": str(
+                        resource.get("label", "")
+                        or child.get("label", "")
+                        or variable_id
+                    ),
+                    "path": str(resource.get("path", "") or ""),
+                    "source_dataset": str(resource.get("source_dataset", "") or ""),
+                }
+            )
+        if variables:
+            groups.append({"name": str(node.get("label", "") or ""), "variables": variables})
+    return groups
+
+
 def attach_controllers(
     server,
     db,
@@ -35,6 +65,7 @@ def attach_controllers(
     image_association_schema_path: str = "",
 ):
     state, ctrl = server.state, server.controller
+    application = SeuratApplication(db)
     GRID_MIN_ROWS = 1
     GRID_MIN_COLS = 1
     GRID_MAX_ROWS = 8
@@ -51,10 +82,15 @@ def attach_controllers(
         return query_filter or source_restriction or None
 
     def refresh_variable_list():
-        grouped = db.grouped_variable_names(
-            extra_filter=active_query_filter(),
-            only_visualized=bool(state.showOnlyVisualizedVars),
+        navigation = application.get_navigation(
+            {
+                "view": "variables",
+                "query": active_query_filter() or {},
+                "only_visualized": bool(state.showOnlyVisualizedVars),
+                "parent_id": None,
+            }
         )
+        grouped = _variable_groups_from_navigation(navigation)
         state.variableGroups = grouped
         variables = [v for g in grouped for v in (g.get("variables") or []) if isinstance(v, dict)]
         state.variableNames = [str(v.get("id", "") or "") for v in variables if str(v.get("id", "") or "")]

@@ -8,6 +8,7 @@ query language, and preview image sequences as short videos.
 High-level structure:
 
 - `app.py`: entrypoint; opens the SQLite sidecar, boots Trame, wires controllers/UI.
+- `application.py`: backend application facade and typed navigation contract.
 - `ingest_campaign.py`: reads a `.aca` file via ADIOS2 and writes documents to the sidecar.
 - `sqlite_store.py`: lightweight SQLite collection adapter used by the viewer.
 - `db.py`: data access helpers for summaries and movie tiles.
