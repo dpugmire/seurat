@@ -1,0 +1,16 @@
+schema_version: 1
+name: boutpp-selected-runs
+
+time:
+  variable: wtime
+
+files:
+  simulations:
+    role: time_series
+    mode: append
+    pattern: "runs/**/simulation"
+
+  analyses:
+    role: time_series
+    mode: append
+    pattern: "runs/**/analysis"
