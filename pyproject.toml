@@ -22,7 +22,7 @@ schema = [
 ]
 
 [project.scripts]
-seurat = "app:main"
+seurat = "seurat.app:main"
 
 [tool.setuptools]
 py-modules = [
@@ -38,3 +38,6 @@ py-modules = [
     "state_init",
     "ui",
 ]
+
+[tool.setuptools.packages.find]
+include = ["seurat*"]
