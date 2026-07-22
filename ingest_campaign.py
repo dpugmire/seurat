@@ -359,6 +359,7 @@ def _interpret_campaign_schema(
                 result = {
                     "role": role,
                     "mode": mode,
+                    "pattern": pattern,
                     "datasets": datasets,
                     "step_indices": _schema_extract_step_indices(group_name, group, datasets) if datasets else [],
                 }
@@ -385,8 +386,21 @@ def _load_campaign_schema(
     campaign_path: str,
     dataset_names: List[str],
     timeseries: Dict[str, List[str]],
+    campaign_schema_path: Optional[str] = None,
 ) -> Dict[str, Any]:
-    schema_text = _read_campaign_schema_text(campaign_path)
+    schema_source = "embedded schema.yaml"
+    if campaign_schema_path:
+        schema_file = Path(campaign_schema_path).expanduser().resolve()
+        if not schema_file.exists():
+            raise FileNotFoundError(f"Campaign schema file not found: {schema_file}")
+        if not schema_file.is_file():
+            raise ValueError(f"Campaign schema path is not a file: {schema_file}")
+        schema_text = schema_file.read_text(encoding="utf-8")
+        if not schema_text.strip():
+            raise ValueError(f"Campaign schema file is empty: {schema_file}")
+        schema_source = str(schema_file)
+    else:
+        schema_text = _read_campaign_schema_text(campaign_path)
     if not schema_text:
         return {}
 
@@ -398,10 +412,10 @@ def _load_campaign_schema(
     try:
         schema = yaml.safe_load(schema_text)
     except Exception as e:
-        raise ValueError(f"Invalid embedded schema.yaml: {e}") from e
+        raise ValueError(f"Invalid campaign schema {schema_source}: {e}") from e
 
     if not isinstance(schema, dict):
-        raise ValueError("Embedded schema.yaml must contain a mapping")
+        raise ValueError(f"Campaign schema {schema_source} must contain a mapping")
 
     return _interpret_campaign_schema(schema, dataset_names, timeseries)
 
@@ -490,6 +504,7 @@ def _build_schema_time_context(
             "schema_file_group": str(group_name),
             "schema_role": role,
             "schema_mode": mode,
+            "schema_pattern": str(group.get("pattern", "") or ""),
             "schema_num_timesteps": group_num_timesteps,
         }
         if time_source:
@@ -511,6 +526,7 @@ def _build_schema_time_context(
                 "schema_file_group": str(group_name),
                 "schema_role": role,
                 "schema_mode": mode,
+                "schema_pattern": str(group.get("pattern", "") or ""),
                 "schema_num_timesteps": dataset_num_timesteps,
                 "schema_frame_index": 0 if mode == "append" else index,
                 "time_index": 0 if mode == "append" else index,
@@ -1372,6 +1388,7 @@ def parse_campaign(
     campaign_path: str,
     collection,
     image_association_schema_path: Optional[str] = None,
+    campaign_schema_path: Optional[str] = None,
 ):
     print("reading: ", campaign_path)
     schema_file, _schema_text = _load_image_association_schema_text(image_association_schema_path)
@@ -1407,7 +1424,12 @@ def parse_campaign(
     dataset_rows = _load_campaign_dataset_rows(campaign_path)
     dataset_names = [row["name"] for row in dataset_rows if row.get("name")]
     campaign_timeseries = _load_campaign_timeseries(campaign_path)
-    campaign_schema = _load_campaign_schema(campaign_path, dataset_names, campaign_timeseries)
+    campaign_schema = _load_campaign_schema(
+        campaign_path,
+        dataset_names,
+        campaign_timeseries,
+        campaign_schema_path=campaign_schema_path,
+    )
     if campaign_schema:
         print(
             "campaign schema:",
@@ -1847,6 +1869,11 @@ def main():
         default=None,
         help="Optional path to image association schema text/YAML file.",
     )
+    ap.add_argument(
+        "--campaign-schema",
+        default=None,
+        help="Optional path to campaign schema YAML; overrides embedded schema.yaml.",
+    )
     args = ap.parse_args()
 
     if args.clear:
@@ -1857,6 +1884,7 @@ def main():
         args.campaign,
         collection,
         image_association_schema_path=args.image_association_schema,
+        campaign_schema_path=args.campaign_schema,
     )
 
     coll = get_collection(args.campaign)

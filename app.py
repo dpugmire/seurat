@@ -20,11 +20,20 @@ def main():
         default="",
         help="Optional path to image association schema text/YAML file.",
     )
+    ap.add_argument(
+        "--campaign-schema",
+        default="",
+        help="Optional path to campaign schema YAML; overrides embedded schema.yaml.",
+    )
     args = ap.parse_args()
 
-    schema_path = ""
+    image_association_schema_path = ""
     if args.image_association_schema:
-        schema_path = str(Path(args.image_association_schema).expanduser())
+        image_association_schema_path = str(Path(args.image_association_schema).expanduser())
+
+    campaign_schema_path = ""
+    if args.campaign_schema:
+        campaign_schema_path = str(Path(args.campaign_schema).expanduser())
 
     campaign_path = str(Path(args.campaign_path).expanduser())
     collection = open_sqlite_collection(campaign_path)
@@ -43,7 +52,8 @@ def main():
         collection=collection,
         parse_campaign=parse_campaign,
         campaign_path=campaign_path,
-        image_association_schema_path=schema_path,
+        image_association_schema_path=image_association_schema_path,
+        campaign_schema_path=campaign_schema_path,
     )
 
     build_ui(

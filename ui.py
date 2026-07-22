@@ -3630,9 +3630,14 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                 }
                 .catnip-var-group-title {
                   padding: 4px 8px;
+                  width: 100%;
+                  border: 0;
+                  background: transparent;
                   font-size: 11px;
                   font-weight: 800;
+                  font-family: inherit;
                   letter-spacing: 0.05em;
+                  text-align: left;
                   text-transform: uppercase;
                   color: #425365;
                   cursor: pointer;
@@ -3643,11 +3648,20 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                 .catnip-var-group-title:hover {
                   color: #2f4357;
                 }
+                .catnip-var-group-title:focus-visible {
+                  outline: 2px solid #1976d2;
+                  outline-offset: 1px;
+                }
                 .catnip-var-group-chevron {
-                  width: 12px;
-                  text-align: center;
-                  font-family: monospace;
-                  font-size: 12px;
+                  flex: 0 0 28px;
+                  width: 28px;
+                  height: 28px;
+                  display: inline-flex;
+                  align-items: center;
+                  justify-content: center;
+                  color: #425365;
+                  font-family: Arial, Helvetica, sans-serif;
+                  font-size: 16px;
                   line-height: 1;
                 }
                 .catnip-var-item {
@@ -4726,6 +4740,19 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                             with vuetify.VCardTitle():
                                 html.Div("Variables")
                             with vuetify.VCardText(style="flex:1 1 auto; min-height:0; overflow-y:auto;"):
+                                with html.Div(
+                                    style="display:flex; align-items:center; gap:8px; padding:0 4px 8px 4px;",
+                                ):
+                                    html.Span("Group by:", class_="text-caption")
+                                    with vuetify.VBtnToggle(
+                                        v_model=("variablePaneView",),
+                                        mandatory=True,
+                                        density="compact",
+                                        divided=True,
+                                        variant="outlined",
+                                    ):
+                                        vuetify.VBtn("Variable", value="variables", size="small")
+                                        vuetify.VBtn("File", value="files", size="small")
                                 with html.Div(style="padding:0 4px 8px 4px;"):
                                     vuetify.VCheckbox(
                                         v_model=("showOnlyVisualizedVars",),
@@ -4749,16 +4776,24 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                 "box-shadow: inset 0 0 0 1px #e2e8ef;"
                                             ),
                                         ):
-                                            with html.Div(
+                                            with html.Button(
                                                 class_="catnip-var-group-title",
                                                 click=(ctrl.toggle_variable_group, "[group.name]"),
                                                 style="font-weight:800;",
+                                                raw_attrs=[
+                                                    'type="button"',
+                                                    ':aria-expanded="!(variableGroupCollapsed && variableGroupCollapsed[group.name])"',
+                                                ],
                                             ):
                                                 html.Span(
-                                                    "{{ (variableGroupCollapsed && variableGroupCollapsed[group.name]) ? '+' : '-' }}",
+                                                    "{{ (variableGroupCollapsed && variableGroupCollapsed[group.name]) ? '▸' : '▾' }}",
                                                     class_="catnip-var-group-chevron",
                                                 )
-                                                html.Span("{{ group.name }}")
+                                                html.Span(
+                                                    "{{ group.name + (((group.file_count || 0) > 1) ? (' (' + group.file_count + ')') : '') }}",
+                                                    raw_attrs=[':title="group.name"'],
+                                                    style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;",
+                                                )
                                             with html.Div(v_if="!(variableGroupCollapsed && variableGroupCollapsed[group.name])"):
                                                 with vuetify.Template(v_for="v in group.variables", key="group.name + '::' + v.id"):
                                                     with html.Div(
@@ -5507,7 +5542,7 @@ def build_ui(server, refresh_variable_list, campaign_name: str = ""):
                                                                         checked=("((selectedSourceKeys || []).includes(r._key))",),
                                                                     )
                                                             html.Td(
-                                                                "{{ r.source_dataset || [r.producer, r.casename, r.file].filter(Boolean).join('/') }}",
+                                                                "{{ r.sourceName || r.source_label || r.source_dataset || [r.producer, r.casename, r.file].filter(Boolean).join('/') }}",
                                                                 style="white-space:nowrap;",
                                                             )
                                                             html.Td("{{ r.min }}", style="white-space:nowrap;")

@@ -530,21 +530,28 @@ class CampaignDb:
         return " / ".join(parts)
 
     @staticmethod
-    def _source_group_for_doc(doc: Dict[str, Any]) -> Tuple[Tuple[str, str, str, str], Dict[str, Any]]:
+    def _file_navigation_label(value: str) -> str:
+        label = str(value or "").strip()
+        return label[:-3] if label.lower().endswith(".bp") else label
+
+    @classmethod
+    def _source_group_for_doc(cls, doc: Dict[str, Any]) -> Tuple[Tuple[str, str, str, str], Dict[str, Any]]:
         source_dataset = "" if doc.get("source_dataset", None) is None else str(doc.get("source_dataset"))
         producer = "" if doc.get("producer", None) is None else str(doc.get("producer"))
         casename = "" if doc.get("casename", None) is None else str(doc.get("casename"))
         file_name = "" if doc.get("file", None) is None else str(doc.get("file"))
         schema_file_group = "" if doc.get("schema_file_group", None) is None else str(doc.get("schema_file_group"))
         schema_mode = "" if doc.get("schema_mode", None) is None else str(doc.get("schema_mode"))
+        schema_pattern = "" if doc.get("schema_pattern", None) is None else str(doc.get("schema_pattern"))
 
         if schema_file_group and schema_mode == "file_per_timestep":
             return (
                 ("schema_file_group", "", "", schema_file_group),
                 {
                     "source_dataset": "",
-                    "source_label": schema_file_group,
+                    "source_label": cls._file_navigation_label(schema_pattern or schema_file_group),
                     "schema_file_group": schema_file_group,
+                    "schema_pattern": schema_pattern,
                     "schema_mode": schema_mode,
                     "schema_num_timesteps": doc.get("schema_num_timesteps", None),
                     "schema_name": "" if doc.get("schema_name", None) is None else str(doc.get("schema_name")),
@@ -577,6 +584,7 @@ class CampaignDb:
                 "source_dataset": source_dataset,
                 "source_label": source_label,
                 "schema_file_group": schema_file_group,
+                "schema_pattern": schema_pattern,
                 "schema_mode": schema_mode,
                 "schema_num_timesteps": doc.get("schema_num_timesteps", None),
                 "schema_name": "" if doc.get("schema_name", None) is None else str(doc.get("schema_name")),
@@ -855,6 +863,159 @@ class CampaignDb:
             ordered.append({"name": "2D", "variables": groups["2D"]})
         return ordered
 
+    def grouped_variables_by_source_dataset(
+        self,
+        extra_filter: Optional[Dict[str, Any]] = None,
+        only_visualized: bool = False,
+    ) -> List[Dict[str, Any]]:
+        if not self.ok:
+            return []
+
+        try:
+            image_query = and_filter(
+                {
+                    "variable_type": {"$in": list(VISUALIZATION_PAYLOAD_VARIABLE_TYPES)},
+                    "visualization_name": {"$ne": ""},
+                },
+                extra_filter,
+            )
+            queries = [image_query] if only_visualized else [
+                and_filter({"variable_type": "variable"}, extra_filter),
+                image_query,
+            ]
+            projection = {
+                "_id": 0,
+                "variable_id": 1,
+                "variable_name": 1,
+                "variable_name_physical": 1,
+                "variable_path": 1,
+                "source_dataset": 1,
+                "producer": 1,
+                "casename": 1,
+                "file": 1,
+                "schema_file_group": 1,
+                "schema_mode": 1,
+                "schema_pattern": 1,
+                "schema_num_timesteps": 1,
+                "variable_type": 1,
+                "metadata": 1,
+            }
+
+            grouped: Dict[Tuple[str, str], Dict[str, Any]] = {}
+            seen: Set[Tuple[Tuple[str, str], str]] = set()
+
+            for query in queries:
+                for doc in self.collection.find(query, projection):
+                    if self._is_static_scalar_variable_doc(doc):
+                        continue
+
+                    variable_id = str(doc.get("variable_id", "") or "").strip()
+                    if not variable_id:
+                        variable_id = str(doc.get("variable_name", "") or "").strip()
+                    if not variable_id:
+                        continue
+
+                    source_dataset = str(doc.get("source_dataset", "") or "").strip()
+                    schema_file_group = str(doc.get("schema_file_group", "") or "").strip()
+                    schema_mode = str(doc.get("schema_mode", "") or "").strip()
+                    schema_pattern = str(doc.get("schema_pattern", "") or "").strip()
+                    try:
+                        schema_num_timesteps = int(doc.get("schema_num_timesteps", 0) or 0)
+                    except Exception:
+                        schema_num_timesteps = 0
+                    producer = str(doc.get("producer", "") or "").strip()
+                    casename = str(doc.get("casename", "") or "").strip()
+                    file_name = str(doc.get("file", "") or "").strip()
+
+                    if schema_file_group and schema_mode == "file_per_timestep":
+                        source_key = ("schema_file_group", schema_file_group)
+                        source_label = self._file_navigation_label(
+                            schema_pattern or schema_file_group
+                        )
+                        group_source_dataset = ""
+                    elif source_dataset:
+                        source_key = ("source_dataset", source_dataset)
+                        source_label = self._file_navigation_label(source_dataset)
+                        group_source_dataset = source_dataset
+                    else:
+                        fallback = " / ".join(part for part in (producer, casename, file_name) if part)
+                        source_label = self._file_navigation_label(fallback) or "Unknown source"
+                        source_key = ("legacy_source", source_label)
+                        group_source_dataset = ""
+
+                    group = grouped.setdefault(
+                        source_key,
+                        {
+                            "name": source_label,
+                            "source_dataset": group_source_dataset,
+                            "variables": [],
+                            "_source_files": set(),
+                            "_schema_file_count": 0,
+                        },
+                    )
+                    source_file = source_dataset or file_name or source_label
+                    if schema_file_group and schema_mode == "file_per_timestep":
+                        group["_schema_file_count"] = max(
+                            int(group.get("_schema_file_count", 0) or 0),
+                            schema_num_timesteps,
+                        )
+                    if source_file and source_file != schema_file_group:
+                        group["_source_files"].add(source_file)
+
+                    seen_key = (source_key, variable_id)
+                    if seen_key in seen:
+                        continue
+                    seen.add(seen_key)
+
+                    name = str(doc.get("variable_name", "") or "").strip()
+                    if not name:
+                        physical = str(doc.get("variable_name_physical", "") or "").strip("/")
+                        name = physical.rsplit("/", 1)[-1] if physical else variable_id.rsplit("/", 1)[-1]
+
+                    group["variables"].append(
+                        {
+                            "id": variable_id,
+                            "name": name,
+                            "label": name,
+                            "path": self._variable_display_path({**doc, "variable_id": variable_id}),
+                            "source_dataset": source_dataset,
+                        }
+                    )
+
+            groups = list(grouped.values())
+            for group in groups:
+                source_files = group.pop("_source_files", set())
+                schema_file_count = int(group.pop("_schema_file_count", 0) or 0)
+                file_count = schema_file_count or len(source_files)
+                if file_count > 1:
+                    group["file_count"] = file_count
+                variables = list(group.get("variables", []) or [])
+                counts: Dict[str, int] = {}
+                for item in variables:
+                    name = str(item.get("name", "") or "")
+                    counts[name] = counts.get(name, 0) + 1
+                for item in variables:
+                    name = str(item.get("name", "") or "")
+                    if counts.get(name, 0) <= 1:
+                        continue
+                    parent = self._variable_parent_path(str(item.get("path", "") or ""))
+                    item["label"] = f"{name} [{parent}]" if parent else name
+                variables.sort(
+                    key=lambda item: (
+                        str(item.get("name", "")).lower(),
+                        str(item.get("label", "")).lower(),
+                        str(item.get("id", "")),
+                    )
+                )
+                group["variables"] = variables
+
+            groups.sort(key=lambda group: str(group.get("name", "")).lower())
+            return groups
+        except Exception as e:
+            self.last_error = f"{type(e).__name__}: {e}"
+            self.ok = False
+            return []
+
     def _image_sources_for_variable(
         self,
         variable_id: str,
@@ -887,6 +1048,7 @@ class CampaignDb:
             "frame_index": 1,
             "schema_name": 1,
             "schema_file_group": 1,
+            "schema_pattern": 1,
             "schema_role": 1,
             "schema_mode": 1,
             "schema_num_timesteps": 1,
@@ -1465,6 +1627,7 @@ class CampaignDb:
             "max": 1,
             "schema_name": 1,
             "schema_file_group": 1,
+            "schema_pattern": 1,
             "schema_role": 1,
             "schema_mode": 1,
             "schema_num_timesteps": 1,

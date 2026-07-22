@@ -19,7 +19,9 @@ def init_state(state, db) -> None:
     state.variableNames = []
     state.variableGroups = []
     state.variableLabelsById = {}
+    state.variablePaneView = "variables"
     state.variableGroupCollapsed = {}
+    state.variableGroupCollapsedByView = {"variables": {}, "files": {}}
     state.showOnlyVisualizedVars = False
     state.selectedVar = ""
 

@@ -1,6 +1,8 @@
 import sys
+import tempfile
 import types
 import unittest
+from pathlib import Path
 
 import numpy as np
 
@@ -16,6 +18,7 @@ except ModuleNotFoundError:
 from ingest_campaign import (
     _build_schema_time_context,
     _interpret_campaign_schema,
+    _load_campaign_schema,
     _schema_metadata_for_file,
 )
 
@@ -155,6 +158,39 @@ class CampaignSchemaTests(unittest.TestCase):
         layout = _interpret_campaign_schema(schema, self.dataset_names, {})
 
         self.assertEqual(layout["file_groups"]["simulation"]["datasets"], [self.simulation_a])
+
+    def test_external_campaign_schema_preserves_file_group_pattern(self):
+        datasets = ["xgc.3d.00010.bp", "xgc.3d.00012.bp"]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            schema_path = Path(temp_dir) / "schema.yaml"
+            schema_path.write_text(
+                """
+schema_version: 1
+name: code_xgc
+files:
+  xgc_3d:
+    role: time_series
+    mode: file_per_timestep
+    pattern: xgc.3d.*.bp
+    step_from_filename: 'xgc\\.3d\\.(\\d+)\\.bp'
+""".strip(),
+                encoding="utf-8",
+            )
+
+            layout = _load_campaign_schema(
+                "/campaign/without-embedded-schema.aca",
+                datasets,
+                {},
+                campaign_schema_path=str(schema_path),
+            )
+
+        group = layout["file_groups"]["xgc_3d"]
+        self.assertEqual(group["pattern"], "xgc.3d.*.bp")
+        context = _build_schema_time_context(layout, FakeReader({}), {})
+        self.assertEqual(
+            context["dataset_metadata"][datasets[0]]["schema_pattern"],
+            "xgc.3d.*.bp",
+        )
 
 
 if __name__ == "__main__":

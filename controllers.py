@@ -52,7 +52,15 @@ def _variable_groups_from_navigation(nodes: List[NavigationNode]) -> List[Dict[s
                 }
             )
         if variables:
-            groups.append({"name": str(node.get("label", "") or ""), "variables": variables})
+            group: Dict[str, Any] = {
+                "name": str(node.get("label", "") or ""),
+                "variables": variables,
+            }
+            resource = node.get("resource") or {}
+            file_count = int(resource.get("file_count", 0) or 0)
+            if file_count > 1:
+                group["file_count"] = file_count
+            groups.append(group)
     return groups
 
 
@@ -63,6 +71,7 @@ def attach_controllers(
     parse_campaign,
     campaign_path: str,
     image_association_schema_path: str = "",
+    campaign_schema_path: str = "",
 ):
     state, ctrl = server.state, server.controller
     application = SeuratApplication(db)
@@ -81,10 +90,15 @@ def attach_controllers(
             return and_filter(query_filter, source_restriction)
         return query_filter or source_restriction or None
 
+    def variable_pane_view() -> str:
+        view = str(getattr(state, "variablePaneView", "variables") or "variables")
+        return "files" if view == "files" else "variables"
+
     def refresh_variable_list():
+        view = variable_pane_view()
         navigation = application.get_navigation(
             {
-                "view": "variables",
+                "view": view,
                 "query": active_query_filter() or {},
                 "only_visualized": bool(state.showOnlyVisualizedVars),
                 "parent_id": None,
@@ -92,20 +106,36 @@ def attach_controllers(
         )
         grouped = _variable_groups_from_navigation(navigation)
         state.variableGroups = grouped
-        variables = [v for g in grouped for v in (g.get("variables") or []) if isinstance(v, dict)]
-        state.variableNames = [str(v.get("id", "") or "") for v in variables if str(v.get("id", "") or "")]
+        variables = [
+            variable
+            for group in grouped
+            for variable in (group.get("variables") or [])
+            if isinstance(variable, dict)
+        ]
+        state.variableNames = list(
+            dict.fromkeys(
+                str(v.get("id", "") or "")
+                for v in variables
+                if str(v.get("id", "") or "")
+            )
+        )
         state.variableLabelsById = {
-            str(v.get("id", "") or ""): str(v.get("label", "") or v.get("name", "") or v.get("id", "") or "")
+            str(v.get("id", "") or ""): str(
+                v.get("label", "") or v.get("name", "") or v.get("id", "") or ""
+            )
             for v in variables
             if str(v.get("id", "") or "")
         }
-        existing_collapsed = dict(state.variableGroupCollapsed or {})
+        collapsed_by_view = dict(getattr(state, "variableGroupCollapsedByView", {}) or {})
+        existing_collapsed = dict(collapsed_by_view.get(view, {}) or {})
         valid_group_names = {str(g.get("name", "")) for g in grouped}
         state.variableGroupCollapsed = {
-            name: bool(existing_collapsed.get(name, False))
+            name: bool(existing_collapsed.get(name, True))
             for name in valid_group_names
             if name
         }
+        collapsed_by_view[view] = dict(state.variableGroupCollapsed)
+        state.variableGroupCollapsedByView = collapsed_by_view
         state.dbOk = db.ok
         state.dbStatus = "Connected" if db.ok else f"DB error: {db.last_error}"
 
@@ -1750,8 +1780,10 @@ Notes:
     def source_row_for_variable(row: Dict[str, Any], variable_id: str) -> Dict[str, str]:
         target = {
             "variable_id": str(variable_id or ""),
+            "source_label": str(row.get("source_label", "") or ""),
             "source_dataset": str(row.get("source_dataset", "") or ""),
             "schema_file_group": str(row.get("schema_file_group", "") or ""),
+            "schema_pattern": str(row.get("schema_pattern", "") or ""),
             "schema_mode": str(row.get("schema_mode", "") or ""),
             "producer": str(row.get("producer", "") or ""),
             "casename": str(row.get("casename", "") or ""),
@@ -2081,7 +2113,7 @@ Notes:
             source_filter=source_filter,
             extra_filter=active_filter,
         )
-        if existing_cell and source_filter and not vis_names:
+        if existing_cell and not source_row and source_filter and not vis_names:
             fallback_row = first_query_source_row_for_variable(var_id, preferred_vis)
             if fallback_row:
                 source_fields = source_fields_from_row(fallback_row)
@@ -2102,6 +2134,12 @@ Notes:
                 existing_cell=existing_cell,
             )
 
+        source_label = source_name_for_row(source_row or {})
+        no_visualization_note = (
+            f"No visualization for source {source_label}"
+            if source_label
+            else "No visualization types for this variable"
+        )
         cell.update(
             {
                 "variable_id": var_id,
@@ -2110,7 +2148,7 @@ Notes:
                 "selected_visualization": selected_vis,
                 "visualization_options": vis_names,
                 "status": "no-visualizations",
-                "note": "No visualization types for this variable",
+                "note": no_visualization_note,
             }
         )
         cell.update({k: v for k, v in source_fields.items() if v})
@@ -2372,7 +2410,7 @@ Notes:
             existing_cell=existing,
         )
         status = str(new_cell.get("status", "") or "")
-        if status in {"error", "no-visualizations"}:
+        if status == "error":
             note = str(new_cell.get("note", "") or "No visualization for this source")
             raise ValueError(note)
         return new_cell
@@ -2469,6 +2507,22 @@ Notes:
         else:
             update_selected_var_panels(var, preferred_source_key=preferred_key)
         state.sourceDialogInitialSelectedSourceKeys = normalize_source_keys(state.selectedSourceKeys or source_keys)
+        state.showSourcesModal = True
+
+    def open_source_dialog_for_details() -> None:
+        var = str(state.detailsSelectedVarId or state.selectedVar or "").strip()
+        if not var:
+            return
+
+        state.sourceDialogTargetCellIndices = []
+        state.sourceDialogCellIndex = -1
+        state.sourceDialogMode = "single"
+        state.sourceDialogTitle = f"Sources: {variable_label(var)}"
+        state.sourceDialogStatus = ""
+        state.sourceDialogStatusIsError = False
+        state.selectedVar = var
+        state.draggedVar = var
+        state.sourceDialogInitialSelectedSourceKeys = normalize_source_keys(state.selectedSourceKeys or [])
         state.showSourcesModal = True
 
     def maybe_handle_generated_scalar_plot(
@@ -2870,6 +2924,9 @@ Notes:
         collapsed = dict(state.variableGroupCollapsed or {})
         collapsed[name] = not bool(collapsed.get(name, False))
         state.variableGroupCollapsed = collapsed
+        collapsed_by_view = dict(getattr(state, "variableGroupCollapsedByView", {}) or {})
+        collapsed_by_view[variable_pane_view()] = dict(collapsed)
+        state.variableGroupCollapsedByView = collapsed_by_view
 
     @ctrl.add("add_var_to_grid")
     def add_var_to_grid(var_name: str, **_):
@@ -4232,16 +4289,19 @@ Notes:
 
     @ctrl.add("toggle_sources")
     def toggle_sources(**_):
-        opening = not bool(state.showSourcesModal)
-        state.showSourcesModal = opening
-        if opening:
-            try:
-                idx = int(state.activeGridCell)
-            except Exception:
-                idx = -1
+        if bool(state.showSourcesModal):
             state.showSourcesModal = False
-            if is_valid_grid_index(idx):
-                open_source_dialog_for_cell(idx, prefer_multi=True)
+            return
+
+        try:
+            idx = int(state.activeGridCell)
+        except Exception:
+            idx = -1
+
+        if is_valid_grid_index(idx):
+            open_source_dialog_for_cell(idx, prefer_multi=True)
+        if not bool(state.showSourcesModal):
+            open_source_dialog_for_details()
 
     @ctrl.add("cancel_source_dialog")
     def cancel_source_dialog(**_):
@@ -4271,6 +4331,25 @@ Notes:
         allow_multi_sources = mode == "add" and source_dialog_multi_source_allowed(targets, cells)
         if not allow_multi_sources:
             selected = selected[:1]
+
+        if not targets:
+            if not selected:
+                state.sourceDialogStatus = "Select a source."
+                state.sourceDialogStatusIsError = True
+                return
+
+            var = str(state.detailsSelectedVarId or state.selectedVar or "").strip()
+            if not var:
+                state.sourceDialogStatus = "Select a variable first."
+                state.sourceDialogStatusIsError = True
+                return
+
+            update_selected_var_panels(var, preferred_source_key=selected[0])
+            state.sourceDialogInitialSelectedSourceKeys = selected
+            state.sourceDialogStatus = ""
+            state.sourceDialogStatusIsError = False
+            state.showSourcesModal = False
+            return
 
         applied, failures = apply_source_rows_to_targets(
             targets,
@@ -4528,6 +4607,10 @@ Notes:
     def on_show_only_visualized_vars(showOnlyVisualizedVars, **_):
         refresh_after_variable_catalog_change()
 
+    @state.change("variablePaneView")
+    def on_variable_pane_view(variablePaneView, **_):
+        refresh_variable_list()
+
     @state.change("selectedVar")
     def on_selected_var(selectedVar, **_):
         if not selectedVar:
@@ -4545,7 +4628,12 @@ Notes:
 
         try:
             state.dbOk = True
-            schema_note = f" (schema: {image_association_schema_path})" if image_association_schema_path else ""
+            schema_paths = [
+                path
+                for path in (campaign_schema_path, image_association_schema_path)
+                if path
+            ]
+            schema_note = f" (schema: {', '.join(schema_paths)})" if schema_paths else ""
             state.dbStatus = f"Loading {campaign_path}{schema_note}..."
 
             collection.drop()
@@ -4553,6 +4641,7 @@ Notes:
                 campaign_path,
                 collection,
                 image_association_schema_path=image_association_schema_path or None,
+                campaign_schema_path=campaign_schema_path or None,
             )
 
             refresh_variable_list()

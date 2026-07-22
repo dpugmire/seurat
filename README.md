@@ -20,7 +20,7 @@ High-level structure:
 Requirements (at minimum):
 
 - Python deps: `trame`, `trame-vuetify`, `adios2`, `numpy`, `Pillow`.
-- Optional for schema-driven image associations: `pyyaml`.
+- Optional for YAML campaign and image-association schemas: `pyyaml`.
 - `ffmpeg` available on PATH for movie preview tiles.
 
 Image sequence bytes are loaded lazily from the ACA file when a preview tile is
@@ -37,6 +37,9 @@ Example:
 
 ```bash
 python app.py campaign.aca
+
+# Optional: supply a campaign schema when schema.yaml is not embedded
+python app.py campaign.aca --campaign-schema schema.yaml
 
 # Optional: pass image association schema text/YAML
 python app.py campaign.aca --image-association-schema image_variable_map.yaml
@@ -80,8 +83,9 @@ files:
     pattern: "runs/**/analysis"
 ```
 
-The schema must be stored in the campaign, rather than merely referenced, so
-it remains available when the campaign is copied to another system.
+Embedding the schema keeps it available when the campaign is copied to another
+system. For archives without an embedded schema, pass the same schema explicitly
+with `--campaign-schema path/to/schema.yaml`.
 
 Visualization association notes:
 
