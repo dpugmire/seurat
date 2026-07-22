@@ -1,0 +1,1 @@
+"""Seurat Trame application package."""

@@ -1,10 +1,9 @@
 # Seurat
 
 This repository contains the active Trame/Vue3 campaign viewer for ADIOS
-campaign archives. Use `app.py` as the main entrypoint. The older prototype
-files, including `catnip_db_app.py`, `catnip_parse_db.py`, and
-`catnip_tree_app.py`, should not be treated as the supported application path
-unless the user explicitly asks to work on them.
+campaign archives. Use `app.py` as the main entrypoint. Unsupported prototype
+applications inherited from the original viewer repository have been removed;
+do not restore them as alternate application paths.
 
 ## From-Scratch Setup
 
@@ -110,6 +109,7 @@ Before handing changes back, use targeted checks when possible:
 
 ```bash
 python -m py_compile app.py ingest_campaign.py db.py controllers.py ui.py
+python -m pytest -q
 python -m pip check
 ```
 

@@ -5,15 +5,32 @@ On startup, it reads a `.aca` campaign file into a Seurat SQLite sidecar DB and
 provides a UI to browse variables, view min/max summaries, filter with a simple
 query language, and preview image sequences as short videos.
 
-High-level structure:
+## Architecture
 
-- `app.py`: entrypoint; opens the SQLite sidecar, boots Trame, wires controllers/UI.
+`seurat.app.SeuratApp` is the composition root. It owns the Trame server,
+enables Seurat's web module, initializes state, connects the data access layer
+to controller adapters, and constructs the UI. The top-level `app.py`, `ui.py`,
+and `state_init.py` modules remain compatibility entry points.
+
+The main architectural boundaries are:
+
+- `seurat/components/`: composable `TrameComponent` UI sections. The root UI
+  owns the query toolbar, variable catalog, grid workspace, dialogs/settings,
+  and context menu.
+- `seurat/module/`: registered JavaScript and CSS assets served by Trame. Web
+  identifiers use the `seurat` namespace and assets are included in wheels.
+- `seurat/models/`: pure, dependency-free grid, timeline, and source-selection
+  behavior. Controllers adapt Trame state to these testable operations.
+- `seurat/state/`: explicit, non-overlapping state ownership for catalog,
+  sources, visualization settings, grid/timeline, and context menus.
 - `application.py`: backend application facade and typed navigation contract.
-- `ingest_campaign.py`: reads a `.aca` file via ADIOS2 and writes documents to the sidecar.
-- `sqlite_store.py`: lightweight SQLite collection adapter used by the viewer.
-- `db.py`: data access helpers for summaries and movie tiles.
-- `controllers.py`: Trame callbacks (querying, selection, ingest-on-start).
-- `ui.py`: Vuetify3 UI layout.
+- `controllers.py`: Trame-facing adapters and the remaining orchestration logic.
+- `ingest_campaign.py`, `sqlite_store.py`, and `db.py`: ACA ingestion, SQLite
+  collection compatibility, and campaign data access/rendering.
+
+Keep domain decisions in `seurat/models/` and state defaults in the owning
+`seurat/state/` module. UI components should bind state and controller actions,
+not duplicate those decisions in markup or browser code.
 
 ## Run
 
