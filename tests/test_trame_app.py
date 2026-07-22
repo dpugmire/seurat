@@ -7,6 +7,7 @@ from trame.app import get_server
 
 import app as compatibility_app
 from seurat.app import SeuratApp, build_parser
+from seurat import module as seurat_module
 
 
 class SeuratAppTests(unittest.TestCase):
@@ -48,6 +49,18 @@ class SeuratAppTests(unittest.TestCase):
         self.assertIs(app.db, db)
         self.assertIs(app.refresh_variable_list, refresh_variable_list)
         self.assertIs(app.ui, built_ui)
+        self.assertEqual(
+            server.state.trame__scripts,
+            [f"{seurat_module.BASE_URL}/seurat.js"],
+        )
+        self.assertEqual(
+            server.state.trame__styles,
+            [f"{seurat_module.BASE_URL}/seurat.css"],
+        )
+        self.assertEqual(
+            server.serve[seurat_module.BASE_URL],
+            seurat_module.serve[seurat_module.BASE_URL],
+        )
         self.assertEqual(app.campaign_path, str(campaign_path))
         self.assertEqual(
             app.image_association_schema_path,

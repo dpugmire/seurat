@@ -12,6 +12,8 @@ from sqlite_store import open_sqlite_collection
 from state_init import init_state
 from ui import build_ui
 
+from . import module as seurat_module
+
 
 def _expanded_path(path):
     return str(Path(path).expanduser()) if path else ""
@@ -32,6 +34,7 @@ class SeuratApp(TrameApp):
         ui_builder=build_ui,
     ):
         super().__init__(server, client_type="vue3")
+        self.server.enable_module(seurat_module)
 
         self.campaign_path = _expanded_path(campaign_path)
         self.image_association_schema_path = _expanded_path(

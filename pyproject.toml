@@ -41,3 +41,6 @@ py-modules = [
 
 [tool.setuptools.packages.find]
 include = ["seurat*"]
+
+[tool.setuptools.package-data]
+"seurat.module" = ["serve/*.css", "serve/*.js"]
