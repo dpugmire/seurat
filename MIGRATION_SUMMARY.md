@@ -28,14 +28,26 @@ Original repo:
 The Trame rearchitecture work is on:
 
 ```text
-branch: rearchitect-trame-phase2
+branch: rearchitect-trame-phase3
 remote: origin -> https://github.com/dpugmire/seurat.git
 ```
 
 Phase 1 was merged into `main` by GitHub PR #4 at merge commit
-`82fd7bc660bd07cca1ba0965b80742b6ed24f0a4`. Phase 2 decomposes the remaining
-controller closure into domain-owned Trame adapters and extracts pure controller
-logic into testable model modules.
+`82fd7bc660bd07cca1ba0965b80742b6ed24f0a4`. Phase 2 was merged by GitHub PR #5
+at merge commit `6dee8a153727cf08f979636e4db88cc6785ecbb7`; it decomposed the remaining
+controller closure into domain-owned Trame adapters and extracted pure
+controller logic into testable model modules.
+
+Phase 3A adds an opt-in Playwright/Chromium characterization suite around a
+deterministic Trame application. It covers client mounting, variable group
+state, grid selection and assignment, layout controls, context menus, rendered
+plot output, and step-index versus physical-time timeline behavior.
+
+Phase 3B begins the client-side lifecycle migration. A registered
+`seurat-grid-runtime` Vue component now owns grid timeline/VCR listeners and
+the grid-media observer for the mounted workspace, including cleanup on
+unmount. Existing drag/drop, resizing, and plot-interaction handlers remain in
+the shared client module for later incremental slices.
 
 The last commit before the rearchitecture is preserved by the annotated tag:
 
@@ -92,6 +104,7 @@ The standard verification commands are:
 ```bash
 python -m py_compile app.py config.py controllers.py db.py ingest_campaign.py media_utils.py query_parser.py state_init.py ui.py
 python -m pytest -q
+SEURAT_RUN_BROWSER_TESTS=1 python -m pytest -q tests/browser
 python -m pip check
 ```
 
@@ -99,7 +112,8 @@ Install the repo dependencies with:
 
 ```bash
 cd /Users/dpn/proj/seurat
-python -m pip install -e ".[schema]"
+python -m pip install -e ".[schema,test]"
+python -m playwright install chromium
 ```
 
 Then run:

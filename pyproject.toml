@@ -20,6 +20,10 @@ dependencies = [
 schema = [
     "PyYAML",
 ]
+test = [
+    "pytest",
+    "pytest-playwright",
+]
 
 [project.scripts]
 seurat = "seurat.app:main"
@@ -44,3 +48,8 @@ include = ["seurat*"]
 
 [tool.setuptools.package-data]
 "seurat.module" = ["serve/*.css", "serve/*.js"]
+
+[tool.pytest.ini_options]
+markers = [
+    "browser: browser-level Trame/Vue integration test",
+]
