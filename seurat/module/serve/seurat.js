@@ -1,7 +1,7 @@
-(function initSeuratDragDrop() {
+(function initSeuratClient() {
   try {
     if (typeof window.trame === "undefined") {
-      setTimeout(initSeuratDragDrop, 200);
+      setTimeout(initSeuratClient, 200);
       return;
     }
     let gridRuntimeRoot = null;
@@ -500,7 +500,7 @@
       if (typeof updatePlotCursors === "function") {
         updatePlotCursors(safeSeconds, videos);
       }
-      window.__seuratGridSyncTime = safeSeconds;
+      gridVcrState.syncTime = safeSeconds;
       if (!slider) return;
 
       if (timeline.length) {
@@ -551,133 +551,6 @@
         slider.value = String(Math.round(progress * maxFrames));
       }
     }
-
-    // Always expose a VCR handler, even when drag/drop was initialized
-    // in an older page session.
-    window.seuratGridVcr = function(action) {
-      if (typeof window.__seuratMainGridVcr === "function") {
-        window.__seuratMainGridVcr(action);
-        return;
-      }
-      const videos = Array.from(gridRuntimeQueryAll('video[data-grid-video="1"]'));
-      if (!videos.length) {
-        updateVcrTimeLabelFromSeconds(0, []);
-        return;
-      }
-
-      function getCommonEndTime(vs) {
-        const count = getCommonVideoFrameCount(vs);
-        if (count !== null) {
-          return timeForFrameOrdinal(Math.max(0, count - 1), vs);
-        }
-        let minDuration = Infinity;
-        for (const v of vs) {
-          const d = Number(v && v.duration);
-          if (Number.isFinite(d) && d > 0) {
-            minDuration = Math.min(minDuration, d);
-          }
-        }
-        if (!Number.isFinite(minDuration)) return null;
-        return Math.max(0, minDuration - 0.04);
-      }
-
-      function clampTime(raw) {
-        let t = Number(raw);
-        if (!Number.isFinite(t) || t < 0) t = 0;
-        const commonEnd = getCommonEndTime(videos);
-        if (commonEnd !== null) t = Math.min(t, commonEnd);
-        return t;
-      }
-
-      function setAllTime(raw) {
-        const t = clampTime(raw);
-        for (const v of videos) {
-          try {
-            v.currentTime = t;
-          } catch (_err) {
-            // ignore seek errors
-          }
-        }
-        updateVcrTimeLabelFromSeconds(t, videos);
-        return t;
-      }
-
-      function pauseAll() {
-        for (const v of videos) {
-          try {
-            v.pause();
-          } catch (_err) {
-            // ignore pause errors
-          }
-        }
-      }
-
-      function playAll() {
-        for (const v of videos) {
-          try {
-            const p = v.play();
-            if (p && typeof p.catch === "function") p.catch(function() {});
-          } catch (_err) {
-            // ignore autoplay errors
-          }
-        }
-      }
-
-      function inferFrameStepSeconds(vs) {
-        const fps = inferFpsForVideos(vs);
-        return 1.0 / fps;
-      }
-
-      const fps = inferFpsForVideos(videos);
-      const frameStep = inferFrameStepSeconds(videos);
-      const current = Number(videos[0] && videos[0].currentTime);
-      const base = Number.isFinite(current) ? current : 0;
-      updateVcrTimeLabelFromSeconds(base, videos);
-      const a = String(action || "").trim().toLowerCase();
-
-      if (a === "play") {
-        setAllTime(base);
-        playAll();
-        return;
-      }
-      if (a === "pause") {
-        pauseAll();
-        return;
-      }
-      if (a === "stop") {
-        pauseAll();
-        setAllTime(0);
-        return;
-      }
-      if (a === "start") {
-        setAllTime(0);
-        return;
-      }
-      if (a === "end") {
-        const endTime = getCommonEndTime(videos);
-        setAllTime(endTime !== null ? endTime : base);
-        return;
-      }
-      if (a === "slider") {
-        setAllTime(getVcrSliderTimeValue(videos, []));
-        return;
-      }
-      if (a === "frameback") {
-        setAllTime(base - frameStep);
-        return;
-      }
-      if (a === "frame") {
-        setAllTime(base + frameStep);
-        return;
-      }
-      if (a === "back") {
-        setAllTime(base - frameStep);
-        return;
-      }
-      if (a === "forward") {
-        setAllTime(base + frameStep);
-      }
-    };
 
     let panZoomDrag = null;
     let suppressPanZoomClick = false;
@@ -1026,8 +899,6 @@
       }
     }
 
-    if (window.__seuratDnDInit) return;
-    window.__seuratDnDInit = true;
     const gridVcrState = {
       playing: false,
       syncTime: 0,
@@ -1037,8 +908,6 @@
     };
     let gridMediaSyncTimer = null;
     let gridMediaObserver = null;
-
-    setupPlot1dObserver();
 
     function getGridVideos() {
       return Array.from(gridRuntimeQueryAll('video[data-grid-video="1"]'));
@@ -1388,7 +1257,7 @@
       if (!el) return;
       renderPlot1d(el);
       if (typeof updatePlotCursors === "function") {
-        updatePlotCursors(window.__seuratGridSyncTime || 0, getGridVideos());
+        updatePlotCursors(gridVcrState.syncTime || 0, getGridVideos());
       }
     }
 
@@ -1398,7 +1267,7 @@
       el.__seuratPlotRenderKey = "";
       renderPlot1d(el);
       if (typeof updatePlotCursors === "function") {
-        updatePlotCursors(window.__seuratGridSyncTime || 0, getGridVideos());
+        updatePlotCursors(gridVcrState.syncTime || 0, getGridVideos());
       }
     }
 
@@ -1412,8 +1281,6 @@
         resetPlotView(el);
       }
     }
-    window.seuratResetPlotViewForCellIndex = resetPlotViewForCellIndex;
-
     function plotLocalPoint(el, event) {
       const rect = el.getBoundingClientRect ? el.getBoundingClientRect() : { left: 0, top: 0 };
       return {
@@ -1814,6 +1681,15 @@
       }
     }
 
+    let plotViewDrag = null;
+    let suppressPlotViewClick = false;
+    let plotCtrlDown = false;
+    let plotRenderTimer = null;
+    let plotResizeObserver = null;
+    let plotMutationObserver = null;
+    let observedPlots = new Set();
+    const PLOT_WHEEL_OPTIONS = { capture: true, passive: false };
+
     function nearestPointInSeries(points, x, y) {
       if (!points || !points.length) return null;
       let lo = 0;
@@ -1854,7 +1730,7 @@
       if (!el || !event) return;
       renderPlot1d(el);
       const meta = el.__seuratPlotMeta;
-      const ctrlActive = !!(event.ctrlKey || window.__seuratPlotCtrlDown) && !event.shiftKey;
+      const ctrlActive = !!(event.ctrlKey || plotCtrlDown) && !event.shiftKey;
       if (!meta || !meta.hoverGroup || !meta.hoverTip || !ctrlActive) {
         hidePlotHover(el);
         return;
@@ -1913,237 +1789,331 @@
       meta.hoverTip.style.top = String(Math.round(tipY)) + "px";
     }
 
-    function setupPlotHoverHandlers() {
-      if (window.__seuratPlotHoverHandlersInit) return;
-      window.__seuratPlotHoverHandlersInit = true;
-      window.__seuratPlotCtrlDown = false;
-      let plotViewDrag = null;
-      let suppressPlotViewClick = false;
+    function plotElementFromEvent(event) {
+      const target = event && event.target;
+      const plot = target && target.closest ? target.closest(".seurat-plot1d") : null;
+      return plot && gridRuntimeRoot && gridRuntimeRoot.contains(plot) ? plot : null;
+    }
 
-      function plotElementFromEvent(e) {
-        const target = e && e.target;
-        return target && target.closest ? target.closest(".seurat-plot1d") : null;
+    function releasePlotPointerCapture(drag) {
+      if (!drag || !drag.el || drag.pointerId === undefined) return;
+      try {
+        if (!drag.el.hasPointerCapture || drag.el.hasPointerCapture(drag.pointerId)) {
+          drag.el.releasePointerCapture(drag.pointerId);
+        }
+      } catch (_) {
+        // The pointer may already have been released by the browser.
+      }
+    }
+
+    function beginPlotViewDrag(event, el, mode) {
+      renderPlot1d(el);
+      const meta = el.__seuratPlotMeta;
+      if (!meta || !meta.xAxis || !meta.yAxis) return;
+      finishPlotViewDrag();
+      const point = plotLocalPoint(el, event);
+      plotViewDrag = {
+        el,
+        mode,
+        startX: Number(event.clientX) || 0,
+        startY: Number(event.clientY) || 0,
+        pointerId: event.pointerId,
+        moved: false,
+        xAxis: meta.xAxis,
+        yAxis: meta.yAxis,
+        plotW: Math.max(1, meta.plotW),
+        plotH: Math.max(1, meta.plotH),
+        centerX: plotAxisTForLocalPoint(meta.xAxis, meta, point, "x"),
+        centerY: plotAxisTForLocalPoint(meta.yAxis, meta, point, "y"),
+      };
+      el.classList.add(mode === "zoom" ? "is-zooming" : "is-panning");
+      document.body.classList.add(
+        mode === "zoom" ? "seurat-plot-zooming" : "seurat-plot-panning"
+      );
+      hidePlotHover(el);
+      try {
+        el.setPointerCapture(event.pointerId);
+      } catch (_) {
+        // Pointer capture is best-effort for older browser implementations.
+      }
+      event.preventDefault();
+      event.stopPropagation();
+    }
+
+    function updatePlotViewDrag(event) {
+      if (!plotViewDrag) return;
+      if (
+        plotViewDrag.pointerId !== undefined &&
+        event.pointerId !== plotViewDrag.pointerId
+      ) {
+        return;
+      }
+      const drag = plotViewDrag;
+      const dx = (Number(event.clientX) || 0) - drag.startX;
+      const dy = (Number(event.clientY) || 0) - drag.startY;
+      if (Math.abs(dx) > 2 || Math.abs(dy) > 2) {
+        drag.moved = true;
       }
 
-      function beginPlotViewDrag(e, el, mode) {
-        renderPlot1d(el);
-        const meta = el.__seuratPlotMeta;
-        if (!meta || !meta.xAxis || !meta.yAxis) return;
-        const point = plotLocalPoint(el, e);
-        plotViewDrag = {
-          el,
-          mode,
-          startX: Number(e.clientX) || 0,
-          startY: Number(e.clientY) || 0,
-          pointerId: e.pointerId,
-          moved: false,
-          xAxis: meta.xAxis,
-          yAxis: meta.yAxis,
-          plotW: Math.max(1, meta.plotW),
-          plotH: Math.max(1, meta.plotH),
-          centerX: plotAxisTForLocalPoint(meta.xAxis, meta, point, "x"),
-          centerY: plotAxisTForLocalPoint(meta.yAxis, meta, point, "y"),
-        };
-        el.classList.add(mode === "zoom" ? "is-zooming" : "is-panning");
-        document.body.classList.add(mode === "zoom" ? "seurat-plot-zooming" : "seurat-plot-panning");
-        hidePlotHover(el);
-        try {
-          el.setPointerCapture(e.pointerId);
-        } catch (_) {
-          // Pointer capture is best-effort; document listeners keep the drag alive.
-        }
-        e.preventDefault();
-        e.stopPropagation();
+      let nextXAxis = null;
+      let nextYAxis = null;
+      if (drag.mode === "pan") {
+        const xSpan = drag.xAxis.tMax - drag.xAxis.tMin;
+        const ySpan = drag.yAxis.tMax - drag.yAxis.tMin;
+        const nextXMin = drag.xAxis.tMin - (dx / drag.plotW) * xSpan;
+        const nextXMax = drag.xAxis.tMax - (dx / drag.plotW) * xSpan;
+        const nextYMin = drag.yAxis.tMin + (dy / drag.plotH) * ySpan;
+        const nextYMax = drag.yAxis.tMax + (dy / drag.plotH) * ySpan;
+        nextXAxis = plotAxisFromTransformRange(drag.xAxis, nextXMin, nextXMax);
+        nextYAxis = plotAxisFromTransformRange(drag.yAxis, nextYMin, nextYMax);
+      } else {
+        const rangeFactor = Math.exp(dy * 0.01);
+        nextXAxis = zoomPlotAxisAround(drag.xAxis, drag.centerX, rangeFactor);
+        nextYAxis = zoomPlotAxisAround(drag.yAxis, drag.centerY, rangeFactor);
       }
 
-      function updatePlotViewDrag(e) {
-        if (!plotViewDrag) return;
-        const drag = plotViewDrag;
-        const dx = (Number(e.clientX) || 0) - drag.startX;
-        const dy = (Number(e.clientY) || 0) - drag.startY;
-        if (Math.abs(dx) > 2 || Math.abs(dy) > 2) {
-          drag.moved = true;
-        }
-
-        let nextXAxis = null;
-        let nextYAxis = null;
-        if (drag.mode === "pan") {
-          const xSpan = drag.xAxis.tMax - drag.xAxis.tMin;
-          const ySpan = drag.yAxis.tMax - drag.yAxis.tMin;
-          const nextXMin = drag.xAxis.tMin - (dx / drag.plotW) * xSpan;
-          const nextXMax = drag.xAxis.tMax - (dx / drag.plotW) * xSpan;
-          const nextYMin = drag.yAxis.tMin + (dy / drag.plotH) * ySpan;
-          const nextYMax = drag.yAxis.tMax + (dy / drag.plotH) * ySpan;
-          nextXAxis = plotAxisFromTransformRange(drag.xAxis, nextXMin, nextXMax);
-          nextYAxis = plotAxisFromTransformRange(drag.yAxis, nextYMin, nextYMax);
-        } else {
-          const rangeFactor = Math.exp(dy * 0.01);
-          nextXAxis = zoomPlotAxisAround(drag.xAxis, drag.centerX, rangeFactor);
-          nextYAxis = zoomPlotAxisAround(drag.yAxis, drag.centerY, rangeFactor);
-        }
-
-        if (nextXAxis && nextYAxis) {
-          setPlotViewStateFromAxes(drag.el, nextXAxis, nextYAxis);
-          rerenderPlotView(drag.el);
-        }
-        e.preventDefault();
-        e.stopPropagation();
+      if (nextXAxis && nextYAxis) {
+        setPlotViewStateFromAxes(drag.el, nextXAxis, nextYAxis);
+        rerenderPlotView(drag.el);
       }
+      event.preventDefault();
+      event.stopPropagation();
+    }
 
-      function finishPlotViewDrag(e) {
-        if (!plotViewDrag) return;
-        const drag = plotViewDrag;
-        drag.el.classList.remove("is-panning");
-        drag.el.classList.remove("is-zooming");
-        document.body.classList.remove("seurat-plot-panning");
-        document.body.classList.remove("seurat-plot-zooming");
-        try {
-          if (drag.pointerId !== undefined) {
-            drag.el.releasePointerCapture(drag.pointerId);
-          }
-        } catch (_) {
-          // Ignore release failures for pointers that were not captured.
-        }
-        suppressPlotViewClick = !!drag.moved;
-        plotViewDrag = null;
-        if (e) {
-          e.preventDefault();
-          e.stopPropagation();
-        }
+    function finishPlotViewDrag(event) {
+      if (!plotViewDrag) return;
+      const drag = plotViewDrag;
+      plotViewDrag = null;
+      drag.el.classList.remove("is-panning", "is-zooming");
+      document.body.classList.remove("seurat-plot-panning", "seurat-plot-zooming");
+      suppressPlotViewClick = !!drag.moved;
+      releasePlotPointerCapture(drag);
+      if (event) {
+        event.preventDefault();
+        event.stopPropagation();
       }
+    }
 
-      document.addEventListener("keydown", function(e) {
-        if (e && e.key === "Control") {
-          window.__seuratPlotCtrlDown = true;
-        }
-      });
-      document.addEventListener("keyup", function(e) {
-        if (e && e.key === "Control") {
-          window.__seuratPlotCtrlDown = false;
-          hideAllPlotHovers();
-        }
-      });
-      window.addEventListener("blur", function() {
-        window.__seuratPlotCtrlDown = false;
+    function onPlotKeyDown(event) {
+      if (event && event.key === "Control") {
+        plotCtrlDown = true;
+      }
+    }
+
+    function onPlotKeyUp(event) {
+      if (event && event.key === "Control") {
+        plotCtrlDown = false;
         hideAllPlotHovers();
-      });
-      document.addEventListener("pointermove", function(e) {
-        if (plotViewDrag) {
-          updatePlotViewDrag(e);
-          return;
-        }
-        const el = plotElementFromEvent(e);
-        if (!el) return;
-        const ctrlActive = !!(e.ctrlKey || window.__seuratPlotCtrlDown) && !e.shiftKey;
-        if (!ctrlActive) {
-          hidePlotHover(el);
-          return;
-        }
-        updatePlotHover(el, e);
-      });
-      document.addEventListener("pointerdown", function(e) {
-        const el = plotElementFromEvent(e);
-        if (!el) return;
-        const ctrlActive = !!(e.ctrlKey || window.__seuratPlotCtrlDown);
-        const isShiftPan = e.button === 0 && e.shiftKey && !ctrlActive;
-        const isMiddleZoom = e.button === 1;
-        if (isShiftPan || isMiddleZoom) {
-          beginPlotViewDrag(e, el, isMiddleZoom ? "zoom" : "pan");
-          return;
-        }
-        if (el && e.ctrlKey && e.button === 0) {
-          e.preventDefault();
-          e.stopPropagation();
-        }
-      }, true);
-      document.addEventListener("pointerup", finishPlotViewDrag, true);
-      document.addEventListener("pointercancel", finishPlotViewDrag, true);
-      document.addEventListener("wheel", function(e) {
-        const el = plotElementFromEvent(e);
-        if (!el) return;
-        const rangeFactor = Math.exp((Number(e.deltaY) || 0) * 0.0015);
-        zoomPlotViewAt(el, e, rangeFactor);
+      }
+    }
+
+    function onPlotWindowBlur() {
+      plotCtrlDown = false;
+      hideAllPlotHovers();
+      finishPlotViewDrag();
+    }
+
+    function onPlotPointerMove(event) {
+      if (plotViewDrag) {
+        updatePlotViewDrag(event);
+        return;
+      }
+      const el = plotElementFromEvent(event);
+      if (!el) return;
+      const ctrlActive = !!(event.ctrlKey || plotCtrlDown) && !event.shiftKey;
+      if (!ctrlActive) {
         hidePlotHover(el);
-        e.preventDefault();
-        e.stopPropagation();
-      }, { capture: true, passive: false });
-      document.addEventListener("dblclick", function(e) {
-        const el = plotElementFromEvent(e);
-        if (!el) return;
-        resetPlotView(el);
-        e.preventDefault();
-        e.stopPropagation();
-      }, true);
-      document.addEventListener("auxclick", function(e) {
-        const el = plotElementFromEvent(e);
-        if (el && e.button === 1) {
-          e.preventDefault();
-          e.stopPropagation();
-        }
-      }, true);
-      document.addEventListener("click", function(e) {
-        if (!suppressPlotViewClick) return;
-        suppressPlotViewClick = false;
-        const el = plotElementFromEvent(e);
-        if (!el) return;
-        e.preventDefault();
-        e.stopPropagation();
-      }, true);
-      document.addEventListener("contextmenu", function(e) {
-        const el = plotElementFromEvent(e);
-        if (el && e.ctrlKey) {
-          e.preventDefault();
-          e.stopPropagation();
-        }
-      }, true);
-      document.addEventListener("pointerout", function(e) {
-        const el = plotElementFromEvent(e);
-        if (!el) return;
-        if (!e.relatedTarget || !el.contains(e.relatedTarget)) {
-          hidePlotHover(el);
-        }
-      });
+        return;
+      }
+      updatePlotHover(el, event);
+    }
+
+    function onPlotPointerDown(event) {
+      const el = plotElementFromEvent(event);
+      if (!el) return;
+      const ctrlActive = !!(event.ctrlKey || plotCtrlDown);
+      const isShiftPan = event.button === 0 && event.shiftKey && !ctrlActive;
+      const isMiddleZoom = event.button === 1;
+      if (isShiftPan || isMiddleZoom) {
+        beginPlotViewDrag(event, el, isMiddleZoom ? "zoom" : "pan");
+        return;
+      }
+      if (event.ctrlKey && event.button === 0) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    }
+
+    function onPlotPointerEnd(event) {
+      if (
+        plotViewDrag &&
+        (plotViewDrag.pointerId === undefined ||
+          event.pointerId === plotViewDrag.pointerId)
+      ) {
+        finishPlotViewDrag(event);
+      }
+    }
+
+    function onPlotLostPointerCapture(event) {
+      if (plotViewDrag && event.target === plotViewDrag.el) {
+        finishPlotViewDrag();
+      }
+    }
+
+    function onPlotWheel(event) {
+      const el = plotElementFromEvent(event);
+      if (!el) return;
+      const rangeFactor = Math.exp((Number(event.deltaY) || 0) * 0.0015);
+      zoomPlotViewAt(el, event, rangeFactor);
+      hidePlotHover(el);
+      event.preventDefault();
+      event.stopPropagation();
+    }
+
+    function onPlotDoubleClick(event) {
+      const el = plotElementFromEvent(event);
+      if (!el) return;
+      resetPlotView(el);
+      event.preventDefault();
+      event.stopPropagation();
+    }
+
+    function onPlotAuxClick(event) {
+      const el = plotElementFromEvent(event);
+      if (el && event.button === 1) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    }
+
+    function onPlotClick(event) {
+      if (!suppressPlotViewClick) return;
+      suppressPlotViewClick = false;
+      const el = plotElementFromEvent(event);
+      if (!el) return;
+      event.preventDefault();
+      event.stopPropagation();
+    }
+
+    function onPlotContextMenu(event) {
+      const el = plotElementFromEvent(event);
+      if (el && event.ctrlKey) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    }
+
+    function onPlotPointerOut(event) {
+      const el = plotElementFromEvent(event);
+      if (el && (!event.relatedTarget || !el.contains(event.relatedTarget))) {
+        hidePlotHover(el);
+      }
     }
 
     function scheduleRenderAllPlot1d() {
-      if (window.__seuratPlotRenderTimer) {
-        clearTimeout(window.__seuratPlotRenderTimer);
-      }
-      window.__seuratPlotRenderTimer = setTimeout(function() {
+      if (!gridRuntimeRoot) return;
+      if (plotRenderTimer) clearTimeout(plotRenderTimer);
+      plotRenderTimer = setTimeout(function() {
+        plotRenderTimer = null;
+        if (!gridRuntimeRoot) return;
         renderAllPlot1d();
-        updatePlotCursors(window.__seuratGridSyncTime || 0, getGridVideos());
+        updatePlotCursors(gridVcrState.syncTime || 0, getGridVideos());
       }, 30);
     }
-    window.seuratScheduleRenderAllPlot1d = scheduleRenderAllPlot1d;
 
     function observePlot1dSizes() {
-      if (!window.ResizeObserver) return;
-      if (!window.__seuratPlotResizeObserver) {
-        window.__seuratPlotResizeObserver = new ResizeObserver(function() {
-          scheduleRenderAllPlot1d();
-        });
+      if (!plotResizeObserver) return;
+      const currentPlots = new Set(getGridPlots());
+      for (const el of observedPlots) {
+        if (!currentPlots.has(el)) {
+          plotResizeObserver.unobserve(el);
+          observedPlots.delete(el);
+        }
       }
-      const resizeObserver = window.__seuratPlotResizeObserver;
-      for (const el of getGridPlots()) {
-        if (!el.__seuratPlotResizeObserved) {
-          resizeObserver.observe(el);
-          el.__seuratPlotResizeObserved = true;
+      for (const el of currentPlots) {
+        if (!observedPlots.has(el)) {
+          plotResizeObserver.observe(el);
+          observedPlots.add(el);
         }
       }
     }
 
-    function setupPlot1dObserver() {
-      setupPlotHoverHandlers();
-      if (window.__seuratPlotObserverInit) return;
-      window.__seuratPlotObserverInit = true;
-      const observer = new MutationObserver(function() {
+    function mountPlotRuntime(root) {
+      plotCtrlDown = false;
+      suppressPlotViewClick = false;
+      root.addEventListener("pointermove", onPlotPointerMove);
+      root.addEventListener("pointerdown", onPlotPointerDown, true);
+      root.addEventListener("pointerup", onPlotPointerEnd, true);
+      root.addEventListener("pointercancel", onPlotPointerEnd, true);
+      root.addEventListener("lostpointercapture", onPlotLostPointerCapture, true);
+      root.addEventListener("wheel", onPlotWheel, PLOT_WHEEL_OPTIONS);
+      root.addEventListener("dblclick", onPlotDoubleClick, true);
+      root.addEventListener("auxclick", onPlotAuxClick, true);
+      root.addEventListener("click", onPlotClick, true);
+      root.addEventListener("contextmenu", onPlotContextMenu, true);
+      root.addEventListener("pointerout", onPlotPointerOut);
+      window.addEventListener("keydown", onPlotKeyDown);
+      window.addEventListener("keyup", onPlotKeyUp);
+      window.addEventListener("blur", onPlotWindowBlur);
+      window.addEventListener("resize", scheduleRenderAllPlot1d);
+
+      observedPlots = new Set();
+      if (window.ResizeObserver) {
+        plotResizeObserver = new ResizeObserver(scheduleRenderAllPlot1d);
+      }
+      plotMutationObserver = new MutationObserver(function() {
         observePlot1dSizes();
         scheduleRenderAllPlot1d();
       });
-      observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-plot", "data-plot-settings"] });
-      window.addEventListener("resize", scheduleRenderAllPlot1d);
+      plotMutationObserver.observe(root, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ["data-plot", "data-plot-settings"],
+      });
       observePlot1dSizes();
       scheduleRenderAllPlot1d();
+    }
+
+    function unmountPlotRuntime(root) {
+      finishPlotViewDrag();
+      suppressPlotViewClick = false;
+      plotCtrlDown = false;
+      root.removeEventListener("pointermove", onPlotPointerMove);
+      root.removeEventListener("pointerdown", onPlotPointerDown, true);
+      root.removeEventListener("pointerup", onPlotPointerEnd, true);
+      root.removeEventListener("pointercancel", onPlotPointerEnd, true);
+      root.removeEventListener("lostpointercapture", onPlotLostPointerCapture, true);
+      root.removeEventListener("wheel", onPlotWheel, PLOT_WHEEL_OPTIONS);
+      root.removeEventListener("dblclick", onPlotDoubleClick, true);
+      root.removeEventListener("auxclick", onPlotAuxClick, true);
+      root.removeEventListener("click", onPlotClick, true);
+      root.removeEventListener("contextmenu", onPlotContextMenu, true);
+      root.removeEventListener("pointerout", onPlotPointerOut);
+      window.removeEventListener("keydown", onPlotKeyDown);
+      window.removeEventListener("keyup", onPlotKeyUp);
+      window.removeEventListener("blur", onPlotWindowBlur);
+      window.removeEventListener("resize", scheduleRenderAllPlot1d);
+      if (plotMutationObserver) {
+        plotMutationObserver.disconnect();
+        plotMutationObserver = null;
+      }
+      if (plotResizeObserver) {
+        plotResizeObserver.disconnect();
+        plotResizeObserver = null;
+      }
+      observedPlots.clear();
+      if (plotRenderTimer) {
+        clearTimeout(plotRenderTimer);
+        plotRenderTimer = null;
+      }
+      hideAllPlotHovers();
+      document.body.classList.remove("seurat-plot-panning", "seurat-plot-zooming");
+      for (const el of root.querySelectorAll(
+        ".seurat-plot1d.is-panning, .seurat-plot1d.is-zooming"
+      )) {
+        el.classList.remove("is-panning", "is-zooming");
+      }
     }
 
     function getCommonEndTime(videos) {
@@ -2197,7 +2167,7 @@
           // Ignore seek errors for unloaded videos.
         }
       }
-      window.__seuratGridSyncTime = t;
+      gridVcrState.syncTime = t;
       updatePlotCursors(t, videos);
       return t;
     }
@@ -2236,7 +2206,7 @@
       if (videos.length) {
         setAllVideoTimes(videos, t);
       } else {
-        window.__seuratGridSyncTime = t;
+        gridVcrState.syncTime = t;
         updatePlotCursors(t, videos);
       }
       gridVcrState.syncTime = t;
@@ -2319,7 +2289,7 @@
           setImageSequencesForTime(nextTime, sequences);
           gridVcrState.timelinePosition = nextPosition;
           gridVcrState.syncTime = nextTime;
-          window.__seuratGridSyncTime = nextTime;
+          gridVcrState.syncTime = nextTime;
           updateVcrTimeLabelFromSeconds(nextTime, videos, plots);
           if (nextPosition >= Math.max(0, timeline.length - 1)) {
             gridVcrState.playing = false;
@@ -2420,7 +2390,7 @@
       }
       const stateTime = Number(gridVcrState.syncTime);
       if (Number.isFinite(stateTime)) return stateTime;
-      const windowTime = Number(window.__seuratGridSyncTime);
+      const windowTime = Number(gridVcrState.syncTime);
       return Number.isFinite(windowTime) ? windowTime : 0;
     }
 
@@ -2840,9 +2810,6 @@
       }
     }
 
-    window.__seuratMainGridVcr = runGridVcrAction;
-    window.seuratGridVcr = runGridVcrAction;
-
     function onGridRuntimeSlider(e) {
       const target = e && e.target;
       if (target && target.id === "seurat-vcr-step-slider") {
@@ -2891,6 +2858,7 @@
 
     function unmountGridRuntime(root) {
       if (!root || root !== gridRuntimeRoot) return;
+      unmountPlotRuntime(root);
       unmountPanZoomRuntime(root);
       root.removeEventListener("input", onGridRuntimeSlider, true);
       root.removeEventListener("change", onGridRuntimeSlider, true);
@@ -2921,6 +2889,7 @@
       root.addEventListener("loadedmetadata", onGridVideoLoadedMetadata, true);
       root.addEventListener("ended", onGridVideoEnded, true);
       mountPanZoomRuntime(root);
+      mountPlotRuntime(root);
       gridMediaObserver = new MutationObserver(function(mutations) {
         if ((mutations || []).some(mutationTouchesGridMedia)) {
           scheduleGridMediaSyncToCurrentVcrTime();
@@ -2939,8 +2908,10 @@
     runtime.mount = mountGridRuntime;
     runtime.unmount = unmountGridRuntime;
     runtime.resetViewForCellIndex = resetPanZoomForCellIndex;
+    runtime.schedulePlotRender = scheduleRenderAllPlot1d;
+    runtime.runVcrAction = runGridVcrAction;
     window.seuratGridRuntime = runtime;
   } catch (err) {
-    console.error("seurat drag/drop init failed", err);
+    console.error("seurat client init failed", err);
   }
 })();

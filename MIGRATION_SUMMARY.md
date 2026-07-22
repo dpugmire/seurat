@@ -28,7 +28,7 @@ Original repo:
 The Trame rearchitecture work is on:
 
 ```text
-branch: rearchitect-trame-phase3c2
+branch: rearchitect-trame-phase3c3-5
 remote: origin -> https://github.com/dpugmire/seurat.git
 ```
 
@@ -59,8 +59,19 @@ Phase 3C.2 adds an app-scoped `seurat-resize-runtime` Vue component for
 variable-panel and grid-track resizing. It preserves the existing grid sizing
 controller contracts while replacing document-global resize listeners with
 mounted ownership, pointer capture, idempotent registration, and complete
-cleanup on unmount. Floating-dialog movement, image interaction, and plot
-pan/zoom remain in the shared client module for later incremental slices.
+cleanup on unmount. It was merged by GitHub PR #8 at merge commit
+`e8cb321769d3da37a0b5fee8f9d460818689ad33`.
+
+Phases 3C.3 through 3C.5 are combined on
+`rearchitect-trame-phase3c3-5`. Floating-panel movement is owned by the
+app-scoped interaction runtime. Media pan/zoom, plot hover/pan/zoom, reset-view
+observation, plot resize/mutation observation, and render scheduling are owned
+by the mounted grid runtime. These lifecycles use pointer capture, cancel
+timers, disconnect observers, clear transient state on unmount, and remain
+idempotent across repeated mount calls. Obsolete document-global interaction
+handlers, initialization flags, and generic window-level plot/VCR hooks were
+removed while preserving the existing rendering, timeline, and controller
+semantics.
 
 The last commit before the rearchitecture is preserved by the annotated tag:
 
