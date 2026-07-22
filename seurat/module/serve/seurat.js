@@ -114,11 +114,14 @@
       return values;
     }
 
+    function imageSequenceHasPhysicalTime(el) {
+      const mode = String(el && el.getAttribute && el.getAttribute("data-time-mode") || "").trim().toLowerCase();
+      return mode === "physical_time" && parseImageSequenceTimeValues(el).length > 0;
+    }
+
     function imageSequencesHavePhysicalTime(sequences) {
-      for (const el of (sequences || [])) {
-        if (parseImageSequenceTimeValues(el).length) return true;
-      }
-      return false;
+      const values = sequences || [];
+      return values.length > 0 && values.every(imageSequenceHasPhysicalTime);
     }
 
     function isVisibleGridCell(cell) {
@@ -183,6 +186,7 @@
 
       let sequenceValueCount = 0;
       for (const el of sequences) {
+        if (!imageSequenceHasPhysicalTime(el)) continue;
         const times = parseImageSequenceTimeValues(el);
         if (times.length) {
           sequenceValueCount += times.length;
@@ -237,6 +241,10 @@
     }
 
     function getPhysicalTimeline(sequences, plots) {
+      sequences = sequences || getGridImageSequencesSafe();
+      plots = plots || (typeof getGridPlots === "function" ? getGridPlots() : []);
+      if (sequences.length && !imageSequencesHavePhysicalTime(sequences)) return [];
+
       const selected = selectedTimelineDriverCell();
       if (selected) {
         const selectedTimeline = timelineForGridCell(selected);
@@ -246,12 +254,9 @@
       const auto = autoTimelineDriver();
       if (auto.values.length) return auto.values;
 
-      sequences = sequences || getGridImageSequencesSafe();
-      plots = plots || (typeof getGridPlots === "function" ? getGridPlots() : []);
-      if (sequences.length && !imageSequencesHavePhysicalTime(sequences)) return [];
-
       const values = [];
       for (const el of (sequences || [])) {
+        if (!imageSequenceHasPhysicalTime(el)) continue;
         values.push.apply(values, parseImageSequenceTimeValues(el));
       }
       values.push.apply(values, collectPlotTimeValues(plots));
@@ -297,7 +302,7 @@
       const sources = parseImageSequenceSources(el);
       if (!sources.length) return 0;
 
-      const times = parseImageSequenceTimeValues(el);
+      const times = imageSequenceHasPhysicalTime(el) ? parseImageSequenceTimeValues(el) : [];
       if (!times.length) {
         return Math.max(0, Math.min(Math.round(Number(rawTime) || 0), sources.length - 1));
       }
@@ -404,7 +409,7 @@
       for (const el of (sequences || [])) {
         const frame = Number(el && el.getAttribute && el.getAttribute("data-current-frame"));
         if (!Number.isFinite(frame) || frame < 0) continue;
-        const times = parseImageSequenceTimeValues(el);
+        const times = imageSequenceHasPhysicalTime(el) ? parseImageSequenceTimeValues(el) : [];
         const index = Math.max(0, Math.min(Math.round(frame), Math.max(0, times.length - 1)));
         if (index < times.length) return times[index];
       }
@@ -466,12 +471,12 @@
           label.textContent = "Time = " + formatTimelineValue(safeSeconds);
         } else if (sequences.length) {
           const ordinal = clampImageSequenceFrame(safeSeconds, sequences);
-          label.textContent = "Time = " + imageSequenceFrameLabel(ordinal, sequences);
+          label.textContent = "Step = " + imageSequenceFrameLabel(ordinal, sequences);
         } else if (videos && videos.length) {
           const ordinal = frameOrdinalFromTime(safeSeconds, videos);
           label.textContent = "Time = " + videoFrameLabel(ordinal, videos);
         } else {
-          label.textContent = "Time = " + safeSeconds.toFixed(6);
+          label.textContent = (plots.length ? "Step = " : "Time = ") + formatTimelineValue(safeSeconds);
         }
       }
 

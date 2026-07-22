@@ -4,6 +4,7 @@ import types
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 
 try:
@@ -124,6 +125,79 @@ class CampaignDbNavigationTests(unittest.TestCase):
             self.collection.insert_one(document)
 
         self.db = CampaignDb(self.collection)
+
+    def test_scalar_plot_uses_steps_without_explicit_time_values(self):
+        class PlotReader:
+            def __init__(self):
+                self.reads = []
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self, path, **kwargs):
+                self.reads.append((path, kwargs))
+                return [10.0, 20.0, 30.0]
+
+        reader = PlotReader()
+        metadata = {"SingleValue": True, "AvailableStepsCount": "3"}
+        with patch("db.FileReader", return_value=reader):
+            x, y, x_label = CampaignDb._read_plot_series(
+                "/campaign/example.aca",
+                "run-a/output.bp/internal_energy",
+                metadata,
+            )
+
+        self.assertEqual(x.tolist(), [0.0, 1.0, 2.0])
+        self.assertEqual(y.tolist(), [10.0, 20.0, 30.0])
+        self.assertEqual(x_label, "step")
+        self.assertEqual(
+            reader.reads,
+            [
+                (
+                    "run-a/output.bp/internal_energy",
+                    {"step_selection": [0, 3]},
+                )
+            ],
+        )
+
+    def test_scalar_plot_uses_only_explicit_matching_time_values(self):
+        explicit_values, explicit_label = CampaignDb._plot_timeline_values(
+            3,
+            [0.0, 0.25, 1.0],
+        )
+        self.assertEqual(explicit_values.tolist(), [0.0, 0.25, 1.0])
+        self.assertEqual(explicit_label, "time")
+        self.assertEqual(
+            CampaignDb._plot_timeline_values(3, [0.0, 1.0])[0].tolist(),
+            [0.0, 1.0, 2.0],
+        )
+        self.assertEqual(
+            CampaignDb._plot_timeline_values(3, None)[1],
+            "step",
+        )
+
+    def test_scalar_plot_candidate_preserves_declared_time_values(self):
+        self.collection.insert_one(
+            {
+                "campaign_path": "/campaign/example.aca",
+                "variable_id": "internal_energy",
+                "variable_name": "internal_energy",
+                "variable_type": "variable",
+                "source_dataset": "run-a/output.bp",
+                "variable_path": "run-a/output.bp/internal_energy",
+                "time_source": "variable:time",
+                "time_values": [0.0, 0.25, 1.0],
+                "metadata": {"SingleValue": True, "AvailableStepsCount": "3"},
+            }
+        )
+
+        candidate = self.db.scalar_plot_candidate("internal_energy")
+
+        self.assertEqual(candidate["time_source"], "variable:time")
+        self.assertEqual(candidate["time_values"], [0.0, 0.25, 1.0])
 
     def make_controller(self):
         state = RecordingState()

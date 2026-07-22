@@ -320,7 +320,7 @@ class GridWorkspace(TrameComponent):
                                 title="Jump to end",
                             )
                         html.Span(
-                            "Time = 0.000000",
+                            "Step = 0",
                             id="seurat-vcr-time-value",
                             class_="text-caption seurat-vcr-time",
                         )

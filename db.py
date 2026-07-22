@@ -1092,6 +1092,8 @@ class CampaignDb:
             "casename": 1,
             "schema_file_group": 1,
             "schema_mode": 1,
+            "time_source": 1,
+            "time_values": 1,
             "metadata": 1,
             "min": 1,
             "max": 1,
@@ -1143,6 +1145,8 @@ class CampaignDb:
             "source_fields": source_fields,
             "source_filter": source_filter_out,
             "source_label": self._plot_source_label(doc),
+            "time_source": str(doc.get("time_source", "") or ""),
+            "time_values": doc.get("time_values", []),
             "min": doc.get("min", None),
             "max": doc.get("max", None),
         }
@@ -1319,7 +1323,27 @@ class CampaignDb:
             return ImageFont.load_default()
 
     @staticmethod
-    def _read_plot_series(campaign_path: str, variable_path: str, metadata: Any, source_dataset: str) -> Tuple[np.ndarray, np.ndarray, str]:
+    def _plot_timeline_values(sample_count: int, explicit_time_values: Any = None) -> Tuple[np.ndarray, str]:
+        steps = np.arange(max(0, int(sample_count)), dtype=float)
+        if not isinstance(explicit_time_values, (list, tuple, np.ndarray)):
+            return steps, "step"
+
+        try:
+            times = np.asarray(explicit_time_values, dtype=float).reshape(-1)
+        except (TypeError, ValueError):
+            return steps, "step"
+
+        if times.size != steps.size or not np.all(np.isfinite(times)):
+            return steps, "step"
+        return times, "time"
+
+    @staticmethod
+    def _read_plot_series(
+        campaign_path: str,
+        variable_path: str,
+        metadata: Any,
+        explicit_time_values: Any = None,
+    ) -> Tuple[np.ndarray, np.ndarray, str]:
         steps_count = CampaignDb._metadata_steps_count(metadata)
         ndims = CampaignDb._metadata_ndims(metadata)
         with FileReader(campaign_path) as fr:
@@ -1328,17 +1352,7 @@ class CampaignDb:
 
             if ndims == 0:
                 y = y_raw.reshape(-1)
-                x = np.arange(y.size, dtype=float)
-                x_label = "step"
-                time_path = f"{source_dataset}/time" if source_dataset else ""
-                if time_path:
-                    try:
-                        t_raw = np.asarray(fr.read(time_path, **kwargs), dtype=float).reshape(-1)
-                        if t_raw.size == y.size:
-                            x = t_raw
-                            x_label = "time"
-                    except Exception:
-                        pass
+                x, x_label = CampaignDb._plot_timeline_values(y.size, explicit_time_values)
                 return x, y, x_label
 
             if y_raw.ndim >= 2:
@@ -1449,7 +1463,7 @@ class CampaignDb:
             campaign_path,
             str(candidate.get("variable_path", "") or ""),
             candidate.get("metadata", {}),
-            str(source_fields.get("source_dataset", "") or ""),
+            candidate.get("time_values", []),
         )
         variable_name = str(candidate.get("variable_name", "") or variable_id)
         plot = self._plot1d_payload(
@@ -1523,7 +1537,7 @@ class CampaignDb:
                     campaign_path,
                     str(candidate.get("variable_path", "") or ""),
                     candidate.get("metadata", {}),
-                    str(source_fields.get("source_dataset", "") or ""),
+                    candidate.get("time_values", []),
                 )
             except Exception:
                 continue
