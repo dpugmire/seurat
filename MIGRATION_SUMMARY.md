@@ -25,18 +25,17 @@ Original repo:
 
 ## Current Git State
 
-The new `seurat` repo is on:
+The Trame rearchitecture work is on:
 
 ```text
-branch: main
+branch: rearchitect-trame-phase1
 remote: origin -> https://github.com/dpugmire/seurat.git
-status: clean before this summary file was added
 ```
 
-The most recent setup commit before this file was:
+The last commit before the rearchitecture is preserved by the annotated tag:
 
 ```text
-6c4dbf1 Set up seurat repository metadata
+pre-rearchitect-trame-phase1 -> fe0926f7a7ccb5fe012816f9fc962edf0a8588f3
 ```
 
 The original repo still has the subtree split branch used to create this repo:
@@ -111,5 +110,5 @@ python app.py --help
 - The original `campaign_viewer` repo was not cleaned up.
 - Existing untracked simulation/data/prototype files in the original repo were
   left untouched.
-- Internal legacy branding was intentionally left unchanged during the initial
-  repository split and is removed as part of the later Trame rearchitecture.
+- Internal legacy branding from the original viewer was removed during the
+  first Trame rearchitecture phase.

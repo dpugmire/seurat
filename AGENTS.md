@@ -109,6 +109,7 @@ Before handing changes back, use targeted checks when possible:
 
 ```bash
 python -m py_compile app.py ingest_campaign.py db.py controllers.py ui.py
+python -m pytest -q
 python -m pip check
 ```
 
