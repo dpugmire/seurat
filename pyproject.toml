@@ -28,9 +28,6 @@ seurat = "app:main"
 py-modules = [
     "application",
     "app",
-    "catnip_db_app",
-    "catnip_parse_db",
-    "catnip_tree_app",
     "config",
     "controllers",
     "db",

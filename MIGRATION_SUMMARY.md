@@ -23,12 +23,6 @@ Original repo:
 /Users/dpn/proj/campaign_viewer/campaign_viewer
 ```
 
-Original viewer path:
-
-```text
-/Users/dpn/proj/campaign_viewer/campaign_viewer/catnip_db
-```
-
 ## Current Git State
 
 The new `seurat` repo is on:
@@ -53,7 +47,7 @@ seurat-split
 
 ## What Was Done
 
-- Created a subtree split from `catnip_db`.
+- Created a subtree split from the original viewer subdirectory.
 - Cloned that split history into `/Users/dpn/proj/seurat`.
 - Renamed the new repo branch to `main`.
 - Removed the temporary local remote pointing back to the old repo.
@@ -66,7 +60,8 @@ seurat-split
 
 ## Included Source
 
-The new repo contains the tracked viewer source from `catnip_db`, including:
+The new repo contains the tracked viewer source from the original viewer,
+including:
 
 - `app.py`
 - `config.py`
@@ -79,22 +74,19 @@ The new repo contains the tracked viewer source from `catnip_db`, including:
 - `ui.py`
 - `README.md`
 
-Legacy tracked files from the split were also retained:
-
-- `catnip_db_app.py`
-- `catnip_parse_db.py`
-- `catnip_tree_app.py`
-
 Untracked prototypes, generated `.aca` files, data directories, simulation
 outputs, build directories, caches, and editor metadata from the original repo
 were not moved into `seurat`.
+
+Unsupported tracked prototype applications inherited by the initial split were
+removed before the Trame architecture work began.
 
 ## Verification
 
 The Python compile check passed:
 
 ```bash
-python3 -m py_compile app.py config.py controllers.py db.py ingest_campaign.py media_utils.py query_parser.py state_init.py ui.py catnip_db_app.py catnip_parse_db.py catnip_tree_app.py
+python3 -m py_compile app.py config.py controllers.py db.py ingest_campaign.py media_utils.py query_parser.py state_init.py ui.py
 ```
 
 The initial `python3 app.py --help` smoke test was blocked because the active
@@ -119,4 +111,5 @@ python app.py --help
 - The original `campaign_viewer` repo was not cleaned up.
 - Existing untracked simulation/data/prototype files in the original repo were
   left untouched.
-- No internal `catnip_*` identifiers were renamed during the migration.
+- Internal legacy branding was intentionally left unchanged during the initial
+  repository split and is removed as part of the later Trame rearchitecture.
