@@ -3,11 +3,13 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from trame.app import get_server
+from trame.app import TrameComponent, get_server
 
 import app as compatibility_app
 from seurat.app import SeuratApp, build_parser
 from seurat import module as seurat_module
+from seurat.components import SeuratUI
+from ui import build_ui
 
 
 class SeuratAppTests(unittest.TestCase):
@@ -95,6 +97,34 @@ class SeuratAppTests(unittest.TestCase):
         self.assertEqual(args.campaign_path, "campaign.aca")
         self.assertEqual(args.image_association_schema, "images.yaml")
         self.assertEqual(args.campaign_schema, "campaign.yaml")
+
+    def test_ui_is_composed_from_trame_components(self):
+        server = get_server(
+            f"seurat-ui-components-{id(self)}",
+            client_type="vue3",
+        )
+
+        ui = build_ui(server, campaign_name="sample.aca")
+
+        self.assertIsInstance(ui, SeuratUI)
+        for component in (
+            ui.query_toolbar,
+            ui.help_dialog,
+            ui.variable_panel,
+            ui.grid_workspace,
+            ui.context_menu,
+            ui.grid_workspace.source_dialog,
+            ui.grid_workspace.scalar_plot_dialog,
+            ui.grid_workspace.plot_settings_panel,
+            ui.grid_workspace.plugin_options_panel,
+            ui.grid_workspace.scalar_field_settings_panel,
+        ):
+            self.assertIsInstance(component, TrameComponent)
+            self.assertIs(component.server, server)
+
+        self.assertIn("Campaign loaded: sample.aca", ui.layout.html)
+        self.assertIn('id="seurat-variable-column"', ui.layout.html)
+        self.assertIn('id="seurat-context-menu"', ui.layout.html)
 
 
 if __name__ == "__main__":
