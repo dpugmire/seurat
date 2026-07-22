@@ -4,6 +4,8 @@ from trame.app import TrameComponent
 from trame.widgets import html
 from trame.widgets import vuetify3 as vuetify
 
+from seurat.widgets import GridRuntime
+
 from .dialogs import (
     PlotSettingsPanel,
     PluginOptionsPanel,
@@ -238,6 +240,7 @@ def _build_grid_layout_controls(ctrl):
 class GridWorkspace(TrameComponent):
     def __init__(self, server):
         super().__init__(server)
+        self.runtime = None
         self.source_dialog = SourceDialog(server)
         self.scalar_plot_dialog = ScalarPlotDialog(server)
         self.plot_settings_panel = PlotSettingsPanel(server)
@@ -263,6 +266,7 @@ class GridWorkspace(TrameComponent):
                         "overflow:hidden;"
                     ),
                 ):
+                    self.runtime = GridRuntime()
                     with html.Div(classes="seurat-vcr-bar seurat-grid-controls-header"):
                         with html.Div(classes="seurat-vcr-controls"):
                             html.Button(
@@ -389,7 +393,9 @@ class GridWorkspace(TrameComponent):
                                 raw_attrs=[
                                     ':data-cell-index="i"',
                                     ':data-cell-filled="((tile && tile.variable_name) ? 1 : 0)"',
+                                    ':data-cell-active="(activeGridCell === i ? 1 : 0)"',
                                     ':data-timeline-driver="(timelineDriverCell === i ? 1 : 0)"',
+                                    ':aria-selected="activeGridCell === i ? \'true\' : \'false\'"',
                                     ':draggable="!!(tile && tile.variable_name)"',
                                 ],
                                 style=(

@@ -4,6 +4,22 @@
       setTimeout(initSeuratDragDrop, 200);
       return;
     }
+    let gridRuntimeRoot = null;
+
+    function gridRuntimeQuery(selector) {
+      const root = gridRuntimeRoot || document;
+      return root.querySelector ? root.querySelector(selector) : null;
+    }
+
+    function gridRuntimeQueryAll(selector) {
+      const root = gridRuntimeRoot || document;
+      return root.querySelectorAll ? root.querySelectorAll(selector) : [];
+    }
+
+    function gridRuntimeElementById(id) {
+      return gridRuntimeQuery("#" + id);
+    }
+
     function inferFpsForVideos(videos) {
       const DEFAULT_FPS = 2.0;
       for (const v of (videos || [])) {
@@ -79,7 +95,7 @@
       if (typeof getGridImageSequences === "function") {
         return getGridImageSequences();
       }
-      return Array.from(document.querySelectorAll('img[data-grid-image-sequence="1"]'));
+      return Array.from(gridRuntimeQueryAll('img[data-grid-image-sequence="1"]'));
     }
 
     function parseImageSequenceSources(el) {
@@ -202,12 +218,12 @@
     }
 
     function selectedTimelineDriverCell() {
-      const cell = document.querySelector('.seurat-dropcell[data-timeline-driver="1"]');
+      const cell = gridRuntimeQuery('.seurat-dropcell[data-timeline-driver="1"]');
       return cell && isVisibleGridCell(cell) ? cell : null;
     }
 
     function autoTimelineDriver() {
-      const cells = Array.from(document.querySelectorAll(".seurat-dropcell"));
+      const cells = Array.from(gridRuntimeQueryAll(".seurat-dropcell"));
       let best = null;
       for (const cell of cells) {
         const timeline = timelineForGridCell(cell);
@@ -417,7 +433,7 @@
     }
 
     function getVcrSliderFrameValue() {
-      const slider = document.getElementById("seurat-vcr-step-slider");
+      const slider = gridRuntimeElementById("seurat-vcr-step-slider");
       const raw = Number(slider && slider.value);
       if (Number.isFinite(raw) && raw >= 0) {
         return Math.round(raw);
@@ -440,7 +456,7 @@
         return timeForFrameOrdinal(getVcrSliderFrameValue(), videos);
       }
 
-      const slider = document.getElementById("seurat-vcr-step-slider");
+      const slider = gridRuntimeElementById("seurat-vcr-step-slider");
       const raw = Number(slider && slider.value);
       const max = Math.max(1, Number(slider && slider.max) || 500);
       const bounds = (typeof getMediaTimelineBounds === "function")
@@ -459,7 +475,7 @@
       const bounds = (typeof getMediaTimelineBounds === "function")
         ? getMediaTimelineBounds(videos, plots)
         : { start: 0, end: 0, usesVideos: !!(videos && videos.length) };
-      const label = document.getElementById("seurat-vcr-time-value");
+      const label = gridRuntimeElementById("seurat-vcr-time-value");
       const seconds = Number(rawSeconds);
       const safeSeconds = (typeof clampTimeForMedia === "function")
         ? clampTimeForMedia(seconds, videos, plots)
@@ -480,7 +496,7 @@
         }
       }
 
-      const slider = document.getElementById("seurat-vcr-step-slider");
+      const slider = gridRuntimeElementById("seurat-vcr-step-slider");
       if (typeof updatePlotCursors === "function") {
         updatePlotCursors(safeSeconds, videos);
       }
@@ -543,7 +559,7 @@
         window.__seuratMainGridVcr(action);
         return;
       }
-      const videos = Array.from(document.querySelectorAll('video[data-grid-video="1"]'));
+      const videos = Array.from(gridRuntimeQueryAll('video[data-grid-video="1"]'));
       if (!videos.length) {
         updateVcrTimeLabelFromSeconds(0, []);
         return;
@@ -662,26 +678,6 @@
         setAllTime(base + frameStep);
       }
     };
-
-    if (!window.__seuratVcrSliderInit) {
-      window.__seuratVcrSliderInit = true;
-      document.addEventListener("input", function(e) {
-        const target = e && e.target;
-        if (target && target.id === "seurat-vcr-step-slider") {
-          if (window.seuratGridVcr) {
-            window.seuratGridVcr("slider");
-          }
-        }
-      }, true);
-      document.addEventListener("change", function(e) {
-        const target = e && e.target;
-        if (target && target.id === "seurat-vcr-step-slider") {
-          if (window.seuratGridVcr) {
-            window.seuratGridVcr("slider");
-          }
-        }
-      }, true);
-    }
 
     if (!window.__seuratVariablePanelResizeInit) {
       window.__seuratVariablePanelResizeInit = true;
@@ -1379,15 +1375,16 @@
       lastTickMs: 0,
     };
     let gridMediaSyncTimer = null;
+    let gridMediaObserver = null;
 
     setupPlot1dObserver();
 
     function getGridVideos() {
-      return Array.from(document.querySelectorAll('video[data-grid-video="1"]'));
+      return Array.from(gridRuntimeQueryAll('video[data-grid-video="1"]'));
     }
 
     function getGridImageSequences() {
-      return Array.from(document.querySelectorAll('img[data-grid-image-sequence="1"]'));
+      return Array.from(gridRuntimeQueryAll('img[data-grid-image-sequence="1"]'));
     }
 
     function isGridVideo(target) {
@@ -1395,7 +1392,7 @@
     }
 
     function getGridPlots() {
-      return Array.from(document.querySelectorAll(".seurat-plot1d"));
+      return Array.from(gridRuntimeQueryAll(".seurat-plot1d"));
     }
 
     function finiteNumber(value, fallback) {
@@ -1747,7 +1744,7 @@
     function resetPlotViewForCellIndex(cellIndex) {
       const idx = Number(cellIndex);
       if (!Number.isInteger(idx) || idx < 0) return;
-      const cell = document.querySelector('.seurat-dropcell[data-cell-index="' + String(idx) + '"]');
+      const cell = gridRuntimeQuery('.seurat-dropcell[data-cell-index="' + String(idx) + '"]');
       if (!cell) return;
       const plots = cell.querySelectorAll ? cell.querySelectorAll(".seurat-plot1d") : [];
       for (const el of plots) {
@@ -2120,7 +2117,9 @@
       const bounds = getMediaTimelineBounds(videos || [], plots);
       const t = clampTimeForMedia(rawTime, videos || [], plots);
       const denom = Math.max(1e-12, bounds.end - bounds.start);
-      const progress = (bounds.usesVideos || (bounds.usesImageSequence && !bounds.usesPhysicalTimeline))
+      // Step and physical timelines already use plot x coordinates. Only
+      // elapsed video time needs to be normalized onto each plot's domain.
+      const progress = bounds.usesVideos
         ? ((t - bounds.start) / denom)
         : null;
       for (const el of plots) {
@@ -2753,7 +2752,7 @@
     }
 
     function currentVcrSliderTarget(videos, plots) {
-      const slider = document.getElementById("seurat-vcr-step-slider");
+      const slider = gridRuntimeElementById("seurat-vcr-step-slider");
       if (slider) {
         const target = getVcrSliderTimeValue(videos || [], plots || []);
         if (Number.isFinite(target)) return target;
@@ -3183,18 +3182,100 @@
     window.__seuratMainGridVcr = runGridVcrAction;
     window.seuratGridVcr = runGridVcrAction;
 
-    const gridMediaObserver = new MutationObserver(function(mutations) {
-      if ((mutations || []).some(mutationTouchesGridMedia)) {
-        scheduleGridMediaSyncToCurrentVcrTime();
+    function onGridRuntimeSlider(e) {
+      const target = e && e.target;
+      if (target && target.id === "seurat-vcr-step-slider") {
+        runGridVcrAction("slider");
       }
-    });
-    gridMediaObserver.observe(document.body, {
-      childList: true,
-      subtree: true,
-      attributes: true,
-      attributeFilter: ["data-frame-count", "data-frame-indices", "data-frame-sources", "data-time-values", "data-time-mode", "data-plot", "data-plot-settings", "data-timeline-driver"],
-    });
-    scheduleGridMediaSyncToCurrentVcrTime();
+    }
+
+    function onGridRuntimeClick(e) {
+      const target = e && e.target;
+      const button = target && target.closest ? target.closest("[data-vcr-action]") : null;
+      if (!button || !gridRuntimeRoot || !gridRuntimeRoot.contains(button)) return;
+      e.preventDefault();
+      runGridVcrAction(button.getAttribute("data-vcr-action") || "");
+    }
+
+    function onGridVideoLoadedMetadata(e) {
+      const target = e && e.target;
+      if (!isGridVideo(target)) return;
+      const videos = getGridVideos();
+      if (!videos.length) return;
+      const t = setAllVideoTimes(videos, gridVcrState.syncTime);
+      gridVcrState.syncTime = t;
+      updateVcrTimeLabelFromSeconds(t, videos);
+      if (gridVcrState.playing) {
+        playAllVideos(videos);
+        startSyncTimer();
+      }
+    }
+
+    function onGridVideoEnded(e) {
+      const target = e && e.target;
+      if (!isGridVideo(target) || !gridVcrState.playing) return;
+      const videos = getGridVideos();
+      if (!videos.length) return;
+      gridVcrState.playing = false;
+      stopSyncTimer();
+      pauseAllVideos(videos);
+      const endTime = getCommonEndTime(videos);
+      const t = setAllVideoTimes(
+        videos,
+        endTime !== null ? endTime : getReferenceTime(videos)
+      );
+      gridVcrState.syncTime = t;
+      updateVcrTimeLabelFromSeconds(t, videos);
+    }
+
+    function unmountGridRuntime(root) {
+      if (!root || root !== gridRuntimeRoot) return;
+      root.removeEventListener("input", onGridRuntimeSlider, true);
+      root.removeEventListener("change", onGridRuntimeSlider, true);
+      root.removeEventListener("click", onGridRuntimeClick);
+      root.removeEventListener("loadedmetadata", onGridVideoLoadedMetadata, true);
+      root.removeEventListener("ended", onGridVideoEnded, true);
+      if (gridMediaObserver) {
+        gridMediaObserver.disconnect();
+        gridMediaObserver = null;
+      }
+      if (gridMediaSyncTimer) {
+        clearTimeout(gridMediaSyncTimer);
+        gridMediaSyncTimer = null;
+      }
+      stopSyncTimer();
+      root.removeAttribute("data-seurat-grid-runtime-owner");
+      gridRuntimeRoot = null;
+    }
+
+    function mountGridRuntime(root) {
+      if (!root || root === gridRuntimeRoot) return;
+      if (gridRuntimeRoot) unmountGridRuntime(gridRuntimeRoot);
+      gridRuntimeRoot = root;
+      root.setAttribute("data-seurat-grid-runtime-owner", "mounted");
+      root.addEventListener("input", onGridRuntimeSlider, true);
+      root.addEventListener("change", onGridRuntimeSlider, true);
+      root.addEventListener("click", onGridRuntimeClick);
+      root.addEventListener("loadedmetadata", onGridVideoLoadedMetadata, true);
+      root.addEventListener("ended", onGridVideoEnded, true);
+      gridMediaObserver = new MutationObserver(function(mutations) {
+        if ((mutations || []).some(mutationTouchesGridMedia)) {
+          scheduleGridMediaSyncToCurrentVcrTime();
+        }
+      });
+      gridMediaObserver.observe(root, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ["data-frame-count", "data-frame-indices", "data-frame-sources", "data-time-values", "data-time-mode", "data-plot", "data-plot-settings", "data-timeline-driver"],
+      });
+      scheduleGridMediaSyncToCurrentVcrTime();
+    }
+
+    const runtime = window.seuratGridRuntime || {};
+    runtime.mount = mountGridRuntime;
+    runtime.unmount = unmountGridRuntime;
+    window.seuratGridRuntime = runtime;
 
     document.addEventListener("dragstart", function(e) {
       const target = e && e.target;
@@ -3311,46 +3392,12 @@
 
     document.addEventListener("click", function(e) {
       const target = e && e.target;
-      const vcrBtn = target && target.closest ? target.closest("[data-vcr-action]") : null;
-      if (vcrBtn) {
-        e.preventDefault();
-        runGridVcrAction(vcrBtn.getAttribute("data-vcr-action") || "");
-      }
       if (!target || !target.closest || !target.closest("#seurat-context-menu")) {
         if (window.trame && window.trame.trigger) {
           window.trame.trigger("hide_context_menu_trigger", []);
         }
       }
     });
-
-    document.addEventListener("loadedmetadata", function(e) {
-      const target = e && e.target;
-      if (!isGridVideo(target)) return;
-      const videos = getGridVideos();
-      if (!videos.length) return;
-      const t = setAllVideoTimes(videos, gridVcrState.syncTime);
-      gridVcrState.syncTime = t;
-      updateVcrTimeLabelFromSeconds(t, videos);
-      if (gridVcrState.playing) {
-        playAllVideos(videos);
-        startSyncTimer();
-      }
-    }, true);
-
-    document.addEventListener("ended", function(e) {
-      const target = e && e.target;
-      if (!isGridVideo(target)) return;
-      if (!gridVcrState.playing) return;
-      const videos = getGridVideos();
-      if (!videos.length) return;
-      gridVcrState.playing = false;
-      stopSyncTimer();
-      pauseAllVideos(videos);
-      const endTime = getCommonEndTime(videos);
-      const t = setAllVideoTimes(videos, endTime !== null ? endTime : getReferenceTime(videos));
-      gridVcrState.syncTime = t;
-      updateVcrTimeLabelFromSeconds(t, videos);
-    }, true);
   } catch (err) {
     console.error("seurat drag/drop init failed", err);
   }

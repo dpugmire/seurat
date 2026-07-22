@@ -19,6 +19,9 @@ The main architectural boundaries are:
   and context menu.
 - `seurat/module/`: registered JavaScript and CSS assets served by Trame. Web
   identifiers use the `seurat` namespace and assets are included in wheels.
+- `seurat/widgets.py`: Python wrappers for Seurat's registered Vue components.
+  The grid runtime component owns the mounted lifetime of timeline/VCR browser
+  behavior and releases its listeners and observer when the workspace unmounts.
 - `seurat/models/`: pure, dependency-free grid, timeline, and source-selection
   behavior, plus plot, plugin-option, and grid-layout normalization. Controllers
   adapt Trame state to these testable operations.
@@ -38,6 +41,12 @@ in the matching `seurat/controllers/` domain. UI components should bind state
 and controller actions, not duplicate those decisions in markup or browser
 code.
 
+Client-side behavior is being moved incrementally out of document-global
+handlers. The grid timeline/VCR is the first lifecycle-owned slice; the
+remaining drag/drop, resizing, and plot-interaction handlers stay in
+`seurat/module/serve/seurat.js` until their corresponding components are
+migrated and covered by browser tests.
+
 ## Run
 
 Requirements (at minimum):
@@ -55,6 +64,25 @@ Install the Python dependencies from this repo:
 ```bash
 python -m pip install -e ".[schema]"
 ```
+
+Install the browser-test dependencies and Chromium with:
+
+```bash
+python -m pip install -e ".[schema,test]"
+python -m playwright install chromium
+```
+
+The browser tests are opt-in so the normal suite remains fast and does not
+require a browser installation:
+
+```bash
+SEURAT_RUN_BROWSER_TESTS=1 python -m pytest -q tests/browser
+```
+
+The deterministic browser fixture does not require a campaign archive. It
+exercises application mounting, variable grouping, grid selection and
+assignment, layout controls, context menus, rendering, and both schema-less
+step-index and declared physical-time timelines in a real Chromium client.
 
 Example:
 

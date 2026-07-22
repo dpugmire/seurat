@@ -3,7 +3,7 @@
 from pathlib import Path
 
 
-__all__ = ["scripts", "serve", "styles"]
+__all__ = ["scripts", "serve", "styles", "vue_use"]
 
 BASE_URL = "seurat_0_1_0"
 
@@ -12,7 +12,9 @@ serve = {
 }
 scripts = [
     f"{BASE_URL}/seurat.js",
+    f"{BASE_URL}/seurat-grid-runtime.js",
 ]
 styles = [
     f"{BASE_URL}/seurat.css",
 ]
+vue_use = ["seuratGridRuntime"]

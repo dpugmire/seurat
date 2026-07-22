@@ -9,6 +9,7 @@ import app as compatibility_app
 from seurat.app import SeuratApp, build_parser
 from seurat import module as seurat_module
 from seurat.components import SeuratUI
+from seurat.widgets import GridRuntime
 from ui import build_ui
 
 
@@ -53,8 +54,12 @@ class SeuratAppTests(unittest.TestCase):
         self.assertIs(app.ui, built_ui)
         self.assertEqual(
             server.state.trame__scripts,
-            [f"{seurat_module.BASE_URL}/seurat.js"],
+            [
+                f"{seurat_module.BASE_URL}/seurat.js",
+                f"{seurat_module.BASE_URL}/seurat-grid-runtime.js",
+            ],
         )
+        self.assertEqual(server.state.trame__vue_use, ["seuratGridRuntime"])
         self.assertEqual(
             server.state.trame__styles,
             [f"{seurat_module.BASE_URL}/seurat.css"],
@@ -125,6 +130,8 @@ class SeuratAppTests(unittest.TestCase):
         self.assertIn("Campaign loaded: sample.aca", ui.layout.html)
         self.assertIn('id="seurat-variable-column"', ui.layout.html)
         self.assertIn('id="seurat-context-menu"', ui.layout.html)
+        self.assertIsInstance(ui.grid_workspace.runtime, GridRuntime)
+        self.assertIn("seurat-grid-runtime", ui.layout.html)
 
 
 if __name__ == "__main__":
