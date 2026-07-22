@@ -76,6 +76,12 @@ def test_app_mounts_and_renders_structural_ui(page, seurat_server):
     )
     assert (
         page.locator(
+            '.seurat-content-column[data-seurat-media-runtime-owner="mounted"]'
+        ).count()
+        == 1
+    )
+    assert (
+        page.locator(
             '.v-application[data-seurat-interaction-runtime-owner="mounted"]'
         ).count()
         == 1
@@ -345,6 +351,7 @@ def test_media_pan_zoom_lifecycle_cleanup_and_idempotent_remount(
     assert viewport.evaluate("viewport => viewport.classList.contains('is-panning')")
 
     root.evaluate("root => window.seuratGridRuntime.unmount(root)")
+    assert root.get_attribute("data-seurat-media-runtime-owner") is None
     assert not viewport.evaluate("viewport => viewport.hasPointerCapture(1)")
     assert not viewport.evaluate(
         "viewport => viewport.classList.contains('is-panning')"
@@ -370,6 +377,7 @@ def test_media_pan_zoom_lifecycle_cleanup_and_idempotent_remount(
 
     root.evaluate("root => window.seuratGridRuntime.mount(root)")
     root.evaluate("root => window.seuratGridRuntime.mount(root)")
+    assert root.get_attribute("data-seurat-media-runtime-owner") == "mounted"
     viewport.dblclick()
     page.mouse.wheel(0, -100)
     assert viewport.evaluate(

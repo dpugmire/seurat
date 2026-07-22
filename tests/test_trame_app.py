@@ -55,6 +55,7 @@ class SeuratAppTests(unittest.TestCase):
         self.assertEqual(
             server.state.trame__scripts,
             [
+                f"{seurat_module.BASE_URL}/seurat-media-runtime.js",
                 f"{seurat_module.BASE_URL}/seurat.js",
                 f"{seurat_module.BASE_URL}/seurat-grid-runtime.js",
                 f"{seurat_module.BASE_URL}/seurat-interaction-runtime.js",

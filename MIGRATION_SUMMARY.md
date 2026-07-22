@@ -28,7 +28,7 @@ Original repo:
 The Trame rearchitecture work is on:
 
 ```text
-branch: rearchitect-trame-phase3c3-5
+branch: rearchitect-trame-phase4a
 remote: origin -> https://github.com/dpugmire/seurat.git
 ```
 
@@ -71,7 +71,16 @@ timers, disconnect observers, clear transient state on unmount, and remain
 idempotent across repeated mount calls. Obsolete document-global interaction
 handlers, initialization flags, and generic window-level plot/VCR hooks were
 removed while preserving the existing rendering, timeline, and controller
-semantics.
+semantics. They were merged by GitHub PR #9 at merge commit
+`9997d5aac35c4a347f250e0ba5eba7d673eb5226`.
+
+Phase 4A begins the behavior-preserving client-runtime decomposition on
+`rearchitect-trame-phase4a`. Media pan/zoom, pointer interaction state, and
+reset-view observation are extracted from the remaining monolithic client
+script into `seurat-media-runtime.js`. The mounted grid runtime coordinates the
+media lifecycle through a narrow `mount`, `unmount`, and
+`resetViewForCellIndex` interface while continuing to own combined media/plot
+reset semantics.
 
 The last commit before the rearchitecture is preserved by the annotated tag:
 
