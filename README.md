@@ -20,17 +20,23 @@ The main architectural boundaries are:
 - `seurat/module/`: registered JavaScript and CSS assets served by Trame. Web
   identifiers use the `seurat` namespace and assets are included in wheels.
 - `seurat/models/`: pure, dependency-free grid, timeline, and source-selection
-  behavior. Controllers adapt Trame state to these testable operations.
+  behavior, plus plot, plugin-option, and grid-layout normalization. Controllers
+  adapt Trame state to these testable operations.
 - `seurat/state/`: explicit, non-overlapping state ownership for catalog,
   sources, visualization settings, grid/timeline, and context menus.
+- `seurat/controllers/`: Trame-facing adapters organized by catalog, source,
+  grid, visualization, context-menu, and lifecycle ownership. Each domain
+  declares the actions, triggers, and state-change callbacks it registers.
 - `application.py`: backend application facade and typed navigation contract.
-- `controllers.py`: Trame-facing adapters and the remaining orchestration logic.
+- `controllers.py`: compatibility exports for the packaged controller adapters.
 - `ingest_campaign.py`, `sqlite_store.py`, and `db.py`: ACA ingestion, SQLite
   collection compatibility, and campaign data access/rendering.
 
 Keep domain decisions in `seurat/models/` and state defaults in the owning
-`seurat/state/` module. UI components should bind state and controller actions,
-not duplicate those decisions in markup or browser code.
+`seurat/state/` module. Keep Trame callbacks and their registration declarations
+in the matching `seurat/controllers/` domain. UI components should bind state
+and controller actions, not duplicate those decisions in markup or browser
+code.
 
 ## Run
 

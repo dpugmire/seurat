@@ -28,9 +28,14 @@ Original repo:
 The Trame rearchitecture work is on:
 
 ```text
-branch: rearchitect-trame-phase1
+branch: rearchitect-trame-phase2
 remote: origin -> https://github.com/dpugmire/seurat.git
 ```
+
+Phase 1 was merged into `main` by GitHub PR #4 at merge commit
+`82fd7bc660bd07cca1ba0965b80742b6ed24f0a4`. Phase 2 decomposes the remaining
+controller closure into domain-owned Trame adapters and extracts pure controller
+logic into testable model modules.
 
 The last commit before the rearchitecture is preserved by the annotated tag:
 
@@ -82,15 +87,13 @@ removed before the Trame architecture work began.
 
 ## Verification
 
-The Python compile check passed:
+The standard verification commands are:
 
 ```bash
-python3 -m py_compile app.py config.py controllers.py db.py ingest_campaign.py media_utils.py query_parser.py state_init.py ui.py
+python -m py_compile app.py config.py controllers.py db.py ingest_campaign.py media_utils.py query_parser.py state_init.py ui.py
+python -m pytest -q
+python -m pip check
 ```
-
-The initial `python3 app.py --help` smoke test was blocked because the active
-Python environment did not have `pymongo` installed. The dependency is now
-declared in `pyproject.toml`.
 
 Install the repo dependencies with:
 

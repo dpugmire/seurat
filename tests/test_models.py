@@ -8,6 +8,18 @@ from seurat.models.grid import (
     range_selection,
     source_dialog_targets,
 )
+from seurat.models.grid_layout import (
+    grid_fit_template_from_weights,
+    grid_template_from_sizes,
+    normalize_size_list,
+    normalize_weight_list,
+)
+from seurat.models.plot import (
+    clean_plot_color,
+    normalize_plot_settings,
+    valid_extrema,
+)
+from seurat.models.plugin_options import plugin_option_rows, plugin_options_from_rows
 from seurat.models.source_selection import (
     normalize_source_keys,
     select_single_source,
@@ -123,6 +135,69 @@ class TimelineModelTests(unittest.TestCase):
         self.assertEqual(toggle_timeline_driver(cells, 0, 5), 0)
         self.assertEqual(clear_timeline_driver(0, [0, 2]), -1)
         self.assertEqual(clear_timeline_driver(1, [0, 2]), 1)
+
+
+class PlotModelTests(unittest.TestCase):
+    def test_color_and_axis_settings_are_normalized(self):
+        tile = {
+            "plot": {
+                "series": [
+                    {
+                        "source_key": "run-a",
+                        "source_label": "Run A",
+                        "color": "#123456",
+                        "x": [0, 1],
+                        "y": [2, 3],
+                    }
+                ]
+            }
+        }
+
+        settings = normalize_plot_settings(
+            tile,
+            {
+                "line_width": 99,
+                "x_scale": "log",
+                "series_styles": {
+                    "run-a": {"color": "rgb(1, 2, 3)", "line_style": "dash_dot"}
+                },
+            },
+        )
+
+        self.assertEqual(settings["line_width"], 8.0)
+        self.assertEqual(settings["x_scale"], "log")
+        self.assertEqual(
+            settings["series_styles"]["run-a"],
+            {"color": "rgb(1, 2, 3)", "line_style": "dash-dot"},
+        )
+        self.assertEqual(clean_plot_color({"r": 1, "g": 2, "b": 3, "a": 0.5}, "fallback"), "fallback")
+        self.assertEqual(valid_extrema("2", "1"), (None, None))
+
+
+class GridLayoutModelTests(unittest.TestCase):
+    def test_track_values_and_templates_are_normalized(self):
+        self.assertEqual(normalize_size_list("100;bad", 3, 50, 40, 200), [100, 50, 50])
+        self.assertEqual(normalize_weight_list([0, 2, 1000], 3), [1.0, 2.0, 100.0])
+        self.assertEqual(grid_template_from_sizes([100, 200]), "100px 200px")
+        self.assertEqual(
+            grid_fit_template_from_weights([1, 2], 80),
+            "minmax(80px, 1fr) minmax(80px, 2fr)",
+        )
+
+
+class PluginOptionsModelTests(unittest.TestCase):
+    def test_option_rows_round_trip_typed_values(self):
+        schema = [
+            {"key": "enabled", "label": "Enabled", "type": "bool", "default": True},
+            {"key": "mode", "label": "Mode", "type": "select", "default": "a", "choices": ["a", "b"]},
+        ]
+
+        rows = plugin_option_rows(schema, {"enabled": False, "mode": " b "})
+
+        self.assertEqual(
+            plugin_options_from_rows(rows),
+            {"enabled": False, "mode": "b"},
+        )
 
 
 class SourceSelectionModelTests(unittest.TestCase):

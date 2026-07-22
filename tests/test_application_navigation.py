@@ -52,8 +52,14 @@ class RecordingController:
 
 
 class RecordingState(SimpleNamespace):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.change_callbacks = {}
+
     def change(self, *_names):
         def register(callback):
+            for name in _names:
+                self.change_callbacks.setdefault(name, []).append(callback)
             return callback
 
         return register
@@ -215,6 +221,159 @@ class CampaignDbNavigationTests(unittest.TestCase):
             campaign_path="/campaign/example.aca",
         )
         return state, server.controller
+
+    def test_controller_registration_contract_is_complete(self):
+        state, controller = self.make_controller()
+
+        self.assertEqual(
+            set(controller.actions),
+            {
+                "add_grid_column",
+                "add_grid_row",
+                "add_var_to_grid",
+                "apply_plot_settings",
+                "apply_plugin_options",
+                "apply_scalar_field_settings",
+                "apply_source_dialog",
+                "apply_source_dialog_filter",
+                "assign_var_to_grid_cell",
+                "cancel_plot_settings",
+                "cancel_plugin_options",
+                "cancel_scalar_field_settings",
+                "cancel_scalar_plot_generation",
+                "cancel_source_dialog",
+                "clear_all_sources",
+                "clear_grid_cell",
+                "clear_query",
+                "clear_source_filter",
+                "close_help_modal",
+                "confirm_scalar_plot_generation",
+                "context_menu_cell_add_source",
+                "context_menu_cell_clear",
+                "context_menu_cell_pick_visualization",
+                "context_menu_cell_plot_settings",
+                "context_menu_cell_reset_span",
+                "context_menu_cell_reset_view",
+                "context_menu_cell_run_source_plugin",
+                "context_menu_cell_scalar_field_settings",
+                "context_menu_cell_select",
+                "context_menu_cell_shrink_height",
+                "context_menu_cell_shrink_width",
+                "context_menu_cell_sources",
+                "context_menu_cell_span_down",
+                "context_menu_cell_span_right",
+                "context_menu_item_add",
+                "context_menu_item_select",
+                "delete_grid_column",
+                "delete_grid_row",
+                "hide_context_menu",
+                "move_grid_cell",
+                "open_plot_settings_plugin_options",
+                "pick_grid_cell_visualization",
+                "pick_tile_visualization",
+                "pick_var",
+                "reset_grid_cell_span",
+                "reset_grid_track_sizes",
+                "reset_plot_settings",
+                "reset_plugin_options",
+                "reset_scalar_field_settings",
+                "run_query",
+                "select_all_sources",
+                "select_source",
+                "select_var",
+                "set_active_grid_cell",
+                "set_dragged_var",
+                "set_grid_cell_size",
+                "set_grid_fit_min_cell_size",
+                "set_grid_layout_mode",
+                "set_grid_layout_size",
+                "set_grid_sizing_mode",
+                "show_query_help",
+                "show_source_filter_help",
+                "shrink_grid_cell_height",
+                "shrink_grid_cell_width",
+                "sort_sources",
+                "source_dialog_select",
+                "span_grid_cell_down",
+                "span_grid_cell_right",
+                "toggle_add_source",
+                "toggle_movie_details",
+                "toggle_source_visibility",
+                "toggle_sources",
+                "toggle_timeline_driver_cell",
+                "toggle_variable_group",
+                "update_plot_background_color",
+                "update_plot_cursor_color",
+                "update_plot_grid_color",
+                "update_plot_series_color",
+                "update_plot_series_line_style",
+                "update_plugin_option_value",
+            },
+        )
+        self.assertEqual(
+            set(controller.triggers),
+            {
+                "assign_var_to_grid_cell_trigger",
+                "hide_context_menu_trigger",
+                "move_grid_cell_trigger",
+                "set_grid_track_sizes_trigger",
+                "set_grid_track_weights_trigger",
+                "show_cell_context_menu",
+                "show_item_context_menu",
+            },
+        )
+        self.assertEqual(
+            set(state.change_callbacks),
+            {"selectedVar", "showOnlyVisualizedVars", "variablePaneView"},
+        )
+        self.assertEqual(len(controller.on_server_ready.callbacks), 1)
+
+    def test_server_ready_lifecycle_reingests_and_refreshes_catalog(self):
+        state = RecordingState()
+        init_state(state, self.db)
+        controller = RecordingController()
+        server = SimpleNamespace(state=state, controller=controller)
+        parse_calls = []
+
+        def parse_campaign(campaign_path, collection, **kwargs):
+            parse_calls.append((campaign_path, kwargs))
+            collection.insert_one(
+                {
+                    "campaign_path": campaign_path,
+                    "variable_id": "energy",
+                    "variable_name": "energy",
+                    "variable_type": "variable",
+                    "source_dataset": "run/scalars.bp",
+                    "metadata": {"SingleValue": True, "AvailableStepsCount": "3"},
+                }
+            )
+
+        attach_controllers(
+            server=server,
+            db=self.db,
+            collection=self.collection,
+            parse_campaign=parse_campaign,
+            campaign_path="/campaign/example.aca",
+            image_association_schema_path="/schemas/images.yaml",
+            campaign_schema_path="/schemas/campaign.yaml",
+        )
+
+        controller.on_server_ready.callbacks[0]()
+
+        self.assertEqual(
+            parse_calls,
+            [
+                (
+                    "/campaign/example.aca",
+                    {
+                        "image_association_schema_path": "/schemas/images.yaml",
+                        "campaign_schema_path": "/schemas/campaign.yaml",
+                    },
+                )
+            ],
+        )
+        self.assertEqual(state.variableNames, ["energy"])
+        self.assertIn("variables=1", state.dbStatus)
 
     def test_existing_grouping_is_stable_and_deduplicates_sources(self):
         self.assertEqual(
