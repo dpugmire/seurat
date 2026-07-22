@@ -28,7 +28,7 @@ Original repo:
 The Trame rearchitecture work is on:
 
 ```text
-branch: rearchitect-trame-phase4c
+branch: rearchitect-trame-phase5a
 remote: origin -> https://github.com/dpugmire/seurat.git
 ```
 
@@ -99,7 +99,18 @@ VCR actions, labels/sliders, timers, media mutation observation, and plot cursor
 coordination are extracted into `seurat-timeline-runtime.js`. The remaining
 `seurat.js` becomes a small grid coordinator. Runtime objects are registered
 under `window.seurat.runtimes`, while the existing top-level grid, interaction,
-and resize aliases are retained for Trame Vue plugin compatibility.
+and resize aliases are retained for Trame Vue plugin compatibility. It was
+merged by GitHub PR #12 at merge commit
+`301b63e9aa6ba073c13e904ce292ef7d3e08d668`.
+
+Phase 5A begins the backend-boundary work on `rearchitect-trame-phase5a`. A
+narrow catalog capability contract separates normalized navigation and backend
+availability from the local `CampaignDb` implementation. The existing ACA and
+SQLite behavior is retained by `LocalCampaignBackend`, while
+`SeuratApplication` and the catalog controller consume the injected contract.
+Contract/fake-backend tests characterize the seam. `PHOBOS_INTEGRATION.md`
+records the ownership boundary, current Phobos coverage, timeline requirements,
+API and asynchronous-job gaps, and the planned Phase 5B through 5E migration.
 
 The last commit before the rearchitecture is preserved by the annotated tag:
 

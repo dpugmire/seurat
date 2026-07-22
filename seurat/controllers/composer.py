@@ -1,5 +1,9 @@
 """Composition and Trame registration for Seurat's domain controllers."""
 
+from typing import Optional
+
+from seurat.backends import CatalogBackend, LocalCampaignBackend
+
 from .base import ControllerBase
 from .catalog import CatalogControllerMixin
 from .context import ControllerContext
@@ -49,9 +53,12 @@ def attach_controllers(
     campaign_path: str,
     image_association_schema_path: str = "",
     campaign_schema_path: str = "",
+    backend: Optional[CatalogBackend] = None,
 ):
+    catalog_backend = backend if backend is not None else LocalCampaignBackend(db)
     context = ControllerContext(
         server=server,
+        backend=catalog_backend,
         db=db,
         collection=collection,
         parse_campaign=parse_campaign,

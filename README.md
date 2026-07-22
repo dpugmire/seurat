@@ -38,7 +38,12 @@ The main architectural boundaries are:
 - `seurat/controllers/`: Trame-facing adapters organized by catalog, source,
   grid, visualization, context-menu, and lifecycle ownership. Each domain
   declares the actions, triggers, and state-change callbacks it registers.
-- `application.py`: backend application facade and typed navigation contract.
+- `seurat/backends/`: backend-neutral capability contracts and the current
+  local ACA/SQLite adapter. Phase 5A routes catalog navigation and availability
+  through this seam; later source, media, and compute capabilities remain
+  documented in [PHOBOS_INTEGRATION.md](PHOBOS_INTEGRATION.md).
+- `application.py`: application facade over the injected backend capabilities;
+  it retains compatibility exports for the typed navigation contract.
 - `controllers.py`: compatibility exports for the packaged controller adapters.
 - `ingest_campaign.py`, `sqlite_store.py`, and `db.py`: ACA ingestion, SQLite
   collection compatibility, and campaign data access/rendering.
@@ -47,7 +52,10 @@ Keep domain decisions in `seurat/models/` and state defaults in the owning
 `seurat/state/` module. Keep Trame callbacks and their registration declarations
 in the matching `seurat/controllers/` domain. UI components should bind state
 and controller actions, not duplicate those decisions in markup or browser
-code.
+code. Backend implementations should return normalized application DTOs rather
+than exposing collection documents, ACA paths, or remote API objects to Trame
+controllers. See [PHOBOS_INTEGRATION.md](PHOBOS_INTEGRATION.md) for the planned
+Phobos boundary and remaining migration phases.
 
 Client-side event and observer ownership is lifecycle-scoped rather than
 document-global. The registered runtimes own grid timeline/VCR behavior,
