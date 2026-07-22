@@ -23,11 +23,12 @@ The main architectural boundaries are:
   The grid runtime component owns the mounted lifetime of timeline/VCR browser
   behavior and coordinates the focused media and plot lifecycles. The media
   runtime owns pan/zoom and reset-view observation for the mounted grid. The
-  interaction runtime owns app-scoped variable/grid drag-and-drop, context
-  menus, and floating-panel movement. The resize runtime owns variable-panel
-  and grid-track resizing, including pointer capture. All runtimes release
-  their listeners, observers, timers, pointer state, and transient styling on
-  unmount.
+  plot runtime owns plot-data parsing, SVG rendering, cursor drawing,
+  hover/pan/zoom interactions, and render observation. The interaction runtime
+  owns app-scoped variable/grid drag-and-drop, context menus, and floating-panel
+  movement. The resize runtime owns variable-panel and grid-track resizing,
+  including pointer capture. All runtimes release their listeners, observers,
+  timers, pointer state, and transient styling on unmount.
 - `seurat/models/`: pure, dependency-free grid, timeline, and source-selection
   behavior, plus plot, plugin-option, and grid-layout normalization. Controllers
   adapt Trame state to these testable operations.
@@ -51,11 +52,13 @@ Client-side event and observer ownership is lifecycle-scoped rather than
 document-global. The registered runtimes own grid timeline/VCR behavior,
 variable/grid drag-and-drop, context menus, floating-panel movement,
 variable-panel and grid-track resizing, media pan/zoom, plot interaction, and
-plot rendering observation. Shared timeline and SVG rendering algorithms remain
-in `seurat/module/serve/seurat.js`. Media pan/zoom and its reset observer live
-in `seurat/module/serve/seurat-media-runtime.js` behind a narrow lifecycle API.
-Their listeners, observers, timers, and transient interaction state are mounted
-and released with their owning Trame components.
+plot rendering observation. Shared cross-media timeline/VCR policy remains in
+`seurat/module/serve/seurat.js`. Media pan/zoom and its reset observer live in
+`seurat/module/serve/seurat-media-runtime.js`; plot parsing, SVG rendering, and
+plot interaction live in `seurat/module/serve/seurat-plot-runtime.js`. Both are
+behind narrow lifecycle/domain APIs. Their listeners, observers, timers, and
+transient interaction state are mounted and released with the grid Trame
+component.
 
 ## Run
 

@@ -12,6 +12,7 @@ serve = {
 }
 scripts = [
     f"{BASE_URL}/seurat-media-runtime.js",
+    f"{BASE_URL}/seurat-plot-runtime.js",
     f"{BASE_URL}/seurat.js",
     f"{BASE_URL}/seurat-grid-runtime.js",
     f"{BASE_URL}/seurat-interaction-runtime.js",
