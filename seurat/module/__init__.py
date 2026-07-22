@@ -11,6 +11,7 @@ serve = {
     BASE_URL: str(Path(__file__).with_name("serve").resolve()),
 }
 scripts = [
+    f"{BASE_URL}/seurat-media-runtime.js",
     f"{BASE_URL}/seurat.js",
     f"{BASE_URL}/seurat-grid-runtime.js",
     f"{BASE_URL}/seurat-interaction-runtime.js",
