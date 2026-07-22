@@ -7,6 +7,7 @@ from trame.app import TrameComponent, get_server
 
 import app as compatibility_app
 from seurat.app import SeuratApp, build_parser
+from seurat.backends import LocalCampaignBackend
 from seurat import module as seurat_module
 from seurat.components import SeuratUI
 from seurat.widgets import GridRuntime, InteractionRuntime, ResizeRuntime
@@ -50,6 +51,7 @@ class SeuratAppTests(unittest.TestCase):
         self.assertIs(app.server, server)
         self.assertIs(app.collection, collection)
         self.assertIs(app.db, db)
+        self.assertIsInstance(app.backend, LocalCampaignBackend)
         self.assertIs(app.refresh_variable_list, refresh_variable_list)
         self.assertIs(app.ui, built_ui)
         self.assertEqual(
@@ -90,6 +92,7 @@ class SeuratAppTests(unittest.TestCase):
             str(Path("~/campaign.yaml").expanduser()),
         )
         self.assertIs(controller_calls[0]["server"], server)
+        self.assertIs(controller_calls[0]["backend"], app.backend)
         self.assertIs(controller_calls[0]["db"], db)
         self.assertIs(controller_calls[0]["collection"], collection)
         self.assertEqual(controller_calls[0]["campaign_path"], str(campaign_path))

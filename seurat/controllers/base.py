@@ -20,11 +20,12 @@ class ControllerBase:
         self.server = context.server
         self.state = context.server.state
         self.ctrl = context.server.controller
+        self.backend = context.backend
         self.db = context.db
         self.collection = context.collection
         self.parse_campaign = context.parse_campaign
         self.campaign_path = context.campaign_path
         self.image_association_schema_path = context.image_association_schema_path
         self.campaign_schema_path = context.campaign_schema_path
-        self.application = SeuratApplication(context.db)
+        self.application = SeuratApplication(backend=context.backend)
         self.plugin_source_variables_cache = {}

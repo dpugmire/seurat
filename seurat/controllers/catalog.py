@@ -127,9 +127,12 @@ class CatalogControllerMixin:
         }
         collapsed_by_view[view] = dict(self.state.variableGroupCollapsed)
         self.state.variableGroupCollapsedByView = collapsed_by_view
-        self.state.dbOk = self.db.ok
+        backend_status = self.application.get_backend_status()
+        self.state.dbOk = backend_status.ok
         self.state.dbStatus = (
-            "Connected" if self.db.ok else f"DB error: {self.db.last_error}"
+            "Connected"
+            if backend_status.ok
+            else f"DB error: {backend_status.error}"
         )
 
     def show_help(self, title: str) -> None:
@@ -229,11 +232,12 @@ Notes:
         qf = self.active_query_filter()
         summary = self.db.variable_min_max_summary(var_id, extra_filter=qf)
 
-        self.state.dbOk = self.db.ok
+        backend_status = self.application.get_backend_status()
+        self.state.dbOk = backend_status.ok
         self.state.dbStatus = (
             f'Connected • Selected variable: "{label}" • QueryView: {self.state.queryViewLabel}'
-            if self.db.ok
-            else f'DB error • "{label}" • {self.db.last_error}'
+            if backend_status.ok
+            else f'DB error • "{label}" • {backend_status.error}'
         )
 
         self.state.detailsSelectedVar = label
@@ -492,9 +496,12 @@ Notes:
     def on_selected_var(self, selectedVar, **_):
         if not selectedVar:
             clear_right_panes(self.state)
-            self.state.dbOk = self.db.ok
+            backend_status = self.application.get_backend_status()
+            self.state.dbOk = backend_status.ok
             self.state.dbStatus = (
-                "Connected" if self.db.ok else f"DB error: {self.db.last_error}"
+                "Connected"
+                if backend_status.ok
+                else f"DB error: {backend_status.error}"
             )
             return
         self.update_selected_var_panels(selectedVar)

@@ -12,6 +12,7 @@ from sqlite_store import open_sqlite_collection
 from ui import build_ui
 
 from . import module as seurat_module
+from .backends import LocalCampaignBackend
 from .state import init_state
 
 
@@ -46,10 +47,12 @@ class SeuratApp(TrameApp):
         print(f"Seurat sidecar DB: {self.collection.path}")
 
         self.db = db or CampaignDb(self.collection)
+        self.backend = LocalCampaignBackend(self.db)
         init_state(self.state, self.db)
 
         self.refresh_variable_list = controller_attacher(
             server=self.server,
+            backend=self.backend,
             db=self.db,
             collection=self.collection,
             parse_campaign=parse_campaign,
