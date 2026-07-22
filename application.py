@@ -8,6 +8,13 @@ from seurat.backends import (
     NavigationRequest,
     NavigationResource,
     NavigationView,
+    SeuratBackend,
+    SourceDescriptor,
+    SourceLookupRequest,
+    SourceRestrictionRequest,
+    SourceRestrictionResult,
+    SourceSummary,
+    SourceSummaryRequest,
 )
 
 
@@ -18,7 +25,7 @@ class SeuratApplication:
         self,
         campaign_db=None,
         *,
-        backend: Optional[CatalogBackend] = None,
+        backend: Optional[SeuratBackend] = None,
     ):
         if backend is None:
             if campaign_db is None:
@@ -32,6 +39,19 @@ class SeuratApplication:
     def get_backend_status(self) -> BackendStatus:
         return self._backend.get_status()
 
+    def get_source_summary(self, request: SourceSummaryRequest) -> SourceSummary:
+        return self._backend.get_source_summary(request)
+
+    def find_source(
+        self, request: SourceLookupRequest
+    ) -> Optional[SourceDescriptor]:
+        return self._backend.find_source(request)
+
+    def resolve_source_restriction(
+        self, request: SourceRestrictionRequest
+    ) -> SourceRestrictionResult:
+        return self._backend.resolve_source_restriction(request)
+
 
 __all__ = (
     "BackendStatus",
@@ -40,5 +60,12 @@ __all__ = (
     "NavigationRequest",
     "NavigationResource",
     "NavigationView",
+    "SeuratBackend",
     "SeuratApplication",
+    "SourceDescriptor",
+    "SourceLookupRequest",
+    "SourceRestrictionRequest",
+    "SourceRestrictionResult",
+    "SourceSummary",
+    "SourceSummaryRequest",
 )

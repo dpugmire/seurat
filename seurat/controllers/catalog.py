@@ -230,7 +230,9 @@ Notes:
             else {}
         )
         qf = self.active_query_filter()
-        summary = self.db.variable_min_max_summary(var_id, extra_filter=qf)
+        summary = self.application.get_source_summary(
+            {"variable_id": var_id, "query": qf or {}}
+        )
 
         backend_status = self.application.get_backend_status()
         self.state.dbOk = backend_status.ok
@@ -255,7 +257,7 @@ Notes:
         source_rows_all: List[Dict[str, Any]] = []
         for r in rows:
             source_rows_all.append(
-                self.source_row_from_summary_source(dict(r or {}), var_id)
+                self.source_row_from_descriptor(dict(r or {}), var_id)
             )
 
         self.state.sourceRowsAll = source_rows_all
@@ -447,12 +449,14 @@ Notes:
 
         try:
             query_filter, source_filters = python_query_to_filters(q)
-            source_summary = self.db.source_restriction_summary(source_filters)
+            source_summary = self.application.resolve_source_restriction(
+                {"queries": source_filters}
+            )
             source_count = int(source_summary.get("count", 0) or 0)
             self.state.queryFilter = query_filter
             self.state.querySourceFilters = source_filters
             self.state.querySourceRestrictionFilter = (
-                dict(source_summary.get("filter", {}) or {}) if source_filters else {}
+                dict(source_summary.get("query", {}) or {}) if source_filters else {}
             )
             self.state.querySourceRestrictionCount = (
                 source_count if source_filters else 0

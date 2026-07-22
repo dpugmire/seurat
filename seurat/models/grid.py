@@ -23,6 +23,7 @@ def empty_grid_cell() -> GridCell:
         "visualization_name": "",
         "selected_visualization": "",
         "visualization_options": [],
+        "source_id": "",
         "_source_key": "",
         "_source_keys": [],
         "_source_fields_list": [],

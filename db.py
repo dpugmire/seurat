@@ -1044,6 +1044,33 @@ class CampaignDb:
             self._update_source_min_max(entry, to_float(doc.get("min", None)), to_float(doc.get("max", None)))
         return self._finalize_sources(grouped)
 
+    def source_for_visualization(
+        self,
+        variable_id: str,
+        visualization_name: str,
+        extra_filter: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Return one local source that provides a stored visualization."""
+
+        if not self.ok or not variable_id or not visualization_name:
+            return {}
+        try:
+            visualization_filter = {"visualization_name": visualization_name}
+            query = (
+                and_filter(extra_filter, visualization_filter)
+                if extra_filter
+                else visualization_filter
+            )
+            sources = self._image_sources_for_variable(
+                variable_id,
+                extra_filter=query,
+            )
+            return dict(sources[0]) if sources else {}
+        except Exception as e:
+            self.last_error = f"{type(e).__name__}: {e}"
+            self.ok = False
+            return {}
+
     def distinct_visualization_names_for_variable(
         self,
         variable_id: str,

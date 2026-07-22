@@ -606,6 +606,29 @@ class CampaignDbNavigationTests(unittest.TestCase):
             "run-a/output.bp",
         )
 
+    def test_application_source_summary_and_lookup_share_source_identity(self):
+        application = SeuratApplication(self.db)
+
+        summary = application.get_source_summary(
+            {"variable_id": "density", "query": {}}
+        )
+        source = application.find_source(
+            {
+                "variable_id": "density",
+                "visualization_name": "heatmap",
+                "query": {},
+            }
+        )
+
+        run_a = next(
+            item
+            for item in summary["sources"]
+            if item["source_dataset"] == "run-a/output.bp"
+        )
+        self.assertIsNotNone(source)
+        self.assertEqual(source["id"], run_a["id"])
+        self.assertTrue(source["id"].startswith("local-source:v1:"))
+
     def test_controller_refresh_preserves_variable_groups_state_contract(self):
         state = RecordingState(
             queryFilter={},

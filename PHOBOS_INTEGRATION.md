@@ -4,11 +4,11 @@ This document records the intended boundary between Seurat's Trame UI and a
 future Phobos backend. It reflects the Seurat and Phobos repositories as of
 July 22, 2026.
 
-Phase 5A does not add a Phobos dependency. It establishes one narrow catalog
-capability and keeps the existing ACA/SQLite implementation behind a local
-adapter. The remaining backend work should move through that boundary rather
-than exposing Phobos REST objects, Django models, ACA paths, or SQLite documents
-to Trame controllers.
+Phases 5A and 5B.1 do not add a Phobos dependency. They establish narrow
+catalog and source capabilities while keeping the existing ACA/SQLite
+implementation behind a local adapter. The remaining backend work should move
+through that boundary rather than exposing Phobos REST objects, Django models,
+ACA paths, or SQLite documents to Trame controllers.
 
 ## Ownership Boundary
 
@@ -56,8 +56,39 @@ The current `query` member preserves Seurat's existing filter-document dialect
 for compatibility. It is a Seurat application contract, not permission for
 controllers to access a database collection. A Phobos adapter will either
 translate that filter tree to Phobos requests or use a future Phobos query
-endpoint. Phase 5B should formalize the supported fields and operators before a
-remote adapter is implemented.
+endpoint. Phase 5B.2 should formalize the supported fields and operators before
+a remote adapter is implemented.
+
+## Phase 5B.1 Source Boundary
+
+Phase 5B.1 adds a separate source capability rather than growing the catalog
+contract into a single backend-specific interface:
+
+- `SourceBackend.get_source_summary(request)` returns aggregate statistics and
+  normalized source descriptors;
+- `SourceBackend.find_source(request)` resolves the source associated with a
+  stored visualization;
+- `SourceBackend.resolve_source_restriction(request)` isolates the current
+  compatibility implementation of `source(...)` clauses;
+- `SeuratBackend` composes the catalog and source capabilities required by the
+  current application;
+- `LocalCampaignBackend` assigns deterministic opaque `local-source:v1:*`
+  identifiers rather than exposing composite controller keys as identity.
+
+Local source identity follows schema file group, then source dataset, then the
+legacy producer/case/file tuple. It does not include the variable ID, so the
+same run/source has the same identity across variables.
+
+The source descriptor retains optional local metadata needed by visualization
+and plugin paths that have not migrated yet. Controllers must treat `id` as the
+source identity; fields such as `source_dataset`, `producer`, `casename`, and
+`file` remain descriptive and compatibility data rather than identifiers.
+
+`SourceRestrictionResult.query` still contains the existing filter-document
+dialect because catalog, media, and generated-plot reads have not all moved
+behind backend operations. Phase 5B.2 must replace that compatibility result
+with the formal backend-neutral query contract before a Phobos adapter is
+implemented.
 
 ## Current Phobos Coverage
 
@@ -170,12 +201,18 @@ session authorization.
 
 ## Planned Follow-On Phases
 
-### Phase 5B: Source And Query Capability
+### Phase 5B.1: Source Capability
 
 - define normalized source descriptors and statistic summaries;
-- formalize the Seurat filter tree and source-restriction semantics;
 - move source discovery out of direct collection access;
 - keep a local implementation and fake contract tests.
+
+### Phase 5B.2: Query Capability
+
+- formalize the Seurat filter tree and source-restriction semantics;
+- replace compatibility filter documents at the backend boundary;
+- migrate catalog and source query execution behind typed operations;
+- keep the current query language and user-visible behavior.
 
 ### Phase 5C: Stored Visualization And Media Capability
 

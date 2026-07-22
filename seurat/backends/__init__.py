@@ -8,6 +8,14 @@ from .contracts import (
     NavigationRequest,
     NavigationResource,
     NavigationView,
+    SeuratBackend,
+    SourceBackend,
+    SourceDescriptor,
+    SourceLookupRequest,
+    SourceRestrictionRequest,
+    SourceRestrictionResult,
+    SourceSummary,
+    SourceSummaryRequest,
 )
 from .local import LocalCampaignBackend
 
@@ -20,4 +28,12 @@ __all__ = (
     "NavigationRequest",
     "NavigationResource",
     "NavigationView",
+    "SeuratBackend",
+    "SourceBackend",
+    "SourceDescriptor",
+    "SourceLookupRequest",
+    "SourceRestrictionRequest",
+    "SourceRestrictionResult",
+    "SourceSummary",
+    "SourceSummaryRequest",
 )
