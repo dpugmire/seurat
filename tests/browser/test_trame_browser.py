@@ -82,6 +82,12 @@ def test_app_mounts_and_renders_structural_ui(page, seurat_server):
     )
     assert (
         page.locator(
+            '.seurat-content-column[data-seurat-plot-runtime-owner="mounted"]'
+        ).count()
+        == 1
+    )
+    assert (
+        page.locator(
             '.v-application[data-seurat-interaction-runtime-owner="mounted"]'
         ).count()
         == 1
@@ -404,6 +410,14 @@ def test_plot_hover_pan_zoom_and_reset_request(page, seurat_server):
     assert plot.evaluate(
         "plot => plot.__seuratPlotMeta.hoverTip.style.display"
     ) == "block"
+    hover_text = plot.evaluate(
+        "plot => plot.__seuratPlotMeta.hoverTip.textContent"
+    )
+    assert "\\n" not in hover_text
+    hover_lines = hover_text.splitlines()
+    assert len(hover_lines) == 2
+    assert hover_lines[0].startswith("x: ")
+    assert hover_lines[1].startswith("y: ")
     page.keyboard.up("Control")
     assert plot.evaluate(
         "plot => plot.__seuratPlotMeta.hoverGroup.getAttribute('display')"
@@ -470,6 +484,7 @@ def test_plot_runtime_cleans_up_observers_and_remounts_idempotently(
     assert plot.evaluate("plot => plot.classList.contains('is-panning')")
 
     root.evaluate("root => window.seuratGridRuntime.unmount(root)")
+    assert root.get_attribute("data-seurat-plot-runtime-owner") is None
     assert not plot.evaluate("plot => plot.hasPointerCapture(1)")
     assert not plot.evaluate("plot => plot.classList.contains('is-panning')")
     assert not page.locator("body").evaluate(
@@ -489,6 +504,7 @@ def test_plot_runtime_cleans_up_observers_and_remounts_idempotently(
 
     root.evaluate("root => window.seuratGridRuntime.mount(root)")
     root.evaluate("root => window.seuratGridRuntime.mount(root)")
+    assert root.get_attribute("data-seurat-plot-runtime-owner") == "mounted"
     page.wait_for_function(
         "document.querySelector('.seurat-plot1d').__seuratPlotRenderKey !== 'unmounted'"
     )

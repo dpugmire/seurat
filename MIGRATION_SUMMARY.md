@@ -28,7 +28,7 @@ Original repo:
 The Trame rearchitecture work is on:
 
 ```text
-branch: rearchitect-trame-phase4a
+branch: rearchitect-trame-phase4b
 remote: origin -> https://github.com/dpugmire/seurat.git
 ```
 
@@ -80,7 +80,16 @@ reset-view observation are extracted from the remaining monolithic client
 script into `seurat-media-runtime.js`. The mounted grid runtime coordinates the
 media lifecycle through a narrow `mount`, `unmount`, and
 `resetViewForCellIndex` interface while continuing to own combined media/plot
-reset semantics.
+reset semantics. It was merged by GitHub PR #10 at merge commit
+`77cf4310bd09f3841daf84d7ccc690072f592309`.
+
+Phase 4B continues the behavior-preserving decomposition on
+`rearchitect-trame-phase4b`. Plot-data parsing, settings normalization, SVG
+rendering, cursor drawing, hover/pan/zoom interaction, resize/mutation
+observation, render scheduling, and transient plot state are extracted into
+`seurat-plot-runtime.js`. Cross-media timeline policy remains in the grid
+client, which supplies the resolved time or normalized video progress through
+the plot runtime API and coordinates combined media/plot resets.
 
 The last commit before the rearchitecture is preserved by the annotated tag:
 
