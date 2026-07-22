@@ -380,9 +380,12 @@
     }
   }
 
-  const runtime = window.seuratMediaRuntime || {};
+  const seurat = window.seurat = window.seurat || {};
+  const runtimes = seurat.runtimes = seurat.runtimes || {};
+  const runtime = runtimes.media || window.seuratMediaRuntime || {};
   runtime.mount = mountPanZoomRuntime;
   runtime.unmount = unmountPanZoomRuntime;
   runtime.resetViewForCellIndex = resetPanZoomForCellIndex;
+  runtimes.media = runtime;
   window.seuratMediaRuntime = runtime;
 })();

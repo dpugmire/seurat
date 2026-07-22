@@ -1226,7 +1226,9 @@
     return values;
   }
 
-  const runtime = window.seuratPlotRuntime || {};
+  const seurat = window.seurat = window.seurat || {};
+  const runtimes = seurat.runtimes = seurat.runtimes || {};
+  const runtime = runtimes.plot || window.seuratPlotRuntime || {};
   runtime.mount = mountPlotRuntime;
   runtime.unmount = unmountPlotRuntime;
   runtime.getPlots = getGridPlots;
@@ -1236,5 +1238,6 @@
   runtime.updateCursors = updatePlotCursors;
   runtime.resetViewForCellIndex = resetPlotViewForCellIndex;
   runtime.scheduleRender = scheduleRenderAllPlot1d;
+  runtimes.plot = runtime;
   window.seuratPlotRuntime = runtime;
 })();
