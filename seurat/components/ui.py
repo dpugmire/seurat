@@ -42,14 +42,6 @@ class SeuratUI(TrameComponent):
                 self.resize_runtime = ResizeRuntime()
                 self.help_dialog.build()
                 with vuetify.VContainer(fluid=True, class_="pa-2"):
-                    html.Div(
-                        "",
-                        id="seurat-reset-view-request",
-                        style="display:none;",
-                        raw_attrs=[
-                            ':data-reset-view-request="JSON.stringify(resetViewRequest || {})"'
-                        ],
-                    )
                     with vuetify.VRow(classes="seurat-main-row", no_gutters=True):
                         self.variable_panel.build()
                         self.grid_workspace.build()

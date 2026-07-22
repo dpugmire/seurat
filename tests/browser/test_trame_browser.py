@@ -42,16 +42,16 @@ def _open_app(page, seurat_server, mode="step"):
     return console_errors, page_errors, response_errors
 
 
-def _drag(page, locator, delta_x=0, delta_y=0, release=True):
+def _drag(page, locator, delta_x=0, delta_y=0, release=True, button="left"):
     bounds = locator.bounding_box()
     assert bounds is not None
     start_x = bounds["x"] + bounds["width"] / 2
     start_y = bounds["y"] + bounds["height"] / 2
     page.mouse.move(start_x, start_y)
-    page.mouse.down()
+    page.mouse.down(button=button)
     page.mouse.move(start_x + delta_x, start_y + delta_y, steps=3)
     if release:
-        page.mouse.up()
+        page.mouse.up(button=button)
 
 
 def test_app_mounts_and_renders_structural_ui(page, seurat_server):
@@ -281,6 +281,100 @@ def test_grid_runtime_releases_and_restores_timeline_handlers(page, seurat_serve
     page.wait_for_function(
         "document.querySelector('#seurat-vcr-time-value').textContent === 'Step = 1'"
     )
+
+
+def test_media_viewport_pan_zoom_and_reset_request(page, seurat_server):
+    _open_app(page, seurat_server)
+
+    viewport = page.locator(
+        '.seurat-dropcell[data-cell-index="1"] .seurat-panzoom-viewport'
+    )
+    bounds = viewport.bounding_box()
+    assert bounds is not None
+    page.mouse.move(
+        bounds["x"] + bounds["width"] / 2,
+        bounds["y"] + bounds["height"] / 2,
+    )
+    page.mouse.wheel(0, -120)
+    assert viewport.evaluate("viewport => viewport.__seuratPanZoomState.scale") > 1
+
+    viewport.dblclick()
+    assert viewport.evaluate(
+        "viewport => viewport.__seuratPanZoomState"
+    ) == pytest.approx({"scale": 1, "tx": 0, "ty": 0})
+
+    page.keyboard.down("Shift")
+    _drag(page, viewport, delta_x=35, delta_y=20)
+    page.keyboard.up("Shift")
+    panned = viewport.evaluate("viewport => viewport.__seuratPanZoomState")
+    assert panned["scale"] == pytest.approx(1)
+    assert panned["tx"] == pytest.approx(35, abs=1)
+    assert panned["ty"] == pytest.approx(20, abs=1)
+
+    _drag(page, viewport, delta_y=-30, button="middle")
+    zoomed = viewport.evaluate("viewport => viewport.__seuratPanZoomState")
+    assert zoomed["scale"] > 1
+
+    request = page.locator("#seurat-reset-view-request")
+    request.evaluate(
+        "element => element.setAttribute('data-reset-view-request', "
+        "JSON.stringify({ cell_index: 1, nonce: 1 }))"
+    )
+    page.wait_for_function(
+        "document.querySelector('.seurat-dropcell[data-cell-index=\"1\"] "
+        ".seurat-panzoom-viewport').__seuratPanZoomState.scale === 1"
+    )
+    reset = viewport.evaluate("viewport => viewport.__seuratPanZoomState")
+    assert reset == pytest.approx({"scale": 1, "tx": 0, "ty": 0})
+
+
+def test_media_pan_zoom_lifecycle_cleanup_and_idempotent_remount(
+    page, seurat_server
+):
+    _open_app(page, seurat_server)
+
+    root = page.locator(".seurat-content-column")
+    viewport = page.locator(
+        '.seurat-dropcell[data-cell-index="1"] .seurat-panzoom-viewport'
+    )
+    viewport.dblclick()
+
+    page.keyboard.down("Shift")
+    _drag(page, viewport, delta_x=20, delta_y=10, release=False)
+    assert viewport.evaluate("viewport => viewport.hasPointerCapture(1)")
+    assert viewport.evaluate("viewport => viewport.classList.contains('is-panning')")
+
+    root.evaluate("root => window.seuratGridRuntime.unmount(root)")
+    assert not viewport.evaluate("viewport => viewport.hasPointerCapture(1)")
+    assert not viewport.evaluate(
+        "viewport => viewport.classList.contains('is-panning')"
+    )
+    assert not page.locator("body").evaluate(
+        "body => body.classList.contains('seurat-panzoom-panning')"
+    )
+    page.mouse.up()
+    page.keyboard.up("Shift")
+
+    before_unmounted_wheel = viewport.evaluate(
+        "viewport => ({ ...viewport.__seuratPanZoomState })"
+    )
+    bounds = viewport.bounding_box()
+    page.mouse.move(
+        bounds["x"] + bounds["width"] / 2,
+        bounds["y"] + bounds["height"] / 2,
+    )
+    page.mouse.wheel(0, -100)
+    assert viewport.evaluate(
+        "viewport => viewport.__seuratPanZoomState"
+    ) == pytest.approx(before_unmounted_wheel)
+
+    root.evaluate("root => window.seuratGridRuntime.mount(root)")
+    root.evaluate("root => window.seuratGridRuntime.mount(root)")
+    viewport.dblclick()
+    page.mouse.wheel(0, -100)
+    assert viewport.evaluate(
+        "viewport => viewport.__seuratPanZoomState.scale"
+    ) == pytest.approx(1.161834, abs=0.001)
 
 
 def test_variable_panel_resize_supports_keyboard_and_pointer(page, seurat_server):
