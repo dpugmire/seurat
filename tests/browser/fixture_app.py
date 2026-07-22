@@ -176,6 +176,14 @@ def build_fixture_server(mode):
         cells[index] = assigned
         state.gridCells = cells
 
+    def move_grid_cell(from_cell_index, to_cell_index):
+        source_index = int(from_cell_index)
+        target_index = int(to_cell_index)
+        cells = [dict(cell) for cell in state.gridCells]
+        cells[target_index] = cells[source_index]
+        cells[source_index] = empty_grid_cell()
+        state.gridCells = cells
+
     def set_grid_layout_size(rows, cols):
         rows = int(rows)
         cols = int(cols)
@@ -208,6 +216,14 @@ def build_fixture_server(mode):
         state.contextMenuY = int(float(y))
         state.contextMenuVisible = True
 
+    def show_item_context_menu(item, x, y):
+        state.contextMenuKind = "item"
+        state.contextMenuItem = str(item)
+        state.contextMenuItemLabel = str(item)
+        state.contextMenuX = int(float(x))
+        state.contextMenuY = int(float(y))
+        state.contextMenuVisible = True
+
     def hide_context_menu_trigger():
         state.contextMenuVisible = False
 
@@ -217,6 +233,8 @@ def build_fixture_server(mode):
     server.controller.trigger("assign_var_to_grid_cell_trigger")(
         assign_var_to_grid_cell
     )
+    server.controller.trigger("move_grid_cell_trigger")(move_grid_cell)
+    server.controller.trigger("show_item_context_menu")(show_item_context_menu)
     server.controller.trigger("show_cell_context_menu")(show_cell_context_menu)
     server.controller.trigger("hide_context_menu_trigger")(hide_context_menu_trigger)
     build_ui(server, campaign_name=f"browser-{mode}.aca")

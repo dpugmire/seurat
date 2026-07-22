@@ -8,3 +8,10 @@ class GridRuntime(AbstractElement):
 
     def __init__(self, children=None, **kwargs):
         super().__init__("seurat-grid-runtime", children, **kwargs)
+
+
+class InteractionRuntime(AbstractElement):
+    """Lifecycle owner for catalog/grid drag-and-drop and context menus."""
+
+    def __init__(self, children=None, **kwargs):
+        super().__init__("seurat-interaction-runtime", children, **kwargs)

@@ -13,8 +13,9 @@ serve = {
 scripts = [
     f"{BASE_URL}/seurat.js",
     f"{BASE_URL}/seurat-grid-runtime.js",
+    f"{BASE_URL}/seurat-interaction-runtime.js",
 ]
 styles = [
     f"{BASE_URL}/seurat.css",
 ]
-vue_use = ["seuratGridRuntime"]
+vue_use = ["seuratGridRuntime", "seuratInteractionRuntime"]
