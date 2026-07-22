@@ -51,7 +51,8 @@ from seurat.models.timeline import (
     clear_timeline_driver,
     toggle_timeline_driver,
 )
-from state_init import clear_right_panes, fmt
+from seurat.state import clear_right_panes
+from state_init import fmt
 
 
 def _variable_groups_from_navigation(nodes: List[NavigationNode]) -> List[Dict[str, Any]]:

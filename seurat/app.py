@@ -9,10 +9,10 @@ from controllers import attach_controllers
 from db import CampaignDb
 from ingest_campaign import parse_campaign
 from sqlite_store import open_sqlite_collection
-from state_init import init_state
 from ui import build_ui
 
 from . import module as seurat_module
+from .state import init_state
 
 
 def _expanded_path(path):
