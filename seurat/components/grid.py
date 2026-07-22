@@ -267,6 +267,14 @@ class GridWorkspace(TrameComponent):
                     ),
                 ):
                     self.runtime = GridRuntime()
+                    html.Div(
+                        "",
+                        id="seurat-reset-view-request",
+                        style="display:none;",
+                        raw_attrs=[
+                            ':data-reset-view-request="JSON.stringify(resetViewRequest || {})"'
+                        ],
+                    )
                     with html.Div(classes="seurat-vcr-bar seurat-grid-controls-header"):
                         with html.Div(classes="seurat-vcr-controls"):
                             html.Button(

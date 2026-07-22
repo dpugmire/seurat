@@ -21,10 +21,12 @@ The main architectural boundaries are:
   identifiers use the `seurat` namespace and assets are included in wheels.
 - `seurat/widgets.py`: Python wrappers for Seurat's registered Vue components.
   The grid runtime component owns the mounted lifetime of timeline/VCR browser
-  behavior. The interaction runtime owns app-scoped variable/grid drag-and-drop
-  and context menus. The resize runtime owns variable-panel and grid-track
-  resizing, including pointer capture. All runtimes release their listeners,
-  observers, pointer state, and transient styling on unmount.
+  behavior, media pan/zoom, plot interaction, plot rendering observers, and
+  reset requests. The interaction runtime owns app-scoped variable/grid
+  drag-and-drop, context menus, and floating-panel movement. The resize runtime
+  owns variable-panel and grid-track resizing, including pointer capture. All
+  runtimes release their listeners, observers, timers, pointer state, and
+  transient styling on unmount.
 - `seurat/models/`: pure, dependency-free grid, timeline, and source-selection
   behavior, plus plot, plugin-option, and grid-layout normalization. Controllers
   adapt Trame state to these testable operations.
@@ -44,12 +46,14 @@ in the matching `seurat/controllers/` domain. UI components should bind state
 and controller actions, not duplicate those decisions in markup or browser
 code.
 
-Client-side behavior is being moved incrementally out of document-global
-handlers. Grid timeline/VCR behavior and cross-component variable/grid
-drag-and-drop, context menus, variable-panel resizing, and grid-track resizing
-are lifecycle-owned. Floating-dialog movement, image interaction, and plot
-pan/zoom remain in `seurat/module/serve/seurat.js` until their corresponding
-components are migrated and covered by browser tests.
+Client-side event and observer ownership is lifecycle-scoped rather than
+document-global. The registered runtimes own grid timeline/VCR behavior,
+variable/grid drag-and-drop, context menus, floating-panel movement,
+variable-panel and grid-track resizing, media pan/zoom, plot interaction, and
+plot rendering observation. Shared timeline and SVG rendering algorithms remain
+in `seurat/module/serve/seurat.js`, while their listeners, observers, timers,
+and transient interaction state are mounted and released with their owning
+Trame components.
 
 ## Run
 
@@ -88,7 +92,9 @@ exercises application mounting, variable grouping, grid selection and
 assignment, layout controls, context menus, rendering, and both schema-less
 step-index and declared physical-time timelines in a real Chromium client. It
 also covers variable-panel and grid-track resizing, pointer capture, cleanup,
-and idempotent runtime remounting.
+and idempotent runtime remounting. Floating-panel movement, media pan/zoom,
+plot hover/pan/zoom, reset requests, observer teardown, and render-timer cleanup
+are exercised through the same mounted-client suite.
 
 Example:
 

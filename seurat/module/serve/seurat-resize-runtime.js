@@ -155,8 +155,11 @@
 
     function schedulePlotRerenderForTrackResize(delayMs) {
       const run = function () {
-        if (typeof window.seuratScheduleRenderAllPlot1d === "function") {
-          window.seuratScheduleRenderAllPlot1d();
+        if (
+          window.seuratGridRuntime &&
+          typeof window.seuratGridRuntime.schedulePlotRender === "function"
+        ) {
+          window.seuratGridRuntime.schedulePlotRender();
         }
       };
       const delay = Number(delayMs);

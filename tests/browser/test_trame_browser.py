@@ -42,16 +42,16 @@ def _open_app(page, seurat_server, mode="step"):
     return console_errors, page_errors, response_errors
 
 
-def _drag(page, locator, delta_x=0, delta_y=0, release=True):
+def _drag(page, locator, delta_x=0, delta_y=0, release=True, button="left"):
     bounds = locator.bounding_box()
     assert bounds is not None
     start_x = bounds["x"] + bounds["width"] / 2
     start_y = bounds["y"] + bounds["height"] / 2
     page.mouse.move(start_x, start_y)
-    page.mouse.down()
+    page.mouse.down(button=button)
     page.mouse.move(start_x + delta_x, start_y + delta_y, steps=3)
     if release:
-        page.mouse.up()
+        page.mouse.up(button=button)
 
 
 def test_app_mounts_and_renders_structural_ui(page, seurat_server):
@@ -211,6 +211,58 @@ def test_interaction_runtime_releases_and_restores_handlers(page, seurat_server)
     )
 
 
+def test_floating_panel_drag_moves_and_clamps_panel(page, seurat_server):
+    _open_app(page, seurat_server)
+
+    panel = page.locator("#seurat-plot-settings-panel")
+    panel.evaluate("panel => { panel.style.display = 'block'; }")
+    handle = panel.locator(".seurat-floating-panel-drag-handle")
+    initial = panel.bounding_box()
+    assert initial is not None
+
+    _drag(page, handle, delta_x=55, delta_y=35)
+    moved = panel.bounding_box()
+    assert moved["x"] == pytest.approx(initial["x"] + 55, abs=2)
+    assert moved["y"] == pytest.approx(initial["y"] + 35, abs=2)
+    assert not panel.evaluate("panel => panel.classList.contains('is-dragging')")
+
+    _drag(page, handle, delta_x=-2000, delta_y=-2000)
+    clamped = panel.bounding_box()
+    assert clamped["x"] == pytest.approx(8, abs=1)
+    assert clamped["y"] == pytest.approx(8, abs=1)
+
+
+def test_floating_panel_runtime_cleans_up_and_owns_window_resize(
+    page, seurat_server
+):
+    _open_app(page, seurat_server)
+
+    root = page.locator(".v-application")
+    panel = page.locator("#seurat-plot-settings-panel")
+    panel.evaluate("panel => { panel.style.display = 'block'; }")
+    handle = panel.locator(".seurat-floating-panel-drag-handle")
+
+    _drag(page, handle, delta_x=20, delta_y=10, release=False)
+    assert handle.evaluate("handle => handle.hasPointerCapture(1)")
+    assert panel.evaluate("panel => panel.classList.contains('is-dragging')")
+
+    root.evaluate("root => window.seuratInteractionRuntime.unmount(root)")
+    assert not handle.evaluate("handle => handle.hasPointerCapture(1)")
+    assert not panel.evaluate("panel => panel.classList.contains('is-dragging')")
+    page.mouse.up()
+
+    panel.evaluate("panel => { panel.style.left = '2000px'; panel.style.top = '2000px'; }")
+    page.evaluate("window.dispatchEvent(new Event('resize'))")
+    assert panel.get_attribute("style").find("left: 2000px") >= 0
+
+    root.evaluate("root => window.seuratInteractionRuntime.mount(root)")
+    root.evaluate("root => window.seuratInteractionRuntime.mount(root)")
+    page.evaluate("window.dispatchEvent(new Event('resize'))")
+    clamped = panel.bounding_box()
+    assert clamped["x"] + clamped["width"] <= page.viewport_size["width"] - 7
+    assert clamped["y"] + clamped["height"] <= page.viewport_size["height"] - 7
+
+
 def test_grid_runtime_releases_and_restores_timeline_handlers(page, seurat_server):
     _open_app(page, seurat_server)
 
@@ -229,6 +281,223 @@ def test_grid_runtime_releases_and_restores_timeline_handlers(page, seurat_serve
     page.wait_for_function(
         "document.querySelector('#seurat-vcr-time-value').textContent === 'Step = 1'"
     )
+
+
+def test_media_viewport_pan_zoom_and_reset_request(page, seurat_server):
+    _open_app(page, seurat_server)
+
+    viewport = page.locator(
+        '.seurat-dropcell[data-cell-index="1"] .seurat-panzoom-viewport'
+    )
+    bounds = viewport.bounding_box()
+    assert bounds is not None
+    page.mouse.move(
+        bounds["x"] + bounds["width"] / 2,
+        bounds["y"] + bounds["height"] / 2,
+    )
+    page.mouse.wheel(0, -120)
+    assert viewport.evaluate("viewport => viewport.__seuratPanZoomState.scale") > 1
+
+    viewport.dblclick()
+    assert viewport.evaluate(
+        "viewport => viewport.__seuratPanZoomState"
+    ) == pytest.approx({"scale": 1, "tx": 0, "ty": 0})
+
+    page.keyboard.down("Shift")
+    _drag(page, viewport, delta_x=35, delta_y=20)
+    page.keyboard.up("Shift")
+    panned = viewport.evaluate("viewport => viewport.__seuratPanZoomState")
+    assert panned["scale"] == pytest.approx(1)
+    assert panned["tx"] == pytest.approx(35, abs=1)
+    assert panned["ty"] == pytest.approx(20, abs=1)
+
+    _drag(page, viewport, delta_y=-30, button="middle")
+    zoomed = viewport.evaluate("viewport => viewport.__seuratPanZoomState")
+    assert zoomed["scale"] > 1
+
+    request = page.locator("#seurat-reset-view-request")
+    request.evaluate(
+        "element => element.setAttribute('data-reset-view-request', "
+        "JSON.stringify({ cell_index: 1, nonce: 1 }))"
+    )
+    page.wait_for_function(
+        "document.querySelector('.seurat-dropcell[data-cell-index=\"1\"] "
+        ".seurat-panzoom-viewport').__seuratPanZoomState.scale === 1"
+    )
+    reset = viewport.evaluate("viewport => viewport.__seuratPanZoomState")
+    assert reset == pytest.approx({"scale": 1, "tx": 0, "ty": 0})
+
+
+def test_media_pan_zoom_lifecycle_cleanup_and_idempotent_remount(
+    page, seurat_server
+):
+    _open_app(page, seurat_server)
+
+    root = page.locator(".seurat-content-column")
+    viewport = page.locator(
+        '.seurat-dropcell[data-cell-index="1"] .seurat-panzoom-viewport'
+    )
+    viewport.dblclick()
+
+    page.keyboard.down("Shift")
+    _drag(page, viewport, delta_x=20, delta_y=10, release=False)
+    assert viewport.evaluate("viewport => viewport.hasPointerCapture(1)")
+    assert viewport.evaluate("viewport => viewport.classList.contains('is-panning')")
+
+    root.evaluate("root => window.seuratGridRuntime.unmount(root)")
+    assert not viewport.evaluate("viewport => viewport.hasPointerCapture(1)")
+    assert not viewport.evaluate(
+        "viewport => viewport.classList.contains('is-panning')"
+    )
+    assert not page.locator("body").evaluate(
+        "body => body.classList.contains('seurat-panzoom-panning')"
+    )
+    page.mouse.up()
+    page.keyboard.up("Shift")
+
+    before_unmounted_wheel = viewport.evaluate(
+        "viewport => ({ ...viewport.__seuratPanZoomState })"
+    )
+    bounds = viewport.bounding_box()
+    page.mouse.move(
+        bounds["x"] + bounds["width"] / 2,
+        bounds["y"] + bounds["height"] / 2,
+    )
+    page.mouse.wheel(0, -100)
+    assert viewport.evaluate(
+        "viewport => viewport.__seuratPanZoomState"
+    ) == pytest.approx(before_unmounted_wheel)
+
+    root.evaluate("root => window.seuratGridRuntime.mount(root)")
+    root.evaluate("root => window.seuratGridRuntime.mount(root)")
+    viewport.dblclick()
+    page.mouse.wheel(0, -100)
+    assert viewport.evaluate(
+        "viewport => viewport.__seuratPanZoomState.scale"
+    ) == pytest.approx(1.161834, abs=0.001)
+
+
+def test_plot_hover_pan_zoom_and_reset_request(page, seurat_server):
+    _open_app(page, seurat_server)
+
+    plot = page.locator('.seurat-dropcell[data-cell-index="0"] .seurat-plot1d')
+    hover_point = plot.evaluate(
+        """plot => {
+            const point = plot.__seuratPlotMeta.hoverSeries[0].points[20];
+            const rect = plot.getBoundingClientRect();
+            return { x: rect.left + point.px, y: rect.top + point.py };
+        }"""
+    )
+    page.keyboard.down("Control")
+    page.mouse.move(hover_point["x"], hover_point["y"])
+    assert plot.evaluate(
+        "plot => plot.__seuratPlotMeta.hoverGroup.getAttribute('display')"
+    ) is None
+    assert plot.evaluate(
+        "plot => plot.__seuratPlotMeta.hoverTip.style.display"
+    ) == "block"
+    page.keyboard.up("Control")
+    assert plot.evaluate(
+        "plot => plot.__seuratPlotMeta.hoverGroup.getAttribute('display')"
+    ) == "none"
+
+    initial_axes = plot.evaluate(
+        "plot => ({"
+        " x: { ...plot.__seuratPlotMeta.xAxis },"
+        " y: { ...plot.__seuratPlotMeta.yAxis }"
+        "})"
+    )
+    bounds = plot.bounding_box()
+    page.mouse.move(
+        bounds["x"] + bounds["width"] / 2,
+        bounds["y"] + bounds["height"] / 2,
+    )
+    page.mouse.wheel(0, -120)
+    wheel_state = plot.evaluate("plot => ({ ...plot.__seuratPlotViewState })")
+    assert wheel_state["xMax"] - wheel_state["xMin"] < (
+        initial_axes["x"]["max"] - initial_axes["x"]["min"]
+    )
+
+    plot.dblclick()
+    assert plot.evaluate("plot => plot.__seuratPlotViewState") is None
+
+    page.keyboard.down("Shift")
+    _drag(page, plot, delta_x=30, delta_y=15)
+    page.keyboard.up("Shift")
+    pan_state = plot.evaluate("plot => ({ ...plot.__seuratPlotViewState })")
+    assert pan_state["xMin"] != pytest.approx(initial_axes["x"]["min"])
+    assert pan_state["yMin"] != pytest.approx(initial_axes["y"]["min"])
+
+    _drag(page, plot, delta_y=-25, button="middle")
+    middle_zoom_state = plot.evaluate(
+        "plot => ({ ...plot.__seuratPlotViewState })"
+    )
+    assert middle_zoom_state["xMax"] - middle_zoom_state["xMin"] < (
+        pan_state["xMax"] - pan_state["xMin"]
+    )
+
+    request = page.locator("#seurat-reset-view-request")
+    request.evaluate(
+        "element => element.setAttribute('data-reset-view-request', "
+        "JSON.stringify({ cell_index: 0, nonce: 2 }))"
+    )
+    page.wait_for_function(
+        "document.querySelector('.seurat-dropcell[data-cell-index=\"0\"] "
+        ".seurat-plot1d').__seuratPlotViewState === null"
+    )
+
+
+def test_plot_runtime_cleans_up_observers_and_remounts_idempotently(
+    page, seurat_server
+):
+    _open_app(page, seurat_server)
+
+    root = page.locator(".seurat-content-column")
+    plot = page.locator('.seurat-dropcell[data-cell-index="0"] .seurat-plot1d')
+    plot.dblclick()
+
+    page.keyboard.down("Shift")
+    _drag(page, plot, delta_x=20, delta_y=10, release=False)
+    assert plot.evaluate("plot => plot.hasPointerCapture(1)")
+    assert plot.evaluate("plot => plot.classList.contains('is-panning')")
+
+    root.evaluate("root => window.seuratGridRuntime.unmount(root)")
+    assert not plot.evaluate("plot => plot.hasPointerCapture(1)")
+    assert not plot.evaluate("plot => plot.classList.contains('is-panning')")
+    assert not page.locator("body").evaluate(
+        "body => body.classList.contains('seurat-plot-panning')"
+    )
+    page.mouse.up()
+    page.keyboard.up("Shift")
+
+    plot.evaluate("plot => { plot.__seuratPlotRenderKey = 'unmounted'; }")
+    page.evaluate("window.seuratGridRuntime.schedulePlotRender()")
+    plot.evaluate(
+        "plot => plot.setAttribute('data-plot-settings', "
+        "JSON.stringify({ background_color: '#ffeeee' }))"
+    )
+    page.wait_for_timeout(100)
+    assert plot.evaluate("plot => plot.__seuratPlotRenderKey") == "unmounted"
+
+    root.evaluate("root => window.seuratGridRuntime.mount(root)")
+    root.evaluate("root => window.seuratGridRuntime.mount(root)")
+    page.wait_for_function(
+        "document.querySelector('.seurat-plot1d').__seuratPlotRenderKey !== 'unmounted'"
+    )
+    plot.dblclick()
+    initial_span = plot.evaluate(
+        "plot => plot.__seuratPlotMeta.xAxis.max - plot.__seuratPlotMeta.xAxis.min"
+    )
+    bounds = plot.bounding_box()
+    page.mouse.move(
+        bounds["x"] + bounds["width"] / 2,
+        bounds["y"] + bounds["height"] / 2,
+    )
+    page.mouse.wheel(0, -100)
+    zoomed_span = plot.evaluate(
+        "plot => plot.__seuratPlotViewState.xMax - plot.__seuratPlotViewState.xMin"
+    )
+    assert zoomed_span / initial_span == pytest.approx(0.860708, abs=0.002)
 
 
 def test_variable_panel_resize_supports_keyboard_and_pointer(page, seurat_server):
@@ -388,8 +657,8 @@ def test_resize_runtime_cleans_up_and_mount_is_idempotent(page, seurat_server):
             const originalTrigger = window.trame.trigger.bind(window.trame);
             window.__seuratResizeTriggerCounts = {};
             window.__seuratResizeRenderCount = 0;
-            const originalRender = window.seuratScheduleRenderAllPlot1d;
-            window.seuratScheduleRenderAllPlot1d = (...args) => {
+            const originalRender = window.seuratGridRuntime.schedulePlotRender;
+            window.seuratGridRuntime.schedulePlotRender = (...args) => {
                 window.__seuratResizeRenderCount += 1;
                 return originalRender(...args);
             };
