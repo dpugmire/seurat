@@ -39,11 +39,13 @@ The main architectural boundaries are:
   grid, visualization, context-menu, and lifecycle ownership. Each domain
   declares the actions, triggers, and state-change callbacks it registers.
 - `seurat/backends/`: backend-neutral capability contracts and the current
-  local ACA/SQLite adapter. Phase 5A routes catalog navigation and availability
-  through this seam; later source, media, and compute capabilities remain
+  local ACA/SQLite adapter. Catalog navigation, availability, source
+  descriptors, source statistics, and source restriction resolution now route
+  through this seam; later query, media, and compute capabilities remain
   documented in [PHOBOS_INTEGRATION.md](PHOBOS_INTEGRATION.md).
 - `application.py`: application facade over the injected backend capabilities;
-  it retains compatibility exports for the typed navigation contract.
+  it retains compatibility exports for the typed navigation and source
+  contracts.
 - `controllers.py`: compatibility exports for the packaged controller adapters.
 - `ingest_campaign.py`, `sqlite_store.py`, and `db.py`: ACA ingestion, SQLite
   collection compatibility, and campaign data access/rendering.

@@ -1,5 +1,8 @@
 """Local ACA/SQLite implementation of Seurat backend capabilities."""
 
+import hashlib
+import json
+import math
 from typing import Any, Dict, List
 
 from .contracts import (
@@ -7,6 +10,12 @@ from .contracts import (
     NavigationNode,
     NavigationRequest,
     NavigationResource,
+    SourceDescriptor,
+    SourceLookupRequest,
+    SourceRestrictionRequest,
+    SourceRestrictionResult,
+    SourceSummary,
+    SourceSummaryRequest,
 )
 
 
@@ -39,6 +48,155 @@ class LocalCampaignBackend:
             )
             return self._file_navigation(groups)
         raise ValueError(f"Unsupported navigation view: {view}")
+
+    def get_source_summary(self, request: SourceSummaryRequest) -> SourceSummary:
+        variable_id = str(request.get("variable_id", "") or "")
+        query = request.get("query") or None
+        raw = self._campaign_db.variable_min_max_summary(
+            variable_id,
+            extra_filter=query,
+        )
+        return {
+            "variable_id": str(raw.get("variable", "") or variable_id),
+            "num_sources": int(raw.get("num_sources", 0) or 0),
+            "global_min": self._optional_float(raw.get("global_min")),
+            "global_max": self._optional_float(raw.get("global_max")),
+            "mean_min": self._optional_float(raw.get("mean_min")),
+            "mean_max": self._optional_float(raw.get("mean_max")),
+            "median_min": self._optional_float(raw.get("median_min")),
+            "median_max": self._optional_float(raw.get("median_max")),
+            "sources": [
+                self._source_descriptor(source, variable_id)
+                for source in raw.get("sources", []) or []
+                if isinstance(source, dict)
+            ],
+        }
+
+    def find_source(
+        self, request: SourceLookupRequest
+    ) -> SourceDescriptor | None:
+        variable_id = str(request.get("variable_id", "") or "")
+        visualization_name = str(request.get("visualization_name", "") or "")
+        if not variable_id or not visualization_name:
+            return None
+        source = self._campaign_db.source_for_visualization(
+            variable_id,
+            visualization_name,
+            extra_filter=request.get("query") or None,
+        )
+        return (
+            self._source_descriptor(source, variable_id)
+            if isinstance(source, dict) and source
+            else None
+        )
+
+    def resolve_source_restriction(
+        self, request: SourceRestrictionRequest
+    ) -> SourceRestrictionResult:
+        raw = self._campaign_db.source_restriction_summary(
+            list(request.get("queries", []) or [])
+        )
+        return {
+            "query": dict(raw.get("filter", {}) or {}),
+            "count": int(raw.get("count", 0) or 0),
+        }
+
+    @staticmethod
+    def _optional_float(value: Any) -> float | None:
+        if value is None:
+            return None
+        try:
+            number = float(value)
+        except Exception:
+            return None
+        return number if math.isfinite(number) else None
+
+    @staticmethod
+    def _optional_int(value: Any) -> int | None:
+        if value is None or str(value).strip() == "":
+            return None
+        try:
+            return int(value)
+        except Exception:
+            return None
+
+    @classmethod
+    def _source_id(cls, source: Dict[str, Any]) -> str:
+        schema_file_group = str(source.get("schema_file_group", "") or "")
+        schema_mode = str(source.get("schema_mode", "") or "")
+        source_dataset = str(source.get("source_dataset", "") or "")
+        if schema_file_group and schema_mode == "file_per_timestep":
+            identity = {
+                "kind": "schema_file_group",
+                "schema_file_group": schema_file_group,
+                "schema_mode": schema_mode,
+            }
+        elif source_dataset:
+            identity = {
+                "kind": "source_dataset",
+                "source_dataset": source_dataset,
+            }
+        else:
+            identity = {
+                "kind": "legacy_source",
+                "producer": str(source.get("producer", "") or ""),
+                "casename": str(source.get("casename", "") or ""),
+                "file": str(source.get("file", "") or ""),
+            }
+        encoded = json.dumps(
+            identity,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        return f"local-source:v1:{hashlib.sha256(encoded).hexdigest()}"
+
+    @classmethod
+    def _source_descriptor(
+        cls, source: Dict[str, Any], variable_id: str
+    ) -> SourceDescriptor:
+        source_dataset = str(source.get("source_dataset", "") or "")
+        schema_file_group = str(source.get("schema_file_group", "") or "")
+        producer = str(source.get("producer", "") or "")
+        casename = str(source.get("casename", "") or "")
+        file_name = str(source.get("file", "") or "")
+        label = str(source.get("source_label", "") or "")
+        if not label:
+            label = schema_file_group or source_dataset or "/".join(
+                part for part in (producer, casename, file_name) if part
+            )
+        return {
+            "id": cls._source_id(source),
+            "label": label,
+            "variable_id": str(source.get("variable_id", "") or variable_id),
+            "variable_name": str(source.get("variable_name", "") or ""),
+            "variable_type": str(source.get("variable_type", "variable") or "variable"),
+            "variable_path": str(source.get("variable_path", "") or ""),
+            "source_dataset": source_dataset,
+            "source_datasets": [
+                str(item) for item in source.get("source_datasets", []) or []
+            ],
+            "files": [str(item) for item in source.get("files", []) or []],
+            "producer": producer,
+            "casename": casename,
+            "file": file_name,
+            "schema_name": str(source.get("schema_name", "") or ""),
+            "schema_file_group": schema_file_group,
+            "schema_role": str(source.get("schema_role", "") or ""),
+            "schema_mode": str(source.get("schema_mode", "") or ""),
+            "num_timesteps": int(source.get("num_timesteps", 1) or 1),
+            "visualization_name": str(source.get("visualization_name", "") or ""),
+            "visualization_kind": str(source.get("visualization_kind", "") or ""),
+            "visualization_source_dataset": str(
+                source.get("visualization_source_dataset", "") or ""
+            ),
+            "association_source": str(source.get("association_source", "") or ""),
+            "campaign_path": str(source.get("campaign_path", "") or ""),
+            "variable_location": str(source.get("variable_location", "") or ""),
+            "frame_index": cls._optional_int(source.get("frame_index")),
+            "minimum": cls._optional_float(source.get("min")),
+            "maximum": cls._optional_float(source.get("max")),
+        }
 
     @staticmethod
     def _variable_navigation(groups: List[Dict[str, Any]]) -> List[NavigationNode]:

@@ -3,13 +3,13 @@
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from seurat.backends import CatalogBackend
+from seurat.backends import SeuratBackend
 
 
 @dataclass(frozen=True)
 class ControllerContext:
     server: Any
-    backend: CatalogBackend
+    backend: SeuratBackend
     db: Any
     collection: Any
     parse_campaign: Callable[..., Any]

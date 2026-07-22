@@ -2,7 +2,7 @@
 
 from typing import Optional
 
-from seurat.backends import CatalogBackend, LocalCampaignBackend
+from seurat.backends import LocalCampaignBackend, SeuratBackend
 
 from .base import ControllerBase
 from .catalog import CatalogControllerMixin
@@ -53,7 +53,7 @@ def attach_controllers(
     campaign_path: str,
     image_association_schema_path: str = "",
     campaign_schema_path: str = "",
-    backend: Optional[CatalogBackend] = None,
+    backend: Optional[SeuratBackend] = None,
 ):
     catalog_backend = backend if backend is not None else LocalCampaignBackend(db)
     context = ControllerContext(

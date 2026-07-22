@@ -5,7 +5,6 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from db import (
     GENERATED_SCALAR_PLOT_VIS,
-    VISUALIZATION_PAYLOAD_VARIABLE_TYPES,
 )
 from plugin_runtime import (
     is_plugin_visualization,
@@ -107,6 +106,7 @@ class SourcesControllerMixin:
             for raw_item in raw_items:
                 if isinstance(raw_item, dict):
                     fields = {
+                        "source_id": str(raw_item.get("source_id", "") or ""),
                         "_source_key": str(raw_item.get("_source_key", "") or ""),
                         "source_dataset": str(raw_item.get("source_dataset", "") or ""),
                         "schema_file_group": str(
@@ -128,6 +128,7 @@ class SourcesControllerMixin:
 
         if not fields_list:
             fields = {
+                "source_id": str(cell.get("source_id", "") or ""),
                 "_source_key": str(cell.get("_source_key", "") or ""),
                 "source_dataset": str(cell.get("source_dataset", "") or ""),
                 "schema_file_group": str(cell.get("schema_file_group", "") or ""),
@@ -298,44 +299,14 @@ class SourcesControllerMixin:
             return {}
         if is_plugin_visualization(vis):
             return {}
-
-        query = {
-            "variable_id": var_id,
-            "variable_type": {"$in": list(VISUALIZATION_PAYLOAD_VARIABLE_TYPES)},
-            "visualization_name": vis,
-        }
-        qf = self.active_query_filter()
-        if qf:
-            query = and_filter(qf, query)
-        proj = {
-            "_id": 1,
-            "variable_id": 1,
-            "source_dataset": 1,
-            "schema_file_group": 1,
-            "schema_mode": 1,
-            "producer": 1,
-            "casename": 1,
-            "file": 1,
-        }
-
-        try:
-            doc = self.collection.find_one(query, proj)
-        except Exception:
-            doc = None
-        if not doc:
-            return {}
-
-        row = {
-            "variable_id": str(doc.get("variable_id", "") or var_id),
-            "source_dataset": str(doc.get("source_dataset", "") or ""),
-            "schema_file_group": str(doc.get("schema_file_group", "") or ""),
-            "schema_mode": str(doc.get("schema_mode", "") or ""),
-            "producer": str(doc.get("producer", "") or ""),
-            "casename": str(doc.get("casename", "") or ""),
-            "file": str(doc.get("file", "") or ""),
-        }
-        row["_key"] = source_key_for_fields(row)
-        return row
+        source = self.application.find_source(
+            {
+                "variable_id": var_id,
+                "visualization_name": vis,
+                "query": self.active_query_filter() or {},
+            }
+        )
+        return self.source_row_from_descriptor(source or {}, var_id) if source else {}
 
     def active_source_filter_for_variable(self, variable_id: str) -> Dict[str, str]:
         if str(self.state.detailsSelectedVarId or "") != str(variable_id or ""):
@@ -365,12 +336,12 @@ class SourcesControllerMixin:
         ]
         return "/".join(part for part in parts if part)
 
-    def source_row_from_summary_source(
+    def source_row_from_descriptor(
         self, source: Dict[str, Any], variable_id: str
     ) -> Dict[str, Any]:
         row = {
             "source_dataset": str(source.get("source_dataset", "") or ""),
-            "source_label": str(source.get("source_label", "") or ""),
+            "source_label": str(source.get("label", "") or ""),
             "schema_name": str(source.get("schema_name", "") or ""),
             "schema_file_group": str(source.get("schema_file_group", "") or ""),
             "schema_role": str(source.get("schema_role", "") or ""),
@@ -394,12 +365,14 @@ class SourcesControllerMixin:
             "campaign_path": str(source.get("campaign_path", "") or ""),
             "variable_location": str(source.get("variable_location", "") or ""),
             "frame_index": source.get("frame_index", None),
-            "min": fmt(source.get("min", None)),
-            "max": fmt(source.get("max", None)),
-            "min_value": source.get("min", None),
-            "max_value": source.get("max", None),
+            "min": fmt(source.get("minimum", None)),
+            "max": fmt(source.get("maximum", None)),
+            "min_value": source.get("minimum", None),
+            "max_value": source.get("maximum", None),
         }
-        row["_key"] = source_key_for_fields(row)
+        source_id = str(source.get("id", "") or source_key_for_fields(row))
+        row["source_id"] = source_id
+        row["_key"] = source_id
         row["sourceName"] = self.source_name_for_row(row)
         return row
 
@@ -416,11 +389,14 @@ class SourcesControllerMixin:
             if row:
                 return row
 
-        summary = self.db.variable_min_max_summary(
-            var_id, extra_filter=self.active_query_filter()
+        summary = self.application.get_source_summary(
+            {
+                "variable_id": var_id,
+                "query": self.active_query_filter() or {},
+            }
         )
         for source in summary.get("sources", []) or []:
-            row = self.source_row_from_summary_source(dict(source or {}), var_id)
+            row = self.source_row_from_descriptor(dict(source or {}), var_id)
             if source_filter_from_row(row):
                 return row
         return {}
@@ -485,7 +461,9 @@ class SourcesControllerMixin:
 
         qf = self.active_query_filter()
         extra_filter = and_filter(qf, source_filter) if qf else source_filter
-        summary = self.db.variable_min_max_summary(var_id, extra_filter=extra_filter)
+        summary = self.application.get_source_summary(
+            {"variable_id": var_id, "query": extra_filter or {}}
+        )
         return self.valid_title_extrema(
             summary.get("global_min", None),
             summary.get("global_max", None),
@@ -527,8 +505,10 @@ class SourcesControllerMixin:
                 row_filter, source_filters = python_query_to_filters(expr)
                 source_restriction = {}
                 if source_filters:
-                    source_summary = self.db.source_restriction_summary(source_filters)
-                    source_restriction = dict(source_summary.get("filter", {}) or {})
+                    source_summary = self.application.resolve_source_restriction(
+                        {"queries": source_filters}
+                    )
+                    source_restriction = dict(source_summary.get("query", {}) or {})
                 matched_rows = []
                 for row in rows:
                     values = self.source_filter_values(row)

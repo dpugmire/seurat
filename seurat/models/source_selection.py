@@ -112,8 +112,15 @@ def source_filter_from_row(row: Dict[str, Any]) -> Dict[str, str]:
 def source_fields_from_row(row: Dict[str, Any]) -> Dict[str, str]:
     if not row:
         return {}
+    source_id = str(
+        row.get("source_id", "")
+        or row.get("id", "")
+        or row.get("_key", "")
+        or ""
+    )
     return {
-        "_source_key": str(row.get("_key", "") or ""),
+        "source_id": source_id,
+        "_source_key": source_id,
         "source_dataset": str(row.get("source_dataset", "") or ""),
         "schema_file_group": str(row.get("schema_file_group", "") or ""),
         "schema_mode": str(row.get("schema_mode", "") or ""),

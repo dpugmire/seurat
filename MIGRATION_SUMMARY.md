@@ -112,6 +112,14 @@ Contract/fake-backend tests characterize the seam. `PHOBOS_INTEGRATION.md`
 records the ownership boundary, current Phobos coverage, timeline requirements,
 API and asynchronous-job gaps, and the planned Phase 5B through 5E migration.
 
+Phase 5B.1 continues the backend-boundary work on
+`rearchitect-trame-phase5b1-sources`. A separate source capability introduces
+normalized source descriptors, aggregate statistics, stored-visualization
+source lookup, and source-restriction resolution. The local adapter assigns
+deterministic opaque source IDs, while controllers consume the capability
+through `SeuratApplication`. Query-language formalization, media transport,
+generated plots, and plugin execution remain separate follow-on work.
+
 The last commit before the rearchitecture is preserved by the annotated tag:
 
 ```text
