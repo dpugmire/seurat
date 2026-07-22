@@ -155,11 +155,13 @@
 
     function schedulePlotRerenderForTrackResize(delayMs) {
       const run = function () {
+        const runtimes = (window.seurat && window.seurat.runtimes) || {};
+        const grid = runtimes.grid || window.seuratGridRuntime;
         if (
-          window.seuratGridRuntime &&
-          typeof window.seuratGridRuntime.schedulePlotRender === "function"
+          grid &&
+          typeof grid.schedulePlotRender === "function"
         ) {
-          window.seuratGridRuntime.schedulePlotRender();
+          grid.schedulePlotRender();
         }
       };
       const delay = Number(delayMs);
@@ -628,22 +630,25 @@
     root.removeAttribute("data-seurat-resize-runtime-owner");
   }
 
-  const runtime = window.seuratResizeRuntime || {};
+  const seurat = window.seurat = window.seurat || {};
+  const runtimes = seurat.runtimes = seurat.runtimes || {};
+  const runtime = runtimes.resize || window.seuratResizeRuntime || {};
   runtime.mount = mount;
   runtime.unmount = unmount;
   runtime.install = function install(app) {
     app.component("seurat-resize-runtime", {
       mounted() {
         const root = this.$el.closest(".v-application");
-        if (root) window.seuratResizeRuntime.mount(root);
+        if (root) runtime.mount(root);
       },
       beforeUnmount() {
         const root = this.$el.closest(".v-application");
-        if (root) window.seuratResizeRuntime.unmount(root);
+        if (root) runtime.unmount(root);
       },
       template: '<span hidden data-seurat-resize-runtime="mounted"></span>',
     });
   };
 
+  runtimes.resize = runtime;
   window.seuratResizeRuntime = runtime;
 })();

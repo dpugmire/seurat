@@ -330,23 +330,26 @@
     root.removeAttribute("data-seurat-interaction-runtime-owner");
   }
 
-  const runtime = window.seuratInteractionRuntime || {};
+  const seurat = window.seurat = window.seurat || {};
+  const runtimes = seurat.runtimes = seurat.runtimes || {};
+  const runtime = runtimes.interaction || window.seuratInteractionRuntime || {};
   runtime.mount = mount;
   runtime.unmount = unmount;
   runtime.install = function install(app) {
     app.component("seurat-interaction-runtime", {
       mounted() {
         const root = this.$el.closest(".v-application");
-        if (root) window.seuratInteractionRuntime.mount(root);
+        if (root) runtime.mount(root);
       },
       beforeUnmount() {
         const root = this.$el.closest(".v-application");
-        if (root) window.seuratInteractionRuntime.unmount(root);
+        if (root) runtime.unmount(root);
       },
       template:
         '<span hidden data-seurat-interaction-runtime="mounted"></span>',
     });
   };
 
+  runtimes.interaction = runtime;
   window.seuratInteractionRuntime = runtime;
 })();

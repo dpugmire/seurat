@@ -28,7 +28,7 @@ Original repo:
 The Trame rearchitecture work is on:
 
 ```text
-branch: rearchitect-trame-phase4b
+branch: rearchitect-trame-phase4c
 remote: origin -> https://github.com/dpugmire/seurat.git
 ```
 
@@ -89,7 +89,17 @@ rendering, cursor drawing, hover/pan/zoom interaction, resize/mutation
 observation, render scheduling, and transient plot state are extracted into
 `seurat-plot-runtime.js`. Cross-media timeline policy remains in the grid
 client, which supplies the resolved time or normalized video progress through
-the plot runtime API and coordinates combined media/plot resets.
+the plot runtime API and coordinates combined media/plot resets. It was merged
+by GitHub PR #11 at merge commit
+`91ac3c57de23e1440704cd8492ba8d7596dfee7b`.
+
+Phase 4C completes the planned client-runtime decomposition on
+`rearchitect-trame-phase4c`. Timeline selection, image/video synchronization,
+VCR actions, labels/sliders, timers, media mutation observation, and plot cursor
+coordination are extracted into `seurat-timeline-runtime.js`. The remaining
+`seurat.js` becomes a small grid coordinator. Runtime objects are registered
+under `window.seurat.runtimes`, while the existing top-level grid, interaction,
+and resize aliases are retained for Trame Vue plugin compatibility.
 
 The last commit before the rearchitecture is preserved by the annotated tag:
 

@@ -88,6 +88,12 @@ def test_app_mounts_and_renders_structural_ui(page, seurat_server):
     )
     assert (
         page.locator(
+            '.seurat-content-column[data-seurat-timeline-runtime-owner="mounted"]'
+        ).count()
+        == 1
+    )
+    assert (
+        page.locator(
             '.v-application[data-seurat-interaction-runtime-owner="mounted"]'
         ).count()
         == 1
@@ -95,6 +101,20 @@ def test_app_mounts_and_renders_structural_ui(page, seurat_server):
     assert (
         page.locator('.v-application[data-seurat-resize-runtime-owner="mounted"]').count()
         == 1
+    )
+    assert page.evaluate(
+        """() => {
+            const runtimes = window.seurat && window.seurat.runtimes;
+            return Boolean(
+                runtimes
+                && runtimes.grid === window.seuratGridRuntime
+                && runtimes.media === window.seuratMediaRuntime
+                && runtimes.plot === window.seuratPlotRuntime
+                && runtimes.timeline === window.seuratTimelineRuntime
+                && runtimes.interaction === window.seuratInteractionRuntime
+                && runtimes.resize === window.seuratResizeRuntime
+            );
+        }"""
     )
 
     rendered = page.locator(".seurat-content-column").screenshot()
@@ -284,11 +304,13 @@ def test_grid_runtime_releases_and_restores_timeline_handlers(page, seurat_serve
 
     root.evaluate("root => window.seuratGridRuntime.unmount(root)")
     assert root.get_attribute("data-seurat-grid-runtime-owner") is None
+    assert root.get_attribute("data-seurat-timeline-runtime-owner") is None
     forward.click()
     assert label.text_content() == "Step = 0"
 
     root.evaluate("root => window.seuratGridRuntime.mount(root)")
     assert root.get_attribute("data-seurat-grid-runtime-owner") == "mounted"
+    assert root.get_attribute("data-seurat-timeline-runtime-owner") == "mounted"
     forward.click()
     page.wait_for_function(
         "document.querySelector('#seurat-vcr-time-value').textContent === 'Step = 1'"

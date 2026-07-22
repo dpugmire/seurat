@@ -20,15 +20,16 @@ The main architectural boundaries are:
 - `seurat/module/`: registered JavaScript and CSS assets served by Trame. Web
   identifiers use the `seurat` namespace and assets are included in wheels.
 - `seurat/widgets.py`: Python wrappers for Seurat's registered Vue components.
-  The grid runtime component owns the mounted lifetime of timeline/VCR browser
-  behavior and coordinates the focused media and plot lifecycles. The media
-  runtime owns pan/zoom and reset-view observation for the mounted grid. The
-  plot runtime owns plot-data parsing, SVG rendering, cursor drawing,
-  hover/pan/zoom interactions, and render observation. The interaction runtime
-  owns app-scoped variable/grid drag-and-drop, context menus, and floating-panel
-  movement. The resize runtime owns variable-panel and grid-track resizing,
-  including pointer capture. All runtimes release their listeners, observers,
-  timers, pointer state, and transient styling on unmount.
+  The grid runtime component coordinates focused timeline, media, and plot
+  lifecycles. The timeline runtime owns timeline selection, VCR controls,
+  image/video synchronization, timers, and media observation. The media runtime
+  owns pan/zoom and reset-view observation. The plot runtime owns plot-data
+  parsing, SVG rendering, cursor drawing, hover/pan/zoom interactions, and
+  render observation. The interaction runtime owns app-scoped variable/grid
+  drag-and-drop, context menus, and floating-panel movement. The resize runtime
+  owns variable-panel and grid-track resizing, including pointer capture. All
+  runtimes release their listeners, observers, timers, pointer state, and
+  transient styling on unmount.
 - `seurat/models/`: pure, dependency-free grid, timeline, and source-selection
   behavior, plus plot, plugin-option, and grid-layout normalization. Controllers
   adapt Trame state to these testable operations.
@@ -52,13 +53,15 @@ Client-side event and observer ownership is lifecycle-scoped rather than
 document-global. The registered runtimes own grid timeline/VCR behavior,
 variable/grid drag-and-drop, context menus, floating-panel movement,
 variable-panel and grid-track resizing, media pan/zoom, plot interaction, and
-plot rendering observation. Shared cross-media timeline/VCR policy remains in
-`seurat/module/serve/seurat.js`. Media pan/zoom and its reset observer live in
-`seurat/module/serve/seurat-media-runtime.js`; plot parsing, SVG rendering, and
-plot interaction live in `seurat/module/serve/seurat-plot-runtime.js`. Both are
-behind narrow lifecycle/domain APIs. Their listeners, observers, timers, and
-transient interaction state are mounted and released with the grid Trame
-component.
+plot rendering observation. Timeline/VCR policy lives in
+`seurat/module/serve/seurat-timeline-runtime.js`; media pan/zoom and its reset
+observer live in `seurat/module/serve/seurat-media-runtime.js`; plot parsing,
+SVG rendering, and plot interaction live in
+`seurat/module/serve/seurat-plot-runtime.js`. The small
+`seurat/module/serve/seurat.js` coordinator mounts these domains and connects
+combined reset/cursor behavior. Internal runtime objects are collected under
+`window.seurat.runtimes`; existing top-level aliases remain for Trame Vue plugin
+registration compatibility.
 
 ## Run
 
