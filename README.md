@@ -22,7 +22,9 @@ The main architectural boundaries are:
 - `seurat/widgets.py`: Python wrappers for Seurat's registered Vue components.
   The grid runtime component owns the mounted lifetime of timeline/VCR browser
   behavior. The interaction runtime owns app-scoped variable/grid drag-and-drop
-  and context menus. Both release their listeners and observers on unmount.
+  and context menus. The resize runtime owns variable-panel and grid-track
+  resizing, including pointer capture. All runtimes release their listeners,
+  observers, pointer state, and transient styling on unmount.
 - `seurat/models/`: pure, dependency-free grid, timeline, and source-selection
   behavior, plus plot, plugin-option, and grid-layout normalization. Controllers
   adapt Trame state to these testable operations.
@@ -44,8 +46,9 @@ code.
 
 Client-side behavior is being moved incrementally out of document-global
 handlers. Grid timeline/VCR behavior and cross-component variable/grid
-drag-and-drop and context menus are lifecycle-owned. Resizing and plot
-interaction remain in `seurat/module/serve/seurat.js` until their corresponding
+drag-and-drop, context menus, variable-panel resizing, and grid-track resizing
+are lifecycle-owned. Floating-dialog movement, image interaction, and plot
+pan/zoom remain in `seurat/module/serve/seurat.js` until their corresponding
 components are migrated and covered by browser tests.
 
 ## Run
@@ -83,7 +86,9 @@ SEURAT_RUN_BROWSER_TESTS=1 python -m pytest -q tests/browser
 The deterministic browser fixture does not require a campaign archive. It
 exercises application mounting, variable grouping, grid selection and
 assignment, layout controls, context menus, rendering, and both schema-less
-step-index and declared physical-time timelines in a real Chromium client.
+step-index and declared physical-time timelines in a real Chromium client. It
+also covers variable-panel and grid-track resizing, pointer capture, cleanup,
+and idempotent runtime remounting.
 
 Example:
 

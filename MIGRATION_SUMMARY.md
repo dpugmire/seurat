@@ -28,7 +28,7 @@ Original repo:
 The Trame rearchitecture work is on:
 
 ```text
-branch: rearchitect-trame-phase3c1
+branch: rearchitect-trame-phase3c2
 remote: origin -> https://github.com/dpugmire/seurat.git
 ```
 
@@ -52,8 +52,15 @@ unmount.
 
 Phase 3C.1 adds an app-scoped `seurat-interaction-runtime` Vue component for
 variable/grid drag-and-drop and context menus. The runtime owns listener
-registration and cleanup across the catalog and grid, while resizing and plot
-interaction remain in the shared client module for later incremental slices.
+registration and cleanup across the catalog and grid. It was merged by GitHub
+PR #7 at merge commit `fee56b6cd95dec9b6021ee54c03f49f191fe76e3`.
+
+Phase 3C.2 adds an app-scoped `seurat-resize-runtime` Vue component for
+variable-panel and grid-track resizing. It preserves the existing grid sizing
+controller contracts while replacing document-global resize listeners with
+mounted ownership, pointer capture, idempotent registration, and complete
+cleanup on unmount. Floating-dialog movement, image interaction, and plot
+pan/zoom remain in the shared client module for later incremental slices.
 
 The last commit before the rearchitecture is preserved by the annotated tag:
 

@@ -9,7 +9,7 @@ import app as compatibility_app
 from seurat.app import SeuratApp, build_parser
 from seurat import module as seurat_module
 from seurat.components import SeuratUI
-from seurat.widgets import GridRuntime, InteractionRuntime
+from seurat.widgets import GridRuntime, InteractionRuntime, ResizeRuntime
 from ui import build_ui
 
 
@@ -58,11 +58,16 @@ class SeuratAppTests(unittest.TestCase):
                 f"{seurat_module.BASE_URL}/seurat.js",
                 f"{seurat_module.BASE_URL}/seurat-grid-runtime.js",
                 f"{seurat_module.BASE_URL}/seurat-interaction-runtime.js",
+                f"{seurat_module.BASE_URL}/seurat-resize-runtime.js",
             ],
         )
         self.assertEqual(
             server.state.trame__vue_use,
-            ["seuratGridRuntime", "seuratInteractionRuntime"],
+            [
+                "seuratGridRuntime",
+                "seuratInteractionRuntime",
+                "seuratResizeRuntime",
+            ],
         )
         self.assertEqual(
             server.state.trame__styles,
@@ -138,6 +143,8 @@ class SeuratAppTests(unittest.TestCase):
         self.assertIn("seurat-grid-runtime", ui.layout.html)
         self.assertIsInstance(ui.interaction_runtime, InteractionRuntime)
         self.assertIn("seurat-interaction-runtime", ui.layout.html)
+        self.assertIsInstance(ui.resize_runtime, ResizeRuntime)
+        self.assertIn("seurat-resize-runtime", ui.layout.html)
 
 
 if __name__ == "__main__":
