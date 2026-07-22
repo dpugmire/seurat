@@ -13,6 +13,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from media_utils import png_bytes_to_data_uri
 from query_parser import and_filter
+from seurat.constants import SCALAR_FIELD_COLORMAP_OPTIONS
 
 
 GENERATED_SCALAR_PLOT_VIS = "generated_timeseries"
@@ -107,33 +108,6 @@ _SCALAR_FIELD_COLORMAP_STOPS = {
     "terrain": _stops([[51, 51, 153], [0, 153, 255], [0, 204, 102], [102, 153, 51], [230, 220, 170], [255, 255, 255]]),
     "ocean": _stops([[0, 0, 0], [0, 64, 128], [0, 128, 192], [0, 192, 192], [255, 255, 255]]),
 }
-SCALAR_FIELD_COLORMAP_OPTIONS = (
-    ("Viridis", "viridis"),
-    ("Plasma", "plasma"),
-    ("Inferno", "inferno"),
-    ("Magma", "magma"),
-    ("Cividis", "cividis"),
-    ("Turbo", "turbo"),
-    ("Jet", "jet"),
-    ("Rainbow", "rainbow"),
-    ("Coolwarm", "coolwarm"),
-    ("BWR", "bwr"),
-    ("Seismic", "seismic"),
-    ("Spectral", "spectral"),
-    ("RdYlBu", "rdylbu"),
-    ("RdYlGn", "rdylgn"),
-    ("Difference", "difference"),
-    ("Gray", "gray"),
-    ("Hot", "hot"),
-    ("Cool", "cool"),
-    ("Spring", "spring"),
-    ("Summer", "summer"),
-    ("Autumn", "autumn"),
-    ("Winter", "winter"),
-    ("Copper", "copper"),
-    ("Terrain", "terrain"),
-    ("Ocean", "ocean"),
-)
 SCALAR_FIELD_COLORMAPS = tuple(value for _, value in SCALAR_FIELD_COLORMAP_OPTIONS)
 _SCALAR_FIELD_COLORMAP_ALIASES = {
     "grey": "gray",

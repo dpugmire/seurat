@@ -1,0 +1,30 @@
+"""Lightweight values shared by backend and UI modules."""
+
+
+SCALAR_FIELD_COLORMAP_OPTIONS = (
+    ("Viridis", "viridis"),
+    ("Plasma", "plasma"),
+    ("Inferno", "inferno"),
+    ("Magma", "magma"),
+    ("Cividis", "cividis"),
+    ("Turbo", "turbo"),
+    ("Jet", "jet"),
+    ("Rainbow", "rainbow"),
+    ("Coolwarm", "coolwarm"),
+    ("BWR", "bwr"),
+    ("Seismic", "seismic"),
+    ("Spectral", "spectral"),
+    ("RdYlBu", "rdylbu"),
+    ("RdYlGn", "rdylgn"),
+    ("Difference", "difference"),
+    ("Gray", "gray"),
+    ("Hot", "hot"),
+    ("Cool", "cool"),
+    ("Spring", "spring"),
+    ("Summer", "summer"),
+    ("Autumn", "autumn"),
+    ("Winter", "winter"),
+    ("Copper", "copper"),
+    ("Terrain", "terrain"),
+    ("Ocean", "ocean"),
+)

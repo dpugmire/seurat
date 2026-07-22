@@ -4,7 +4,7 @@ from trame.app import TrameComponent
 from trame.widgets import html
 from trame.widgets import vuetify3 as vuetify
 
-from db import SCALAR_FIELD_COLORMAP_OPTIONS
+from seurat.constants import SCALAR_FIELD_COLORMAP_OPTIONS
 
 
 class HelpDialog(TrameComponent):
