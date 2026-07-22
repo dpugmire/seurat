@@ -125,6 +125,23 @@ class CampaignDbNavigationTests(unittest.TestCase):
 
         self.db = CampaignDb(self.collection)
 
+    def make_controller(self):
+        state = RecordingState()
+        init_state(state, self.db)
+        state.variableLabelsById = {
+            "density": "density",
+            "temperature": "temperature",
+        }
+        server = SimpleNamespace(state=state, controller=RecordingController())
+        attach_controllers(
+            server=server,
+            db=self.db,
+            collection=self.collection,
+            parse_campaign=lambda *_args, **_kwargs: None,
+            campaign_path="/campaign/example.aca",
+        )
+        return state, server.controller
+
     def test_existing_grouping_is_stable_and_deduplicates_sources(self):
         self.assertEqual(
             self.db.grouped_variable_names(),
@@ -543,6 +560,127 @@ class CampaignDbNavigationTests(unittest.TestCase):
         self.assertEqual(cell["status"], "no-visualizations")
         self.assertEqual(cell["note"], "No visualization for source xgc.f3d.*")
         self.assertFalse(state.showSourcesModal)
+
+    def test_grid_layout_controller_preserves_cell_geometry(self):
+        state, controller = self.make_controller()
+
+        controller.actions["set_grid_layout_size"](2, 4)
+
+        self.assertEqual((state.gridRows, state.gridCols), (2, 4))
+        self.assertEqual(len(state.gridCells), 8)
+        self.assertEqual(
+            [
+                (cell["grid_row"], cell["grid_col"])
+                for cell in state.gridCells
+            ],
+            [
+                (1, 1),
+                (1, 2),
+                (1, 3),
+                (1, 4),
+                (2, 1),
+                (2, 2),
+                (2, 3),
+                (2, 4),
+            ],
+        )
+        self.assertTrue(
+            all(
+                cell["row_span"] == 1
+                and cell["col_span"] == 1
+                and not cell["grid_hidden"]
+                for cell in state.gridCells
+            )
+        )
+
+        controller.actions["add_grid_row"]()
+        self.assertEqual((state.gridRows, state.gridCols), (3, 4))
+        self.assertEqual(len(state.gridCells), 12)
+
+        state.activeGridCell = 1
+        controller.actions["delete_grid_column"]()
+        self.assertEqual((state.gridRows, state.gridCols), (3, 3))
+        self.assertEqual(len(state.gridCells), 9)
+        self.assertEqual(state.activeGridCell, -1)
+
+    def test_move_and_clear_cell_reset_timeline_driver_and_selection(self):
+        state, controller = self.make_controller()
+        state.gridCells[0].update(
+            {
+                "variable_id": "density",
+                "variable_name": "density",
+                "status": "ready",
+                "frame_count": 3,
+                "frame_indices": [0, 1, 2],
+                "time_values": [0.0, 0.5, 1.0],
+            }
+        )
+
+        controller.actions["toggle_timeline_driver_cell"](0)
+        self.assertEqual(state.timelineDriverCell, 0)
+
+        controller.actions["move_grid_cell"](0, 4)
+
+        self.assertEqual(state.timelineDriverCell, -1)
+        self.assertEqual(state.gridCells[0]["variable_id"], "")
+        self.assertEqual(state.gridCells[4]["variable_id"], "density")
+        self.assertEqual(state.activeGridCell, 4)
+        self.assertEqual(state.selectedGridCellIndices, [4])
+        self.assertEqual(state.selectedGridCellMap, {"4": True})
+
+        controller.actions["toggle_timeline_driver_cell"](4)
+        self.assertEqual(state.timelineDriverCell, 4)
+
+        controller.actions["clear_grid_cell"](4)
+        self.assertEqual(state.timelineDriverCell, -1)
+        self.assertEqual(state.gridCells[4]["variable_id"], "")
+        self.assertEqual(state.selectedGridCellIndices, [])
+        self.assertEqual(state.selectedGridCellMap, {})
+
+    def test_spanning_cell_hides_and_restores_covered_slot(self):
+        state, controller = self.make_controller()
+        state.gridLayoutMode = "spanning"
+        state.gridCells[0].update(
+            {
+                "variable_id": "density",
+                "variable_name": "density",
+                "status": "ready",
+            }
+        )
+
+        controller.actions["span_grid_cell_right"](0)
+
+        self.assertEqual(state.gridCells[0]["col_span"], 2)
+        self.assertTrue(state.gridCells[1]["grid_hidden"])
+        self.assertEqual(state.activeGridCell, 0)
+
+        controller.actions["shrink_grid_cell_width"](0)
+
+        self.assertEqual(state.gridCells[0]["col_span"], 1)
+        self.assertFalse(state.gridCells[1]["grid_hidden"])
+
+    def test_shift_selection_includes_contiguous_selectable_cells(self):
+        state, controller = self.make_controller()
+        for index in range(5):
+            state.gridCells[index].update(
+                {
+                    "variable_id": "density",
+                    "variable_name": "density",
+                    "status": "ready",
+                }
+            )
+        state.activeGridCell = 0
+        state.selectedGridCellIndices = [0]
+        state.selectedGridCellMap = {"0": True}
+
+        controller.actions["set_active_grid_cell"](4, multi=1)
+
+        self.assertEqual(state.activeGridCell, 4)
+        self.assertEqual(state.selectedGridCellIndices, [0, 1, 2, 3, 4])
+        self.assertEqual(
+            state.selectedGridCellMap,
+            {str(index): True for index in range(5)},
+        )
 
     def test_unimplemented_navigation_views_fail_explicitly(self):
         application = SeuratApplication(self.db)
