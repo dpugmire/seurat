@@ -42,6 +42,18 @@ def _open_app(page, seurat_server, mode="step"):
     return console_errors, page_errors, response_errors
 
 
+def _drag(page, locator, delta_x=0, delta_y=0, release=True):
+    bounds = locator.bounding_box()
+    assert bounds is not None
+    start_x = bounds["x"] + bounds["width"] / 2
+    start_y = bounds["y"] + bounds["height"] / 2
+    page.mouse.move(start_x, start_y)
+    page.mouse.down()
+    page.mouse.move(start_x + delta_x, start_y + delta_y, steps=3)
+    if release:
+        page.mouse.up()
+
+
 def test_app_mounts_and_renders_structural_ui(page, seurat_server):
     console_errors, page_errors, response_errors = _open_app(page, seurat_server)
 
@@ -51,6 +63,9 @@ def test_app_mounts_and_renders_structural_ui(page, seurat_server):
     assert page.locator(".seurat-plot1d svg").is_visible()
     page.locator('[data-seurat-grid-runtime="mounted"]').wait_for(state="attached")
     page.locator('[data-seurat-interaction-runtime="mounted"]').wait_for(
+        state="attached"
+    )
+    page.locator('[data-seurat-resize-runtime="mounted"]').wait_for(
         state="attached"
     )
     assert (
@@ -63,6 +78,10 @@ def test_app_mounts_and_renders_structural_ui(page, seurat_server):
         page.locator(
             '.v-application[data-seurat-interaction-runtime-owner="mounted"]'
         ).count()
+        == 1
+    )
+    assert (
+        page.locator('.v-application[data-seurat-resize-runtime-owner="mounted"]').count()
         == 1
     )
 
@@ -210,6 +229,193 @@ def test_grid_runtime_releases_and_restores_timeline_handlers(page, seurat_serve
     page.wait_for_function(
         "document.querySelector('#seurat-vcr-time-value').textContent === 'Step = 1'"
     )
+
+
+def test_variable_panel_resize_supports_keyboard_and_pointer(page, seurat_server):
+    _open_app(page, seurat_server)
+
+    panel = page.locator("#seurat-variable-column")
+    handle = page.locator("[data-variable-panel-resizer]")
+    initial_width = panel.bounding_box()["width"]
+
+    handle.focus()
+    handle.press("ArrowRight")
+    keyboard_width = panel.bounding_box()["width"]
+    assert keyboard_width == pytest.approx(initial_width + 10, abs=1)
+    assert float(handle.get_attribute("aria-valuenow")) == pytest.approx(
+        keyboard_width, abs=1
+    )
+
+    _drag(page, handle, delta_x=40)
+    pointer_width = panel.bounding_box()["width"]
+    assert pointer_width == pytest.approx(keyboard_width + 40, abs=2)
+    assert not page.locator("body").evaluate(
+        "body => body.classList.contains('seurat-variable-panel-resizing')"
+    )
+
+
+def test_grid_column_resize_updates_track_state(page, seurat_server):
+    _open_app(page, seurat_server)
+
+    grid = page.locator(".seurat-main-grid")
+    handle = page.locator(
+        '.seurat-dropcell[data-cell-index="0"] '
+        '.seurat-grid-col-resize-handle[data-resize-edge="right"]'
+    )
+    _drag(page, handle, delta_x=45)
+
+    page.wait_for_function(
+        "Number(document.querySelector('.seurat-main-grid')"
+        ".getAttribute('data-grid-column-sizes').split(',')[0]) > 320"
+    )
+    sizes = [float(value) for value in grid.get_attribute("data-grid-column-sizes").split(",")]
+    assert sizes[0] == pytest.approx(325, abs=2)
+    assert sizes[1:] == pytest.approx([280, 280], abs=1)
+
+
+def test_fit_grid_column_resize_updates_track_weights(page, seurat_server):
+    _open_app(page, seurat_server)
+
+    grid = page.locator(".seurat-main-grid")
+    grid.evaluate(
+        """grid => {
+            grid.setAttribute('data-grid-sizing-mode', 'fit');
+            grid.setAttribute('data-grid-column-weights', '1,1,1');
+            grid.style.gridTemplateColumns = [1, 1, 1]
+                .map(() => 'minmax(180px, 1fr)')
+                .join(' ');
+        }"""
+    )
+    handle = page.locator(
+        '.seurat-dropcell[data-cell-index="0"] '
+        '.seurat-grid-col-resize-handle[data-resize-edge="right"]'
+    )
+    _drag(page, handle, delta_x=30)
+
+    page.wait_for_function(
+        "Number(document.querySelector('.seurat-main-grid')"
+        ".getAttribute('data-grid-column-weights').split(',')[0]) > 1"
+    )
+    weights = [
+        float(value)
+        for value in grid.get_attribute("data-grid-column-weights").split(",")
+    ]
+    assert weights[0] > 1
+    assert weights[1] < 1
+    assert weights[0] + weights[1] == pytest.approx(2, abs=0.001)
+    assert weights[2] == pytest.approx(1)
+
+
+def test_grid_row_resize_updates_track_state(page, seurat_server):
+    _open_app(page, seurat_server)
+
+    grid = page.locator(".seurat-main-grid")
+    handle = page.locator(
+        '.seurat-dropcell[data-cell-index="0"] '
+        '.seurat-grid-row-resize-handle[data-resize-edge="bottom"]'
+    )
+    _drag(page, handle, delta_y=35)
+
+    page.wait_for_function(
+        "Number(document.querySelector('.seurat-main-grid')"
+        ".getAttribute('data-grid-row-sizes').split(',')[0]) > 380"
+    )
+    sizes = [float(value) for value in grid.get_attribute("data-grid-row-sizes").split(",")]
+    assert sizes == pytest.approx([387], abs=2)
+
+
+def test_grid_corner_resize_updates_both_track_axes(page, seurat_server):
+    _open_app(page, seurat_server)
+
+    grid = page.locator(".seurat-main-grid")
+    handle = page.locator(
+        '.seurat-dropcell[data-cell-index="0"] .seurat-grid-corner-bottom-right'
+    )
+    _drag(page, handle, delta_x=30, delta_y=25)
+
+    page.wait_for_function(
+        "(() => { const grid = document.querySelector('.seurat-main-grid');"
+        " return Number(grid.getAttribute('data-grid-column-sizes').split(',')[0]) > 300"
+        " && Number(grid.getAttribute('data-grid-row-sizes').split(',')[0]) > 370; })()"
+    )
+    column_sizes = [
+        float(value)
+        for value in grid.get_attribute("data-grid-column-sizes").split(",")
+    ]
+    row_sizes = [float(value) for value in grid.get_attribute("data-grid-row-sizes").split(",")]
+    assert column_sizes[0] == pytest.approx(310, abs=2)
+    assert row_sizes[0] == pytest.approx(377, abs=2)
+
+
+def test_resize_runtime_cleans_up_and_mount_is_idempotent(page, seurat_server):
+    _open_app(page, seurat_server)
+
+    root = page.locator(".v-application")
+    grid = page.locator(".seurat-main-grid")
+    variable_handle = page.locator("[data-variable-panel-resizer]")
+
+    _drag(page, variable_handle, delta_x=25, release=False)
+    assert page.locator("body").evaluate(
+        "body => body.classList.contains('seurat-variable-panel-resizing')"
+    )
+    assert variable_handle.evaluate(
+        "handle => handle.hasPointerCapture(1)"
+    )
+    root.evaluate("root => window.seuratResizeRuntime.unmount(root)")
+    assert root.get_attribute("data-seurat-resize-runtime-owner") is None
+    assert not page.locator("body").evaluate(
+        "body => body.classList.contains('seurat-variable-panel-resizing')"
+    )
+    assert not variable_handle.evaluate(
+        "handle => handle.classList.contains('seurat-variable-resizer-active')"
+    )
+    assert not variable_handle.evaluate(
+        "handle => handle.hasPointerCapture(1)"
+    )
+    page.mouse.up()
+
+    panel = page.locator("#seurat-variable-column")
+    unmounted_width = panel.bounding_box()["width"]
+    variable_handle.focus()
+    variable_handle.press("ArrowRight")
+    assert panel.bounding_box()["width"] == pytest.approx(unmounted_width, abs=1)
+
+    root.evaluate("root => window.seuratResizeRuntime.mount(root)")
+    root.evaluate("root => window.seuratResizeRuntime.mount(root)")
+    assert root.get_attribute("data-seurat-resize-runtime-owner") == "mounted"
+    page.evaluate(
+        """() => {
+            const originalTrigger = window.trame.trigger.bind(window.trame);
+            window.__seuratResizeTriggerCounts = {};
+            window.__seuratResizeRenderCount = 0;
+            const originalRender = window.seuratScheduleRenderAllPlot1d;
+            window.seuratScheduleRenderAllPlot1d = (...args) => {
+                window.__seuratResizeRenderCount += 1;
+                return originalRender(...args);
+            };
+            window.trame.trigger = (name, args) => {
+                const counts = window.__seuratResizeTriggerCounts;
+                counts[name] = (counts[name] || 0) + 1;
+                return originalTrigger(name, args);
+            };
+        }"""
+    )
+    grid_handle = page.locator(
+        '.seurat-dropcell[data-cell-index="0"] '
+        '.seurat-grid-col-resize-handle[data-resize-edge="right"]'
+    )
+    _drag(page, grid_handle, delta_x=20)
+    assert page.evaluate(
+        "window.__seuratResizeTriggerCounts.set_grid_track_sizes_trigger"
+    ) == 1
+    assert not grid.evaluate("grid => grid.classList.contains('is-resizing')")
+    assert not page.locator("body").evaluate(
+        "body => body.classList.contains('seurat-grid-col-resizing')"
+    )
+    root.evaluate("root => window.seuratResizeRuntime.unmount(root)")
+    render_count_after_unmount = page.evaluate("window.__seuratResizeRenderCount")
+    page.wait_for_timeout(250)
+    assert page.evaluate("window.__seuratResizeRenderCount") == render_count_after_unmount
 
 
 def test_schema_less_timeline_uses_step_indices(page, seurat_server):

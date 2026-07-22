@@ -204,6 +204,46 @@ def build_fixture_server(mode):
         )
         state.gridFitRowTemplate = " ".join("minmax(212px, 1fr)" for _ in range(rows))
 
+    def _numeric_values(values, count, fallback):
+        if isinstance(values, str):
+            values = values.split(",")
+        parsed = []
+        for value in values or []:
+            try:
+                parsed.append(float(value))
+            except (TypeError, ValueError):
+                parsed.append(float(fallback))
+        return (parsed + [float(fallback)] * count)[:count]
+
+    def set_grid_track_sizes(axis, sizes):
+        axis = str(axis)
+        if axis == "column":
+            state.gridColumnSizes = _numeric_values(sizes, state.gridCols, 280)
+            state.gridColumnTemplate = " ".join(
+                f"{round(value)}px" for value in state.gridColumnSizes
+            )
+        elif axis == "row":
+            state.gridRowSizes = _numeric_values(sizes, state.gridRows, 352)
+            state.gridRowTemplate = " ".join(
+                f"{round(value)}px" for value in state.gridRowSizes
+            )
+        state.gridSizingMode = "static"
+
+    def set_grid_track_weights(axis, weights):
+        axis = str(axis)
+        if axis == "column":
+            state.gridColumnWeights = _numeric_values(weights, state.gridCols, 1)
+            state.gridFitColumnTemplate = " ".join(
+                f"minmax(180px, {value:g}fr)"
+                for value in state.gridColumnWeights
+            )
+        elif axis == "row":
+            state.gridRowWeights = _numeric_values(weights, state.gridRows, 1)
+            state.gridFitRowTemplate = " ".join(
+                f"minmax(212px, {value:g}fr)" for value in state.gridRowWeights
+            )
+        state.gridSizingMode = "fit"
+
     def show_cell_context_menu(cell_index, x, y):
         index = int(cell_index)
         cell = state.gridCells[index]
@@ -234,6 +274,8 @@ def build_fixture_server(mode):
         assign_var_to_grid_cell
     )
     server.controller.trigger("move_grid_cell_trigger")(move_grid_cell)
+    server.controller.trigger("set_grid_track_sizes_trigger")(set_grid_track_sizes)
+    server.controller.trigger("set_grid_track_weights_trigger")(set_grid_track_weights)
     server.controller.trigger("show_item_context_menu")(show_item_context_menu)
     server.controller.trigger("show_cell_context_menu")(show_cell_context_menu)
     server.controller.trigger("hide_context_menu_trigger")(hide_context_menu_trigger)

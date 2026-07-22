@@ -15,3 +15,10 @@ class InteractionRuntime(AbstractElement):
 
     def __init__(self, children=None, **kwargs):
         super().__init__("seurat-interaction-runtime", children, **kwargs)
+
+
+class ResizeRuntime(AbstractElement):
+    """Lifecycle owner for variable-panel and grid-track resizing."""
+
+    def __init__(self, children=None, **kwargs):
+        super().__init__("seurat-resize-runtime", children, **kwargs)
