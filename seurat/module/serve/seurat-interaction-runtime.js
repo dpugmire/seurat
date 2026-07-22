@@ -14,6 +14,117 @@
   }
 
   function createHandlers(root) {
+    let floatingDrag = null;
+
+    function clampFloatingPanel(panel, left, top) {
+      const margin = 8;
+      const width = panel.offsetWidth || 560;
+      const height = panel.offsetHeight || 360;
+      const maxLeft = Math.max(margin, window.innerWidth - width - margin);
+      const maxTop = Math.max(margin, window.innerHeight - height - margin);
+      return {
+        left: Math.max(margin, Math.min(left, maxLeft)),
+        top: Math.max(margin, Math.min(top, maxTop)),
+      };
+    }
+
+    function releasePointerCapture(drag) {
+      if (!drag || !drag.handle || drag.pointerId === undefined) return;
+      try {
+        if (
+          !drag.handle.hasPointerCapture ||
+          drag.handle.hasPointerCapture(drag.pointerId)
+        ) {
+          drag.handle.releasePointerCapture(drag.pointerId);
+        }
+      } catch (_) {
+        // The pointer may already have been released by the browser.
+      }
+    }
+
+    function finishFloatingDrag() {
+      if (!floatingDrag) return;
+      const current = floatingDrag;
+      floatingDrag = null;
+      current.panel.classList.remove("is-dragging");
+      releasePointerCapture(current);
+    }
+
+    function onPointerDown(event) {
+      if (event.button !== undefined && event.button !== 0) return;
+      const handle = closestWithinRoot(
+        event && event.target,
+        ".seurat-floating-panel-drag-handle",
+        root
+      );
+      if (!handle) return;
+      const panel = closestWithinRoot(handle, ".seurat-floating-options-panel", root);
+      if (!panel) return;
+      finishFloatingDrag();
+      const rect = panel.getBoundingClientRect();
+      floatingDrag = {
+        panel,
+        handle,
+        pointerId: event.pointerId,
+        startX: Number(event.clientX) || 0,
+        startY: Number(event.clientY) || 0,
+        left: rect.left,
+        top: rect.top,
+      };
+      panel.classList.add("is-dragging");
+      try {
+        handle.setPointerCapture(event.pointerId);
+      } catch (_) {
+        // Pointer capture is best-effort for older browser implementations.
+      }
+      event.preventDefault();
+    }
+
+    function onPointerMove(event) {
+      if (!floatingDrag) return;
+      if (
+        floatingDrag.pointerId !== undefined &&
+        event.pointerId !== floatingDrag.pointerId
+      ) {
+        return;
+      }
+      const dx = (Number(event.clientX) || 0) - floatingDrag.startX;
+      const dy = (Number(event.clientY) || 0) - floatingDrag.startY;
+      const position = clampFloatingPanel(
+        floatingDrag.panel,
+        floatingDrag.left + dx,
+        floatingDrag.top + dy
+      );
+      floatingDrag.panel.style.left = position.left + "px";
+      floatingDrag.panel.style.top = position.top + "px";
+      event.preventDefault();
+    }
+
+    function onPointerEnd(event) {
+      if (
+        floatingDrag &&
+        (floatingDrag.pointerId === undefined ||
+          event.pointerId === floatingDrag.pointerId)
+      ) {
+        finishFloatingDrag();
+      }
+    }
+
+    function onLostPointerCapture(event) {
+      if (floatingDrag && event.target === floatingDrag.handle) {
+        finishFloatingDrag();
+      }
+    }
+
+    function onWindowResize() {
+      for (const panel of root.querySelectorAll(".seurat-floating-options-panel")) {
+        const rect = panel.getBoundingClientRect();
+        const position = clampFloatingPanel(panel, rect.left, rect.top);
+        panel.style.left = position.left + "px";
+        panel.style.top = position.top + "px";
+      }
+    }
+
     function onDragStart(event) {
       const target = event && event.target;
       if (!event.dataTransfer) return;
@@ -148,21 +259,47 @@
     }
 
     return {
-      dragstart: onDragStart,
-      dragend: onDragEnd,
-      dragover: onDragOver,
-      dragleave: onDragLeave,
-      drop: onDrop,
-      contextmenu: onContextMenu,
-      click: onClick,
+      root: {
+        dragstart: onDragStart,
+        dragend: onDragEnd,
+        dragover: onDragOver,
+        dragleave: onDragLeave,
+        drop: onDrop,
+        contextmenu: onContextMenu,
+        click: onClick,
+      },
+      capture: {
+        pointerdown: onPointerDown,
+        pointermove: onPointerMove,
+        pointerup: onPointerEnd,
+        pointercancel: onPointerEnd,
+        lostpointercapture: onLostPointerCapture,
+      },
+      window: {
+        resize: onWindowResize,
+      },
+      cleanup() {
+        finishFloatingDrag();
+        for (const panel of root.querySelectorAll(
+          ".seurat-floating-options-panel.is-dragging"
+        )) {
+          panel.classList.remove("is-dragging");
+        }
+      },
     };
   }
 
   function mount(root) {
     if (!root || mountedRoots.has(root)) return;
     const handlers = createHandlers(root);
-    for (const [eventName, handler] of Object.entries(handlers)) {
+    for (const [eventName, handler] of Object.entries(handlers.root)) {
       root.addEventListener(eventName, handler);
+    }
+    for (const [eventName, handler] of Object.entries(handlers.capture)) {
+      root.addEventListener(eventName, handler, true);
+    }
+    for (const [eventName, handler] of Object.entries(handlers.window)) {
+      window.addEventListener(eventName, handler);
     }
     mountedRoots.set(root, handlers);
     root.setAttribute("data-seurat-interaction-runtime-owner", "mounted");
@@ -171,8 +308,15 @@
   function unmount(root) {
     const handlers = root && mountedRoots.get(root);
     if (!root || !handlers) return;
-    for (const [eventName, handler] of Object.entries(handlers)) {
+    handlers.cleanup();
+    for (const [eventName, handler] of Object.entries(handlers.root)) {
       root.removeEventListener(eventName, handler);
+    }
+    for (const [eventName, handler] of Object.entries(handlers.capture)) {
+      root.removeEventListener(eventName, handler, true);
+    }
+    for (const [eventName, handler] of Object.entries(handlers.window)) {
+      window.removeEventListener(eventName, handler);
     }
     for (const element of root.querySelectorAll(
       ".seurat-draggable-var, .seurat-dropcell"

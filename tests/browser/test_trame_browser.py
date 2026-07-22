@@ -211,6 +211,58 @@ def test_interaction_runtime_releases_and_restores_handlers(page, seurat_server)
     )
 
 
+def test_floating_panel_drag_moves_and_clamps_panel(page, seurat_server):
+    _open_app(page, seurat_server)
+
+    panel = page.locator("#seurat-plot-settings-panel")
+    panel.evaluate("panel => { panel.style.display = 'block'; }")
+    handle = panel.locator(".seurat-floating-panel-drag-handle")
+    initial = panel.bounding_box()
+    assert initial is not None
+
+    _drag(page, handle, delta_x=55, delta_y=35)
+    moved = panel.bounding_box()
+    assert moved["x"] == pytest.approx(initial["x"] + 55, abs=2)
+    assert moved["y"] == pytest.approx(initial["y"] + 35, abs=2)
+    assert not panel.evaluate("panel => panel.classList.contains('is-dragging')")
+
+    _drag(page, handle, delta_x=-2000, delta_y=-2000)
+    clamped = panel.bounding_box()
+    assert clamped["x"] == pytest.approx(8, abs=1)
+    assert clamped["y"] == pytest.approx(8, abs=1)
+
+
+def test_floating_panel_runtime_cleans_up_and_owns_window_resize(
+    page, seurat_server
+):
+    _open_app(page, seurat_server)
+
+    root = page.locator(".v-application")
+    panel = page.locator("#seurat-plot-settings-panel")
+    panel.evaluate("panel => { panel.style.display = 'block'; }")
+    handle = panel.locator(".seurat-floating-panel-drag-handle")
+
+    _drag(page, handle, delta_x=20, delta_y=10, release=False)
+    assert handle.evaluate("handle => handle.hasPointerCapture(1)")
+    assert panel.evaluate("panel => panel.classList.contains('is-dragging')")
+
+    root.evaluate("root => window.seuratInteractionRuntime.unmount(root)")
+    assert not handle.evaluate("handle => handle.hasPointerCapture(1)")
+    assert not panel.evaluate("panel => panel.classList.contains('is-dragging')")
+    page.mouse.up()
+
+    panel.evaluate("panel => { panel.style.left = '2000px'; panel.style.top = '2000px'; }")
+    page.evaluate("window.dispatchEvent(new Event('resize'))")
+    assert panel.get_attribute("style").find("left: 2000px") >= 0
+
+    root.evaluate("root => window.seuratInteractionRuntime.mount(root)")
+    root.evaluate("root => window.seuratInteractionRuntime.mount(root)")
+    page.evaluate("window.dispatchEvent(new Event('resize'))")
+    clamped = panel.bounding_box()
+    assert clamped["x"] + clamped["width"] <= page.viewport_size["width"] - 7
+    assert clamped["y"] + clamped["height"] <= page.viewport_size["height"] - 7
+
+
 def test_grid_runtime_releases_and_restores_timeline_handlers(page, seurat_server):
     _open_app(page, seurat_server)
 

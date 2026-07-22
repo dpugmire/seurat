@@ -679,69 +679,6 @@
       }
     };
 
-    if (!window.__seuratFloatingPanelDragInit) {
-      window.__seuratFloatingPanelDragInit = true;
-      let floatingDrag = null;
-
-      function clampFloatingPanel(panel, left, top) {
-        const margin = 8;
-        const width = panel.offsetWidth || 560;
-        const height = panel.offsetHeight || 360;
-        const maxLeft = Math.max(margin, window.innerWidth - width - margin);
-        const maxTop = Math.max(margin, window.innerHeight - height - margin);
-        return {
-          left: Math.max(margin, Math.min(left, maxLeft)),
-          top: Math.max(margin, Math.min(top, maxTop)),
-        };
-      }
-
-      document.addEventListener("pointerdown", function(e) {
-        const target = e && e.target;
-        const handle = target && target.closest && target.closest(".seurat-floating-panel-drag-handle");
-        if (!handle) return;
-        const panel = handle.closest(".seurat-floating-options-panel");
-        if (!panel) return;
-        const rect = panel.getBoundingClientRect();
-        floatingDrag = {
-          panel,
-          startX: Number(e.clientX) || 0,
-          startY: Number(e.clientY) || 0,
-          left: rect.left,
-          top: rect.top,
-        };
-        panel.classList.add("is-dragging");
-        e.preventDefault();
-      }, true);
-
-      document.addEventListener("pointermove", function(e) {
-        if (!floatingDrag) return;
-        const dx = (Number(e.clientX) || 0) - floatingDrag.startX;
-        const dy = (Number(e.clientY) || 0) - floatingDrag.startY;
-        const pos = clampFloatingPanel(floatingDrag.panel, floatingDrag.left + dx, floatingDrag.top + dy);
-        floatingDrag.panel.style.left = pos.left + "px";
-        floatingDrag.panel.style.top = pos.top + "px";
-      }, true);
-
-      function endFloatingDrag() {
-        if (floatingDrag && floatingDrag.panel) {
-          floatingDrag.panel.classList.remove("is-dragging");
-        }
-        floatingDrag = null;
-      }
-
-      document.addEventListener("pointerup", endFloatingDrag, true);
-      document.addEventListener("pointercancel", endFloatingDrag, true);
-      window.addEventListener("resize", function() {
-        const panels = document.querySelectorAll(".seurat-floating-options-panel");
-        for (const panel of panels) {
-          const rect = panel.getBoundingClientRect();
-          const pos = clampFloatingPanel(panel, rect.left, rect.top);
-          panel.style.left = pos.left + "px";
-          panel.style.top = pos.top + "px";
-        }
-      });
-    }
-
     if (!window.__seuratPanZoomInit) {
       window.__seuratPanZoomInit = true;
       let panZoomDrag = null;
