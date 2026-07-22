@@ -24,6 +24,33 @@ from plugin_runtime import (
     normalize_plugin_options,
 )
 from query_parser import and_filter, mongo_filter_matches, python_query_to_filters
+from seurat.models import grid as grid_model
+from seurat.models import source_selection as source_selection_model
+from seurat.models.grid import (
+    area_slots,
+    assign_cell,
+    cell_has_content,
+    clamp_int,
+    empty_grid_cell,
+    empty_grid_cell_like,
+    is_selectable_grid_cell,
+    preserve_grid_geometry,
+    rebuild_spanning_cells,
+)
+from seurat.models.source_selection import (
+    normalize_source_keys,
+    select_single_source,
+    select_visible_sources,
+    selected_source_label,
+    source_fields_from_row,
+    source_filter_from_row,
+    source_key_for_fields,
+    toggle_source_selection,
+)
+from seurat.models.timeline import (
+    clear_timeline_driver,
+    toggle_timeline_driver,
+)
 from state_init import clear_right_panes, fmt
 
 
@@ -144,94 +171,31 @@ def attach_controllers(
 
     def source_row_keys(rows: Optional[List[Dict[str, Any]]] = None) -> List[str]:
         source_rows = all_source_rows() if rows is None else rows
-        return [str(r.get("_key", "")) for r in source_rows if str(r.get("_key", ""))]
+        return source_selection_model.source_row_keys(source_rows)
 
     def visible_source_row_keys() -> List[str]:
         return source_row_keys(list(state.sourceRows or []))
 
     def update_selected_source_label():
-        total = len(all_source_rows())
-        shown = len(state.sourceRows or [])
-        selected = len(state.selectedSourceKeys or [])
-        if total <= 0:
-            state.selectedSourceLabel = "No sources"
-        elif selected <= 0:
-            state.selectedSourceLabel = "No sources selected"
-        else:
-            state.selectedSourceLabel = f"{selected} of {total} selected"
-        if total > 0 and shown != total:
-            state.selectedSourceLabel = f"{state.selectedSourceLabel} · {shown} shown"
+        state.selectedSourceLabel = selected_source_label(
+            all_source_rows(),
+            list(state.sourceRows or []),
+            state.selectedSourceKeys or [],
+        )
 
     def select_source_key(key: str):
-        k = str(key or "")
-        state.selectedSourceKeys = [k] if k and k in source_row_keys() else []
+        state.selectedSourceKeys = select_single_source(key, source_row_keys())
         update_selected_source_label()
 
     def select_first_source():
         keys = visible_source_row_keys()
         select_source_key(keys[0] if keys else "")
 
-    def source_filter_from_row(row: Dict[str, str]) -> Dict[str, str]:
-        filt: Dict[str, str] = {}
-        variable_id = str(row.get("variable_id", "") or "")
-        if variable_id:
-            filt["variable_id"] = variable_id
-
-        schema_file_group = str(row.get("schema_file_group", "") or "")
-        schema_mode = str(row.get("schema_mode", "") or "")
-        if schema_file_group and schema_mode == "file_per_timestep":
-            filt["schema_file_group"] = schema_file_group
-            filt["schema_mode"] = schema_mode
-            return filt
-
-        source_dataset = str(row.get("source_dataset", "") or "")
-        if source_dataset:
-            filt["source_dataset"] = source_dataset
-            return filt
-
-        producer = str(row.get("producer", "") or "")
-        casename = str(row.get("casename", "") or "")
-        file_name = str(row.get("file", "") or "")
-        if producer or casename or file_name:
-            filt["producer"] = producer
-            filt["casename"] = casename
-        if file_name:
-            filt["file"] = file_name
-        return filt
-
     def source_row_for_key(key: str) -> Dict[str, str]:
         k = str(key or "")
         if not k:
             return {}
         return next((r for r in all_source_rows() if str(r.get("_key", "")) == k), {})
-
-    def source_fields_from_row(row: Dict[str, str]) -> Dict[str, str]:
-        if not row:
-            return {}
-        return {
-            "_source_key": str(row.get("_key", "") or ""),
-            "source_dataset": str(row.get("source_dataset", "") or ""),
-            "schema_file_group": str(row.get("schema_file_group", "") or ""),
-            "schema_mode": str(row.get("schema_mode", "") or ""),
-            "producer": str(row.get("producer", "") or ""),
-            "casename": str(row.get("casename", "") or ""),
-            "file": str(row.get("file", "") or ""),
-        }
-
-    def normalize_source_keys(raw_keys) -> List[str]:
-        if isinstance(raw_keys, str):
-            items = [raw_keys]
-        elif isinstance(raw_keys, (list, tuple)):
-            items = list(raw_keys)
-        else:
-            items = []
-
-        keys: List[str] = []
-        for raw_key in items:
-            key = str(raw_key or "").strip()
-            if key and key not in keys:
-                keys.append(key)
-        return keys
 
     def source_keys_from_cell(cell: Dict[str, Any]) -> List[str]:
         keys = normalize_source_keys(cell.get("_source_keys", []))
@@ -345,20 +309,6 @@ def attach_controllers(
             ):
                 return row
         return {}
-
-    def source_key_for_fields(row: Dict[str, Any]) -> str:
-        schema_file_group = str(row.get("schema_file_group", "") or "")
-        schema_mode = str(row.get("schema_mode", "") or "")
-        if schema_file_group and schema_mode == "file_per_timestep":
-            return f"schema|{row.get('variable_id', '')}|{schema_file_group}"
-        return (
-            "|".join(
-                str(row.get(key, "") or "")
-                for key in ("variable_id", "source_dataset", "producer", "casename", "file")
-            ).strip("|")
-            or str(row.get("source_dataset", "") or "")
-            or f"{row.get('producer', '')}|{row.get('casename', '')}|{row.get('file', '')}"
-        )
 
     def visualization_names_for_source_filter(variable_id: str, source_filter: Dict[str, Any]) -> List[str]:
         qf = active_query_filter()
@@ -609,47 +559,6 @@ def attach_controllers(
         selected = set(state.selectedSourceKeys or [])
         row = next((r for r in all_source_rows() if str(r.get("_key", "")) in selected), None)
         return source_filter_from_row(row) if row else {}
-
-    def empty_grid_cell() -> Dict[str, Any]:
-        return {
-            "variable_id": "",
-            "variable_name": "",
-            "display_title": "",
-            "visualization_name": "",
-            "selected_visualization": "",
-            "visualization_options": [],
-            "_source_key": "",
-            "_source_keys": [],
-            "_source_fields_list": [],
-            "source_dataset": "",
-            "producer": "",
-            "casename": "",
-            "file": "",
-            "src": "",
-            "media_type": "",
-            "fps": 0,
-            "frame_count": 0,
-            "frame_indices": [],
-            "frame_sources": [],
-            "time_values": [],
-            "time_mode": "timestep",
-            "plot": {},
-            "plot_settings": {},
-            "plugin_id": "",
-            "plugin_label": "",
-            "plugin_options": {},
-            "plugin_options_schema": [],
-            "scalar_field_settings": {},
-            "scalar_field_colorbar_min": "",
-            "scalar_field_colorbar_max": "",
-            "grid_row": 1,
-            "grid_col": 1,
-            "row_span": 1,
-            "col_span": 1,
-            "grid_hidden": False,
-            "status": "empty",
-            "note": "",
-        }
 
     def plot_series_key(item: Dict[str, Any], index: int) -> str:
         key = str(item.get("source_key", "") or "").strip()
@@ -1413,15 +1322,6 @@ Notes:
             state.helpModalText = "TODO"
         state.showHelpModal = True
 
-    def clamp_int(value, default: int, minimum: int, maximum: int) -> int:
-        try:
-            ivalue = int(value)
-        except Exception:
-            ivalue = default
-        return max(minimum, min(maximum, ivalue))
-
-    GRID_LAYOUT_FIELDS = ("grid_row", "grid_col", "row_span", "col_span", "grid_hidden")
-
     def normalize_grid_layout_mode() -> str:
         mode = str(getattr(state, "gridLayoutMode", "uniform") or "uniform").strip().lower()
         state.gridLayoutMode = "spanning" if mode == "spanning" else "uniform"
@@ -1437,126 +1337,6 @@ Notes:
         state.gridMaxRows = GRID_MAX_ROWS
         state.gridMaxCols = GRID_MAX_COLS
         return rows, cols
-
-    def default_grid_geometry(index: int, cols: int) -> Dict[str, Any]:
-        safe_cols = max(1, int(cols or 1))
-        return {
-            "grid_row": (index // safe_cols) + 1,
-            "grid_col": (index % safe_cols) + 1,
-            "row_span": 1,
-            "col_span": 1,
-            "grid_hidden": False,
-        }
-
-    def merge_grid_geometry(cell: Dict[str, Any], index: int, rows: int, cols: int) -> Dict[str, Any]:
-        base = dict(cell or {})
-        defaults = default_grid_geometry(index, cols)
-        row = clamp_int(base.get("grid_row", defaults["grid_row"]), defaults["grid_row"], 1, rows)
-        col = clamp_int(base.get("grid_col", defaults["grid_col"]), defaults["grid_col"], 1, cols)
-        base["grid_row"] = row
-        base["grid_col"] = col
-        base["row_span"] = clamp_int(base.get("row_span", 1), 1, 1, max(1, rows - row + 1))
-        base["col_span"] = clamp_int(base.get("col_span", 1), 1, 1, max(1, cols - col + 1))
-        base["grid_hidden"] = bool(base.get("grid_hidden", False))
-        return base
-
-    def cell_has_content(cell: Dict[str, Any]) -> bool:
-        if str(cell.get("variable_id", "") or cell.get("variable_name", "") or "").strip():
-            return True
-        if str(cell.get("src", "") or cell.get("media_type", "") or "").strip():
-            return True
-        if cell.get("plot"):
-            return True
-        return str(cell.get("status", "") or "") not in {"", "empty"}
-
-    def preserve_grid_geometry(cell: Dict[str, Any], existing: Dict[str, Any]) -> Dict[str, Any]:
-        merged = dict(cell or {})
-        if isinstance(existing, dict):
-            for field in GRID_LAYOUT_FIELDS:
-                if field in existing:
-                    merged[field] = existing[field]
-        return merged
-
-    def assign_cell(cells: List[Dict[str, Any]], idx: int, cell: Dict[str, Any]) -> None:
-        cells[idx] = preserve_grid_geometry(cell, cells[idx] if 0 <= idx < len(cells) else {})
-
-    def empty_grid_cell_like(existing: Dict[str, Any]) -> Dict[str, Any]:
-        return preserve_grid_geometry(empty_grid_cell(), existing)
-
-    def area_slots(row: int, col: int, row_span: int, col_span: int, cols: int) -> List[int]:
-        return [
-            (r - 1) * cols + (c - 1)
-            for r in range(row, row + row_span)
-            for c in range(col, col + col_span)
-        ]
-
-    def empty_cell_at(index: int, cols: int, hidden: bool = False) -> Dict[str, Any]:
-        cell = empty_grid_cell()
-        cell.update(default_grid_geometry(index, cols))
-        cell["grid_hidden"] = bool(hidden)
-        return cell
-
-    def rebuild_spanning_cells(raw_cells: List[Dict[str, Any]], rows: int, cols: int) -> List[Dict[str, Any]]:
-        count = rows * cols
-        merged: List[Dict[str, Any]] = []
-        for i, item in enumerate(raw_cells or []):
-            base = empty_grid_cell()
-            if isinstance(item, dict):
-                base.update(item)
-            merged.append(merge_grid_geometry(base, i, rows, cols))
-        while len(merged) < count:
-            merged.append(empty_cell_at(len(merged), cols))
-
-        cells = [empty_cell_at(i, cols) for i in range(count)]
-        occupied: set[int] = set()
-
-        def first_open_area(row_span: int, col_span: int) -> Optional[Tuple[int, int]]:
-            for row in range(1, rows - row_span + 2):
-                for col in range(1, cols - col_span + 2):
-                    slots = area_slots(row, col, row_span, col_span, cols)
-                    if all(slot not in occupied for slot in slots):
-                        return row, col
-            return None
-
-        def place(cell: Dict[str, Any], row: int, col: int, row_span: int, col_span: int) -> None:
-            anchor = (row - 1) * cols + (col - 1)
-            item = dict(cell or {})
-            item["grid_row"] = row
-            item["grid_col"] = col
-            item["row_span"] = row_span
-            item["col_span"] = col_span
-            item["grid_hidden"] = False
-            cells[anchor] = item
-            for slot in area_slots(row, col, row_span, col_span, cols):
-                occupied.add(slot)
-                if slot != anchor:
-                    cells[slot] = empty_cell_at(slot, cols, hidden=True)
-
-        anchors = [
-            cell
-            for cell in merged
-            if not bool(cell.get("grid_hidden", False))
-            and (
-                cell_has_content(cell)
-                or int(cell.get("row_span", 1) or 1) > 1
-                or int(cell.get("col_span", 1) or 1) > 1
-            )
-        ]
-
-        for cell in anchors:
-            row = clamp_int(cell.get("grid_row", 1), 1, 1, rows)
-            col = clamp_int(cell.get("grid_col", 1), 1, 1, cols)
-            row_span = clamp_int(cell.get("row_span", 1), 1, 1, max(1, rows - row + 1))
-            col_span = clamp_int(cell.get("col_span", 1), 1, 1, max(1, cols - col + 1))
-            slots = area_slots(row, col, row_span, col_span, cols)
-            if any(slot in occupied for slot in slots):
-                open_area = first_open_area(row_span, col_span)
-                if open_area is None:
-                    continue
-                row, col = open_area
-            place(cell, row, col, row_span, col_span)
-
-        return cells
 
     def normalize_grid_sizing() -> None:
         mode = str(getattr(state, "gridSizingMode", "static") or "static").strip().lower()
@@ -1704,14 +1484,6 @@ Notes:
             cell_count = grid_cell_count()
         return idx if 0 <= idx < cell_count else -1
 
-    def is_selectable_grid_cell(cells: List[Dict[str, Any]], idx: int) -> bool:
-        if idx < 0 or idx >= len(cells):
-            return False
-        cell = dict(cells[idx] or {})
-        if bool(cell.get("grid_hidden", False)):
-            return False
-        return bool(str(cell.get("variable_id", "") or cell.get("variable_name", "") or "").strip())
-
     def normalize_grid_selection(
         raw_indices: Optional[List[Any]] = None,
         cells: Optional[List[Dict[str, Any]]] = None,
@@ -1719,16 +1491,7 @@ Notes:
         if cells is None:
             cells = normalize_grid_cells(state.gridCells)
         items = raw_indices if raw_indices is not None else list(state.selectedGridCellIndices or [])
-        selected: List[int] = []
-        for raw_idx in items or []:
-            try:
-                idx = int(raw_idx)
-            except Exception:
-                continue
-            if idx in selected or not is_selectable_grid_cell(cells, idx):
-                continue
-            selected.append(idx)
-        return selected
+        return grid_model.normalize_grid_selection(items, cells)
 
     def set_grid_selection(indices: List[int], active: Optional[int] = None) -> None:
         cells = normalize_grid_cells(state.gridCells)
@@ -1739,43 +1502,23 @@ Notes:
 
     def clear_timeline_driver_if_cell(idx: int) -> None:
         try:
-            if int(state.timelineDriverCell) == int(idx):
-                state.timelineDriverCell = -1
+            current = int(state.timelineDriverCell)
         except Exception:
-            state.timelineDriverCell = -1
-
-    def cell_has_timeline_samples(cell: Dict[str, Any]) -> bool:
-        time_values = cell.get("time_values", [])
-        if isinstance(time_values, list) and any(finite_float(value) is not None for value in time_values):
-            return True
-
-        plot = cell.get("plot", {})
-        if not isinstance(plot, dict):
-            return False
-        x_label = str(plot.get("x_label", "") or "").strip().lower()
-        if x_label not in {"time", "physical time"}:
-            return False
-        for item in plot.get("series", []) or []:
-            if not isinstance(item, dict):
-                continue
-            x_values = item.get("x", [])
-            if isinstance(x_values, list) and any(finite_float(value) is not None for value in x_values):
-                return True
-        return False
+            current = -1
+        state.timelineDriverCell = clear_timeline_driver(current, [int(idx)])
 
     def publish_grid_selection(selected: List[int]) -> None:
         state.selectedGridCellIndices = selected
-        state.selectedGridCellMap = {str(idx): True for idx in selected}
+        state.selectedGridCellMap = grid_model.selection_map(selected)
 
     def source_dialog_targets_for_anchor(idx: int, cells: Optional[List[Dict[str, Any]]] = None) -> List[int]:
         if cells is None:
             cells = normalize_grid_cells(state.gridCells)
-        if not is_selectable_grid_cell(cells, idx):
-            return []
-        selected = normalize_grid_selection(cells=cells)
-        if idx in selected and len(selected) > 1:
-            return selected
-        return [idx]
+        return grid_model.source_dialog_targets(
+            cells,
+            normalize_grid_selection(cells=cells),
+            idx,
+        )
 
     def source_row_for_variable(row: Dict[str, Any], variable_id: str) -> Dict[str, str]:
         target = {
@@ -1795,26 +1538,12 @@ Notes:
     def normalize_grid_cells(raw_cells, rows=None, cols=None) -> List[Dict[str, Any]]:
         if rows is None or cols is None:
             rows, cols = grid_dimensions()
-
-        count = rows * cols
-        mode = normalize_grid_layout_mode()
-        raw_items = list(raw_cells or [])
-        items = raw_items if mode == "spanning" else raw_items[:count]
-        cells: List[Dict[str, Any]] = []
-        for i, item in enumerate(items):
-            base = empty_grid_cell()
-            if isinstance(item, dict):
-                base.update(item)
-            if mode == "uniform":
-                base.update(default_grid_geometry(i, cols))
-            else:
-                base = merge_grid_geometry(base, i, rows, cols)
-            cells.append(base)
-        while len(cells) < count:
-            cells.append(empty_cell_at(len(cells), cols))
-        if mode == "spanning":
-            return rebuild_spanning_cells(cells, rows, cols)
-        return cells
+        return grid_model.normalize_grid_cells(
+            raw_cells,
+            rows,
+            cols,
+            normalize_grid_layout_mode(),
+        )
 
     def set_grid_layout(rows: int, cols: int, cells: List[Dict[str, Any]], active: int) -> None:
         rows = clamp_int(rows, 3, GRID_MIN_ROWS, GRID_MAX_ROWS)
@@ -3009,20 +2738,9 @@ Notes:
                 return
             selected = normalize_grid_selection(cells=cells)
             anchor = active_grid_index(len(cells))
-            if not is_selectable_grid_cell(cells, anchor):
-                anchor = selected[0] if selected else idx
-            start, end = sorted((anchor, idx))
-            range_indices = [
-                item
-                for item in range(start, end + 1)
-                if is_selectable_grid_cell(cells, item)
-            ]
-            selected_set = set(selected).union(range_indices or [idx])
-            publish_grid_selection([
-                item
-                for item in range(len(cells))
-                if item in selected_set
-            ])
+            publish_grid_selection(
+                grid_model.range_selection(cells, selected, anchor, idx)
+            )
             state.activeGridCell = idx
             var = str(cells[idx].get("variable_id", "") or cells[idx].get("variable_name", "") or "")
             if var:
@@ -3078,16 +2796,11 @@ Notes:
         if not is_valid_grid_index(idx):
             return
         cells = normalize_grid_cells(state.gridCells)
-        cell = cells[idx] if 0 <= idx < len(cells) else {}
-        if not str(cell.get("variable_id", "") or cell.get("variable_name", "") or "").strip():
-            return
-        if not cell_has_timeline_samples(cell):
-            return
         try:
             current = int(state.timelineDriverCell)
         except Exception:
             current = -1
-        state.timelineDriverCell = -1 if current == idx else idx
+        state.timelineDriverCell = toggle_timeline_driver(cells, current, idx)
 
     @ctrl.add("clear_grid_cell")
     def clear_grid_cell(cell_index: int, **_):
@@ -4426,17 +4139,12 @@ Notes:
         if k not in valid_keys:
             return
 
-        selected = [key for key in normalize_source_keys(state.selectedSourceKeys or []) if key in valid_keys]
-
-        if k in selected:
-            selected = [key for key in selected if key != k]
-        else:
-            selected.append(k)
-        selected_set = set(selected)
-        selected = [key for key in valid_keys if key in selected_set]
-
         state.sourceDialogMode = "add"
-        state.selectedSourceKeys = selected
+        state.selectedSourceKeys = toggle_source_selection(
+            state.selectedSourceKeys or [],
+            k,
+            valid_keys,
+        )
         update_selected_source_label()
 
     @ctrl.add("select_all_sources")
@@ -4446,16 +4154,12 @@ Notes:
             return
 
         valid_keys = source_row_keys()
-        selected = [
-            key
-            for key in normalize_source_keys(state.selectedSourceKeys or [])
-            if key in valid_keys
-        ]
-        selected_set = set(selected).union(visible_keys)
-        selected = [key for key in valid_keys if key in selected_set]
-
         state.sourceDialogMode = "add"
-        state.selectedSourceKeys = selected
+        state.selectedSourceKeys = select_visible_sources(
+            state.selectedSourceKeys or [],
+            visible_keys,
+            valid_keys,
+        )
         update_selected_source_label()
 
     @ctrl.add("clear_all_sources")
