@@ -28,7 +28,7 @@ Original repo:
 The Trame rearchitecture work is on:
 
 ```text
-branch: rearchitect-trame-phase3
+branch: rearchitect-trame-phase3c1
 remote: origin -> https://github.com/dpugmire/seurat.git
 ```
 
@@ -38,16 +38,22 @@ at merge commit `6dee8a153727cf08f979636e4db88cc6785ecbb7`; it decomposed the re
 controller closure into domain-owned Trame adapters and extracted pure
 controller logic into testable model modules.
 
-Phase 3A adds an opt-in Playwright/Chromium characterization suite around a
+Phase 3 was merged by GitHub PR #6 at merge commit
+`e37c19c3a62e8797be3ea81c00629c757bd66ee8`. Phase 3A added an opt-in
+Playwright/Chromium characterization suite around a
 deterministic Trame application. It covers client mounting, variable group
 state, grid selection and assignment, layout controls, context menus, rendered
 plot output, and step-index versus physical-time timeline behavior.
 
-Phase 3B begins the client-side lifecycle migration. A registered
+Phase 3B began the client-side lifecycle migration. A registered
 `seurat-grid-runtime` Vue component now owns grid timeline/VCR listeners and
 the grid-media observer for the mounted workspace, including cleanup on
-unmount. Existing drag/drop, resizing, and plot-interaction handlers remain in
-the shared client module for later incremental slices.
+unmount.
+
+Phase 3C.1 adds an app-scoped `seurat-interaction-runtime` Vue component for
+variable/grid drag-and-drop and context menus. The runtime owns listener
+registration and cleanup across the catalog and grid, while resizing and plot
+interaction remain in the shared client module for later incremental slices.
 
 The last commit before the rearchitecture is preserved by the annotated tag:
 

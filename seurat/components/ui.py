@@ -5,6 +5,8 @@ from trame.ui.vuetify3 import SinglePageLayout
 from trame.widgets import html
 from trame.widgets import vuetify3 as vuetify
 
+from seurat.widgets import InteractionRuntime
+
 from .context_menu import ContextMenu
 from .dialogs import HelpDialog
 from .grid import GridWorkspace
@@ -20,6 +22,7 @@ class SeuratUI(TrameComponent):
         self.variable_panel = VariablePanel(server)
         self.grid_workspace = GridWorkspace(server)
         self.context_menu = ContextMenu(server)
+        self.interaction_runtime = None
         self.layout = self.build(campaign_name)
 
     def build(self, campaign_name=""):
@@ -34,6 +37,7 @@ class SeuratUI(TrameComponent):
                 self.query_toolbar.build()
 
             with layout.content:
+                self.interaction_runtime = InteractionRuntime()
                 self.help_dialog.build()
                 with vuetify.VContainer(fluid=True, class_="pa-2"):
                     html.Div(

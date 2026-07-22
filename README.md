@@ -21,7 +21,8 @@ The main architectural boundaries are:
   identifiers use the `seurat` namespace and assets are included in wheels.
 - `seurat/widgets.py`: Python wrappers for Seurat's registered Vue components.
   The grid runtime component owns the mounted lifetime of timeline/VCR browser
-  behavior and releases its listeners and observer when the workspace unmounts.
+  behavior. The interaction runtime owns app-scoped variable/grid drag-and-drop
+  and context menus. Both release their listeners and observers on unmount.
 - `seurat/models/`: pure, dependency-free grid, timeline, and source-selection
   behavior, plus plot, plugin-option, and grid-layout normalization. Controllers
   adapt Trame state to these testable operations.
@@ -42,10 +43,10 @@ and controller actions, not duplicate those decisions in markup or browser
 code.
 
 Client-side behavior is being moved incrementally out of document-global
-handlers. The grid timeline/VCR is the first lifecycle-owned slice; the
-remaining drag/drop, resizing, and plot-interaction handlers stay in
-`seurat/module/serve/seurat.js` until their corresponding components are
-migrated and covered by browser tests.
+handlers. Grid timeline/VCR behavior and cross-component variable/grid
+drag-and-drop and context menus are lifecycle-owned. Resizing and plot
+interaction remain in `seurat/module/serve/seurat.js` until their corresponding
+components are migrated and covered by browser tests.
 
 ## Run
 

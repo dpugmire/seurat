@@ -50,9 +50,18 @@ def test_app_mounts_and_renders_structural_ui(page, seurat_server):
     assert page.locator('[title="fixture/images/current_z"]').is_visible()
     assert page.locator(".seurat-plot1d svg").is_visible()
     page.locator('[data-seurat-grid-runtime="mounted"]').wait_for(state="attached")
+    page.locator('[data-seurat-interaction-runtime="mounted"]').wait_for(
+        state="attached"
+    )
     assert (
         page.locator(
             '.seurat-content-column[data-seurat-grid-runtime-owner="mounted"]'
+        ).count()
+        == 1
+    )
+    assert (
+        page.locator(
+            '.v-application[data-seurat-interaction-runtime-owner="mounted"]'
         ).count()
         == 1
     )
@@ -119,6 +128,68 @@ def test_cell_context_menu_opens(page, seurat_server):
     menu.wait_for(state="visible")
     assert menu.get_by_text("internal_energy", exact=True).is_visible()
     assert menu.get_by_text("Select Cell", exact=True).is_visible()
+
+
+def test_variable_context_menu_opens(page, seurat_server):
+    _open_app(page, seurat_server)
+
+    variable = page.locator('[data-item="internal_energy"]')
+    variable.click(button="right")
+
+    menu = page.locator("#seurat-context-menu")
+    menu.wait_for(state="visible")
+    assert menu.get_by_text("internal_energy", exact=True).is_visible()
+    assert menu.get_by_text("Add To Grid", exact=True).is_visible()
+    assert menu.get_by_text("Select Variable", exact=True).is_visible()
+
+
+def test_grid_cell_drag_moves_content(page, seurat_server):
+    _open_app(page, seurat_server)
+
+    source = page.locator('.seurat-dropcell[data-cell-index="0"]')
+    target = page.locator('.seurat-dropcell[data-cell-index="2"]')
+    source.drag_to(target)
+
+    page.wait_for_function(
+        "document.querySelector('.seurat-dropcell[data-cell-index=\"0\"]')"
+        ".getAttribute('data-cell-filled') === '0'"
+    )
+    assert target.get_by_text("internal_energy", exact=True).is_visible()
+
+
+def test_interaction_runtime_releases_and_restores_handlers(page, seurat_server):
+    _open_app(page, seurat_server)
+
+    root = page.locator(".v-application")
+    menu = page.locator("#seurat-context-menu")
+    cell = page.locator('.seurat-dropcell[data-cell-index="0"]')
+
+    root.evaluate("root => window.seuratInteractionRuntime.unmount(root)")
+    assert root.get_attribute("data-seurat-interaction-runtime-owner") is None
+    cell.click(button="right")
+    assert not menu.is_visible()
+
+    root.evaluate("root => window.seuratInteractionRuntime.mount(root)")
+    root.evaluate("root => window.seuratInteractionRuntime.mount(root)")
+    assert root.get_attribute("data-seurat-interaction-runtime-owner") == "mounted"
+    page.evaluate(
+        """() => {
+            const originalTrigger = window.trame.trigger.bind(window.trame);
+            window.__seuratInteractionTriggerCounts = {};
+            window.trame.trigger = (name, args) => {
+                const counts = window.__seuratInteractionTriggerCounts;
+                counts[name] = (counts[name] || 0) + 1;
+                return originalTrigger(name, args);
+            };
+        }"""
+    )
+    cell.click(button="right")
+    menu.wait_for(state="visible")
+    assert menu.get_by_text("internal_energy", exact=True).is_visible()
+    assert (
+        page.evaluate("window.__seuratInteractionTriggerCounts.show_cell_context_menu")
+        == 1
+    )
 
 
 def test_grid_runtime_releases_and_restores_timeline_handlers(page, seurat_server):
