@@ -90,6 +90,12 @@ behind backend operations. Phase 5B.2 must replace that compatibility result
 with the formal backend-neutral query contract before a Phobos adapter is
 implemented.
 
+Phase 5B.2 is currently paused while the viewer's query workflows, scope,
+language, and user interface are reevaluated. The required design questions,
+Phobos constraints, and acceptance criteria are recorded in
+[QUERY_REDESIGN.md](QUERY_REDESIGN.md). The overall component and capability
+layout is shown in [ARCHITECTURE.md](ARCHITECTURE.md).
+
 ## Current Phobos Coverage
 
 Phobos currently provides authenticated Django REST resources for:
@@ -209,6 +215,8 @@ session authorization.
 
 ### Phase 5B.2: Query Capability
 
+- complete and approve the query redesign described in
+  [QUERY_REDESIGN.md](QUERY_REDESIGN.md) before implementation;
 - formalize the Seurat filter tree and source-restriction semantics;
 - replace compatibility filter documents at the backend boundary;
 - migrate catalog and source query execution behind typed operations;
