@@ -433,7 +433,7 @@ Notes:
     def close_help_modal(self, **_):
         self.state.showHelpModal = False
 
-    def run_query(self, **_):
+    def update_query_state(self) -> bool:
         q = (self.state.queryText or "").strip()
 
         if not q:
@@ -444,8 +444,7 @@ Notes:
             self.state.queryError = ""
             self.state.queryStatus = "Query cleared"
             self.state.queryViewLabel = "ALL"
-            self.refresh_after_variable_catalog_change()
-            return
+            return True
 
         try:
             query_filter, source_filters = python_query_to_filters(q)
@@ -476,19 +475,17 @@ Notes:
             self.state.queryError = f"{type(e).__name__}: {e}"
             self.state.queryStatus = "Query ERROR"
             self.state.queryViewLabel = "ALL"
-            return
+            return False
 
-        self.refresh_after_variable_catalog_change()
+        return True
+
+    def run_query(self, **_):
+        if self.update_query_state():
+            self.refresh_after_variable_catalog_change()
 
     def clear_query(self, **_):
         self.state.queryText = ""
-        self.state.queryFilter = {}
-        self.state.querySourceFilters = []
-        self.state.querySourceRestrictionFilter = {}
-        self.state.querySourceRestrictionCount = 0
-        self.state.queryError = ""
-        self.state.queryStatus = "Query cleared"
-        self.state.queryViewLabel = "ALL"
+        self.update_query_state()
         self.refresh_after_variable_catalog_change()
 
     def on_show_only_visualized_vars(self, showOnlyVisualizedVars, **_):

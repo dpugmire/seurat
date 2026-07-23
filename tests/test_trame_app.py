@@ -130,6 +130,7 @@ class SeuratAppTests(unittest.TestCase):
         for component in (
             ui.query_toolbar,
             ui.help_dialog,
+            ui.workspace_menu,
             ui.variable_panel,
             ui.grid_workspace,
             ui.context_menu,
@@ -142,7 +143,11 @@ class SeuratAppTests(unittest.TestCase):
             self.assertIsInstance(component, TrameComponent)
             self.assertIs(component.server, server)
 
-        self.assertIn("Campaign loaded: sample.aca", ui.layout.html)
+        self.assertIn("sample.aca", ui.layout.html)
+        self.assertNotIn("Campaign loaded:", ui.layout.html)
+        self.assertIn("Save As…", ui.layout.html)
+        self.assertIn("Current state file", ui.layout.html)
+        self.assertNotIn('id="seurat-workspace-state-file"', ui.layout.html)
         self.assertIn('id="seurat-variable-column"', ui.layout.html)
         self.assertIn('id="seurat-context-menu"', ui.layout.html)
         self.assertIsInstance(ui.grid_workspace.runtime, GridRuntime)

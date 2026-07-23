@@ -18,6 +18,7 @@ except ModuleNotFoundError:
 from application import SeuratApplication
 from controllers import _variable_groups_from_navigation, attach_controllers
 from db import CampaignDb
+from seurat.models.workspace_state import parse_workspace_document, workspace_json
 from sqlite_store import SQLiteCampaignCollection
 from state_init import init_state
 
@@ -268,6 +269,7 @@ class CampaignDbNavigationTests(unittest.TestCase):
                 "delete_grid_row",
                 "hide_context_menu",
                 "move_grid_cell",
+                "load_workspace_state",
                 "open_plot_settings_plugin_options",
                 "pick_grid_cell_visualization",
                 "pick_tile_visualization",
@@ -278,6 +280,8 @@ class CampaignDbNavigationTests(unittest.TestCase):
                 "reset_plugin_options",
                 "reset_scalar_field_settings",
                 "run_query",
+                "save_workspace_state",
+                "save_workspace_state_as",
                 "select_all_sources",
                 "select_source",
                 "select_var",
@@ -374,6 +378,190 @@ class CampaignDbNavigationTests(unittest.TestCase):
         )
         self.assertEqual(state.variableNames, ["energy"])
         self.assertIn("variables=1", state.dbStatus)
+
+    def test_workspace_save_save_as_and_load_restore_semantic_grid(self):
+        state, controller = self.make_controller()
+        controller.actions["set_grid_layout_size"](2, 2)
+        state.gridLayoutMode = "spanning"
+        state.gridCells[0].update(
+            {
+                "variable_id": "density",
+                "variable_name": "density",
+                "visualization_name": "heatmap",
+                "selected_visualization": "heatmap",
+                "source_dataset": "run-a/output.bp",
+                "col_span": 2,
+                "src": "data:image/png;base64,not-persisted",
+                "frame_sources": ["not-persisted"],
+                "status": "ready",
+            }
+        )
+        state.activeGridCell = 0
+        state.selectedGridCellIndices = [0]
+        state.selectedGridCellMap = {"0": True}
+
+        owner = controller.actions["save_workspace_state"].__self__
+        state_path = Path(self.temp_dir.name) / "custom-layout.json"
+        live_grid_sizing = {
+            "mode": "static",
+            "column_sizes": "410,275",
+            "row_sizes": "465,350",
+            "column_weights": "2.5,0.5",
+            "row_weights": "3,1",
+        }
+        with patch(
+            "seurat.controllers.workspace.choose_workspace_save_path",
+            return_value=str(state_path),
+        ):
+            controller.actions["save_workspace_state"](live_grid_sizing)
+
+        document = parse_workspace_document(state_path.read_bytes())
+        saved_grid = document["state"]["grid"]
+        saved_cell = document["state"]["grid"]["cells"][0]
+        self.assertNotIn("src", saved_cell)
+        self.assertNotIn("frame_sources", saved_cell)
+        self.assertEqual(saved_grid["sizing_mode"], "static")
+        self.assertEqual(saved_grid["column_sizes"], [410, 275])
+        self.assertEqual(saved_grid["row_sizes"], [465, 350])
+        self.assertEqual(saved_grid["column_weights"], [2.5, 0.5])
+        self.assertEqual(saved_grid["row_weights"], [3.0, 1.0])
+        self.assertEqual(state.workspaceStatePath, str(state_path.resolve()))
+        self.assertEqual(
+            state.workspaceStateStatus,
+            f"Saved: {state_path.resolve()}",
+        )
+        state.gridLayoutMode = "uniform"
+        state.gridRows = 3
+        state.gridCols = 3
+        state.gridCells = []
+        state.activeGridCell = -1
+        state.selectedGridCellIndices = []
+        state.selectedGridCellMap = {}
+        state.gridColumnSizes = [300, 300, 300]
+        state.gridRowSizes = [332, 332, 332]
+
+        rebuilt_tile = {
+            "variable_id": "density",
+            "variable_name": "density",
+            "visualization_name": "heatmap",
+            "selected_visualization": "heatmap",
+            "source_dataset": "run-a/output.bp",
+            "media_type": "image_sequence",
+            "src": "data:image/png;base64,rebuilt",
+            "frame_count": 1,
+            "frame_indices": [0],
+            "frame_sources": ["data:image/png;base64,rebuilt"],
+            "time_values": [0],
+            "status": "ok",
+        }
+        with patch(
+            "seurat.controllers.workspace.choose_workspace_load_path",
+            return_value=str(state_path),
+        ), patch.object(
+            owner.db,
+            "get_first_movie_tiles_for_variable",
+            return_value=[rebuilt_tile],
+        ):
+            controller.actions["load_workspace_state"]()
+
+        self.assertEqual((state.gridRows, state.gridCols), (2, 2))
+        self.assertEqual(state.gridLayoutMode, "spanning")
+        self.assertEqual(state.gridCells[0]["variable_id"], "density")
+        self.assertEqual(
+            state.gridCells[0]["selected_visualization"],
+            "heatmap",
+        )
+        self.assertEqual(state.gridCells[0]["col_span"], 2)
+        self.assertEqual(
+            state.gridCells[0]["src"],
+            "data:image/png;base64,rebuilt",
+        )
+        self.assertEqual(state.activeGridCell, 0)
+        self.assertEqual(state.selectedGridCellIndices, [0])
+        self.assertEqual(state.gridColumnSizes, [410, 275])
+        self.assertEqual(state.gridRowSizes, [465, 350])
+        self.assertEqual(state.gridColumnTemplate, "410px 275px")
+        self.assertEqual(state.gridRowTemplate, "465px 350px")
+        self.assertEqual(
+            state.workspaceStateStatus,
+            f"Loaded: {state_path.resolve()}",
+        )
+        self.assertEqual(state.workspaceStateError, "")
+
+        state.queryText = "var == 'density'"
+        controller.actions["save_workspace_state"]()
+        saved_again = parse_workspace_document(state_path.read_bytes())
+        self.assertEqual(
+            saved_again["state"]["catalog"]["query_text"],
+            "var == 'density'",
+        )
+
+    def test_workspace_fit_sizing_round_trip_restores_track_weights(self):
+        state, controller = self.make_controller()
+        owner = controller.actions["save_workspace_state"].__self__
+        owner._apply_live_grid_sizing(
+            {
+                "mode": "fit",
+                "column_sizes": "420,310,205",
+                "row_sizes": "470,360,250",
+                "column_weights": "3,1.5,0.5",
+                "row_weights": "2.5,1,0.25",
+            }
+        )
+        serialized = parse_workspace_document(
+            workspace_json(state, "/campaign/example.aca")
+        )
+
+        state.gridSizingMode = "static"
+        state.gridColumnWeights = [1.0, 1.0, 1.0]
+        state.gridRowWeights = [1.0, 1.0, 1.0]
+        owner.restore_workspace_state(serialized)
+
+        self.assertEqual(state.gridSizingMode, "fit")
+        self.assertEqual(state.gridColumnWeights, [3.0, 1.5, 0.5])
+        self.assertEqual(state.gridRowWeights, [2.5, 1.0, 0.25])
+        self.assertEqual(
+            state.gridFitColumnTemplate,
+            "minmax(180px, 3fr) minmax(180px, 1.5fr) "
+            "minmax(180px, 0.5fr)",
+        )
+        self.assertEqual(
+            state.gridFitRowTemplate,
+            "minmax(212px, 2.5fr) minmax(212px, 1fr) "
+            "minmax(212px, 0.25fr)",
+        )
+
+    def test_workspace_refresh_uses_source_plugin_rehydration(self):
+        state, controller = self.make_controller()
+        state.gridCells[0].update(
+            {
+                "variable_id": "density",
+                "variable_name": "density",
+                "visualization_name": "plugin:source-test",
+                "selected_visualization": "plugin:source-test",
+                "plugin_scope": "source",
+                "plugin_options": {"mode": "summary"},
+            }
+        )
+        owner = controller.actions["save_workspace_state"].__self__
+        rebuilt = {
+            **state.gridCells[0],
+            "src": "data:image/png;base64,rebuilt",
+        }
+
+        with patch.object(
+            owner,
+            "build_source_plugin_grid_cell",
+            return_value=rebuilt,
+        ) as source_builder, patch.object(
+            owner,
+            "build_plugin_grid_cell",
+        ) as variable_builder:
+            owner.refresh_grid_cells()
+
+        source_builder.assert_called_once()
+        variable_builder.assert_not_called()
+        self.assertEqual(state.gridCells[0]["src"], rebuilt["src"])
 
     def test_existing_grouping_is_stable_and_deduplicates_sources(self):
         self.assertEqual(
