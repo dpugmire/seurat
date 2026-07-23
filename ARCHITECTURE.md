@@ -5,104 +5,38 @@ capability path. Solid arrows represent implemented relationships. Dashed
 arrows and nodes labeled "planned" represent future work.
 
 ```mermaid
+%%{init: {"flowchart": {"nodeSpacing": 80, "rankSpacing": 85, "curve": "basis"}, "themeVariables": {"fontSize": "16px"}}}%%
 flowchart TB
-  subgraph Browser["Browser — Trame Vue 3 client"]
-    Components["UI components<br/>toolbar · catalog · grid · dialogs"]
-    Widgets["Seurat Vue widgets"]
-    Runtimes["Lifecycle-scoped runtimes<br/>timeline · media · plot · interaction · resize"]
-    BrowserState["Serialized Trame state"]
+  Client["Trame Vue client<br/>Renders toolbar, catalog, grid, dialogs, plots, and media<br/>Widgets bind state; JS runtimes own browser interactions"]
+  State["Trame state<br/>Serializable UI state shared by Python and the browser<br/>Catalog, sources, grid, timeline, settings, and menus"]
+  Controllers["Domain controllers<br/>Receive UI actions and state changes<br/>Call domain logic and application operations<br/>Write normalized results back to Trame state"]
 
-    Components --> Widgets
-    Widgets --> Runtimes
-    Components <--> BrowserState
-  end
+  Models["Pure domain logic<br/>Deterministic grid, source, timeline, plot, and plugin rules<br/>No Trame, database, ACA, or Phobos dependencies<br/>Directly unit-testable"]
+  Facade["SeuratApplication facade<br/>Backend-neutral operations used by controllers<br/>Hides local documents, ACA paths, Django objects,<br/>and REST response formats"]
 
-  subgraph Server["Python Trame application"]
-    App["SeuratApp<br/>composition root"]
-    UI["UI builder"]
-    Controllers["Domain controllers<br/>catalog · sources · grid · visualization<br/>context menu · lifecycle"]
-    State["State ownership modules"]
-    Models["Pure models<br/>grid · source selection · timeline · plot · plugins"]
-    Facade["SeuratApplication<br/>backend-neutral facade"]
+  Capabilities["Backend capabilities<br/>Catalog: navigation and availability · Sources: descriptors and statistics<br/>Query: paused for redesign · Media and jobs: planned<br/>Contracts return normalized Seurat data-transfer objects"]
 
-    App --> UI
-    App --> Controllers
-    App --> State
-    UI --> Controllers
-    Controllers <--> State
-    Controllers --> Models
-    Controllers --> Facade
-  end
+  LocalBackend["LocalCampaignBackend<br/>Implements the capability contracts for a local campaign<br/>Translates normalized requests and results<br/>without exposing local storage above this boundary"]
+  PhobosBackend["Future PhobosBackend<br/>Will implement the same capability contracts<br/>using authenticated Phobos APIs<br/>UI and controllers remain unchanged"]
 
-  BrowserState <--> State
-  UI --> Components
+  LocalServices["Local campaign services<br/>CampaignDb: discovery, reads, summaries, and rendering<br/>SQLite sidecar and ingestion · ACA and ADIOS2 payloads<br/>ffmpeg movie previews"]
+  PhobosServices["Phobos services<br/>Authentication and authorization · campaign/foray/variable APIs<br/>Authorized media delivery · background jobs<br/>Durable persistence, workers, and artifacts"]
 
-  subgraph Capabilities["Backend capability contracts"]
-    Catalog["CatalogBackend<br/>navigation · availability"]
-    Sources["SourceBackend<br/>descriptors · statistics · lookup"]
-    Query["Query capability<br/>planned after redesign"]
-    Media["Visualization/media capability<br/>planned Phase 5C"]
-    Jobs["Generated visualization/job capability<br/>planned Phase 5D"]
-  end
+  Client <--> State
+  State <--> Controllers
+  Controllers --> Models
+  Controllers --> Facade
+  Facade --> Capabilities
 
-  Facade --> Catalog
-  Facade --> Sources
-  Facade -.-> Query
-  Facade -.-> Media
-  Facade -.-> Jobs
+  Capabilities --> LocalBackend
+  Capabilities -. planned .-> PhobosBackend
+  LocalBackend --> LocalServices
+  PhobosBackend -. planned .-> PhobosServices
 
-  subgraph Local["Current local ACA implementation"]
-    LocalAdapter["LocalCampaignBackend"]
-    CampaignDb["CampaignDb<br/>local discovery · reads · rendering"]
-    SQLiteAPI["SQLite collection compatibility"]
-    Sidecar[("Seurat SQLite sidecar<br/>metadata and cache records")]
-    Ingest["Campaign ingestion<br/>schema + visualization associations"]
-    ACA[("ACA campaign<br/>SQLite metadata + ADIOS payloads")]
-    ADIOS["ADIOS2 payload access"]
-    FFmpeg["ffmpeg movie preview"]
+  Controllers -. "temporary local compatibility paths" .-> LocalServices
 
-    LocalAdapter --> CampaignDb
-    CampaignDb --> SQLiteAPI
-    SQLiteAPI --> Sidecar
-    Ingest --> Sidecar
-    Ingest --> ACA
-    CampaignDb --> ADIOS
-    ADIOS --> ACA
-    CampaignDb --> FFmpeg
-  end
-
-  Catalog --> LocalAdapter
-  Sources --> LocalAdapter
-  Query -.-> LocalAdapter
-  Media -.-> LocalAdapter
-  Jobs -.-> LocalAdapter
-  App --> LocalAdapter
-  App --> Ingest
-  Controllers -->|"current media/generation compatibility"| CampaignDb
-  Controllers -->|"current plugin introspection compatibility"| SQLiteAPI
-
-  subgraph Phobos["Future Phobos implementation"]
-    PhobosAdapter["PhobosBackend adapter<br/>planned Phase 5E"]
-    Auth["Server-side authentication<br/>campaign authorization"]
-    APIs["Phobos APIs<br/>campaigns · forays · variables · metadata"]
-    ArtifactAPI["Media/artifact delivery<br/>authorized URLs or streams"]
-    JobAPI["Background jobs<br/>status · progress · cancellation · results"]
-    Persistence[("Phobos persistence and workers")]
-
-    PhobosAdapter --> Auth
-    PhobosAdapter --> APIs
-    PhobosAdapter --> ArtifactAPI
-    PhobosAdapter --> JobAPI
-    APIs --> Persistence
-    ArtifactAPI --> Persistence
-    JobAPI --> Persistence
-  end
-
-  Catalog -.-> PhobosAdapter
-  Sources -.-> PhobosAdapter
-  Query -.-> PhobosAdapter
-  Media -.-> PhobosAdapter
-  Jobs -.-> PhobosAdapter
+  classDef planned stroke-dasharray: 6 5
+  class PhobosBackend,PhobosServices planned
 ```
 
 ## Ownership Rules
@@ -112,8 +46,8 @@ flowchart TB
 - Trame controllers translate user actions and state changes into application
   operations. They should not depend on SQLite rows, ACA paths, Phobos REST
   objects, or transport-specific query syntax.
-- Pure models contain testable workspace, timeline, plot, and source-selection
-  policy without Trame dependencies.
+- Pure domain logic contains testable workspace, timeline, plot, and
+  source-selection policy without Trame dependencies.
 - `SeuratApplication` is the facade through which controllers consume backend
   capabilities.
 - Backend contracts return normalized Seurat DTOs. Local and Phobos adapters
