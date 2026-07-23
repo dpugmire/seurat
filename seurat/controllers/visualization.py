@@ -897,23 +897,12 @@ class VisualizationControllerMixin:
                     or ""
                 )
                 try:
-                    if str(c.get("plugin_scope", "") or "") == "source":
-                        tile = self.build_source_plugin_grid_cell(
-                            plugin_id_from_visualization(selected_vis),
-                            c,
-                            plugin_options=dict(
-                                c.get("plugin_options", {}) or {}
-                            ),
-                        )
-                    else:
-                        tile = self.build_plugin_grid_cell(
-                            var_id,
-                            selected_vis,
-                            existing_cell=c,
-                            plugin_options=dict(
-                                c.get("plugin_options", {}) or {}
-                            ),
-                        )
+                    tile = self.build_plugin_grid_cell(
+                        var_id,
+                        selected_vis,
+                        existing_cell=c,
+                        plugin_options=dict(c.get("plugin_options", {}) or {}),
+                    )
                     updated.append(preserve_grid_geometry(tile, c))
                 except Exception as e:
                     err_cell = self.no_visualization_grid_cell(

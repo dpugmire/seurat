@@ -57,7 +57,7 @@ def _drag(page, locator, delta_x=0, delta_y=0, release=True, button="left"):
 def test_app_mounts_and_renders_structural_ui(page, seurat_server):
     console_errors, page_errors, response_errors = _open_app(page, seurat_server)
 
-    assert page.get_by_text("browser-step.aca", exact=True).is_visible()
+    assert page.get_by_text("Campaign loaded: browser-step.aca").is_visible()
     assert page.locator('[title="fixture/scalars.bp/internal_energy"]').is_visible()
     assert page.locator('[title="fixture/images/current_z"]').is_visible()
     assert page.locator(".seurat-plot1d svg").is_visible()
@@ -125,84 +125,6 @@ def test_app_mounts_and_renders_structural_ui(page, seurat_server):
 
     assert page_errors == []
     assert console_errors == [], response_errors
-
-
-def test_workspace_commands_are_in_hamburger_drawer(page, seurat_server):
-    console_errors, page_errors, response_errors = _open_app(
-        page,
-        seurat_server,
-    )
-
-    drawer = page.locator(".v-navigation-drawer")
-    assert not drawer.is_visible()
-    page.locator(".v-app-bar-nav-icon").click()
-    drawer.wait_for(state="visible")
-    assert drawer.get_by_text("Save", exact=True).is_visible()
-    assert drawer.get_by_text("Save As…", exact=True).is_visible()
-    assert drawer.get_by_text("Load…", exact=True).is_visible()
-    assert drawer.get_by_text("No state file selected", exact=True).is_visible()
-
-    drawer.get_by_text("Save", exact=True).click()
-    drawer.get_by_text("/tmp/browser-step.json", exact=True).wait_for(state="visible")
-    drawer.get_by_text(
-        "Saved: /tmp/browser-step.json",
-        exact=True,
-    ).wait_for(state="visible")
-    assert console_errors == [], response_errors
-    assert page_errors == []
-
-
-def test_workspace_save_and_load_restore_live_grid_track_sizes(
-    page,
-    seurat_server,
-):
-    _open_app(page, seurat_server)
-
-    grid = page.locator(".seurat-main-grid")
-    corner = page.locator(
-        '.seurat-dropcell[data-cell-index="0"] '
-        ".seurat-grid-corner-bottom-right"
-    )
-    _drag(page, corner, delta_x=55, delta_y=40)
-    saved_column_sizes = grid.get_attribute("data-grid-column-sizes")
-    saved_row_sizes = grid.get_attribute("data-grid-row-sizes")
-    assert saved_column_sizes.startswith("335")
-    assert saved_row_sizes.startswith("392")
-
-    page.locator(".v-app-bar-nav-icon").click()
-    drawer = page.locator(".v-navigation-drawer")
-    drawer.wait_for(state="visible")
-    drawer.get_by_text("Save", exact=True).click()
-    drawer.get_by_text(
-        "Saved: /tmp/browser-step.json",
-        exact=True,
-    ).wait_for(state="visible")
-
-    page.locator(".v-app-bar-nav-icon").click()
-    drawer.wait_for(state="detached")
-    _drag(page, corner, delta_x=-35, delta_y=-25)
-    assert grid.get_attribute("data-grid-column-sizes") != saved_column_sizes
-    assert grid.get_attribute("data-grid-row-sizes") != saved_row_sizes
-
-    page.locator(".v-app-bar-nav-icon").click()
-    drawer.wait_for(state="visible")
-    drawer.get_by_text("Load…", exact=True).click()
-    page.wait_for_function(
-        """([columnSizes, rowSizes]) => {
-            const grid = document.querySelector('.seurat-main-grid');
-            return grid
-                && grid.getAttribute('data-grid-column-sizes') === columnSizes
-                && grid.getAttribute('data-grid-row-sizes') === rowSizes;
-        }""",
-        arg=[saved_column_sizes, saved_row_sizes],
-    )
-    assert grid.evaluate(
-        "element => getComputedStyle(element).gridTemplateColumns"
-    ).startswith("335px ")
-    assert (
-        grid.evaluate("element => getComputedStyle(element).gridTemplateRows")
-        == "392px"
-    )
 
 
 def test_variable_group_expands_and_collapses(page, seurat_server):

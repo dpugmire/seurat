@@ -267,71 +267,6 @@ def build_fixture_server(mode):
     def hide_context_menu_trigger():
         state.contextMenuVisible = False
 
-    saved_grid_sizing = None
-
-    def apply_live_grid_sizing(sizing):
-        if not isinstance(sizing, dict):
-            return
-        mode = str(sizing.get("mode", "") or "")
-        state.gridColumnSizes = _numeric_values(
-            sizing.get("column_sizes"),
-            state.gridCols,
-            280,
-        )
-        state.gridRowSizes = _numeric_values(
-            sizing.get("row_sizes"),
-            state.gridRows,
-            352,
-        )
-        state.gridColumnWeights = _numeric_values(
-            sizing.get("column_weights"),
-            state.gridCols,
-            1,
-        )
-        state.gridRowWeights = _numeric_values(
-            sizing.get("row_weights"),
-            state.gridRows,
-            1,
-        )
-        state.gridSizingMode = "fit" if mode == "fit" else "static"
-        state.gridColumnTemplate = " ".join(
-            f"{round(value)}px" for value in state.gridColumnSizes
-        )
-        state.gridRowTemplate = " ".join(
-            f"{round(value)}px" for value in state.gridRowSizes
-        )
-        state.gridFitColumnTemplate = " ".join(
-            f"minmax(180px, {value:g}fr)"
-            for value in state.gridColumnWeights
-        )
-        state.gridFitRowTemplate = " ".join(
-            f"minmax(212px, {value:g}fr)" for value in state.gridRowWeights
-        )
-
-    def save_workspace_state(live_grid_sizing=None):
-        nonlocal saved_grid_sizing
-        apply_live_grid_sizing(live_grid_sizing)
-        saved_grid_sizing = {
-            "mode": state.gridSizingMode,
-            "column_sizes": list(state.gridColumnSizes),
-            "row_sizes": list(state.gridRowSizes),
-            "column_weights": list(state.gridColumnWeights),
-            "row_weights": list(state.gridRowWeights),
-        }
-        if not state.workspaceStatePath:
-            state.workspaceStatePath = f"/tmp/browser-{mode}.json"
-        state.workspaceStateStatus = f"Saved: {state.workspaceStatePath}"
-
-    def save_workspace_state_as(live_grid_sizing=None):
-        save_workspace_state(live_grid_sizing)
-
-    def load_workspace_state():
-        if saved_grid_sizing:
-            apply_live_grid_sizing(saved_grid_sizing)
-        if not state.workspaceStatePath:
-            state.workspaceStatePath = f"/tmp/browser-{mode}.json"
-        state.workspaceStateStatus = f"Loaded: {state.workspaceStatePath}"
-
     server.controller.add("toggle_variable_group")(toggle_variable_group)
     server.controller.add("set_active_grid_cell")(set_active_grid_cell)
     server.controller.add("set_grid_layout_size")(set_grid_layout_size)
@@ -344,9 +279,6 @@ def build_fixture_server(mode):
     server.controller.trigger("show_item_context_menu")(show_item_context_menu)
     server.controller.trigger("show_cell_context_menu")(show_cell_context_menu)
     server.controller.trigger("hide_context_menu_trigger")(hide_context_menu_trigger)
-    server.controller.add("save_workspace_state")(save_workspace_state)
-    server.controller.add("save_workspace_state_as")(save_workspace_state_as)
-    server.controller.add("load_workspace_state")(load_workspace_state)
     build_ui(server, campaign_name=f"browser-{mode}.aca")
     return server
 

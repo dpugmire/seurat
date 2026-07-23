@@ -134,21 +134,6 @@ python app.py campaign.aca --campaign-schema schema.yaml
 python app.py campaign.aca --image-association-schema image_variable_map.yaml
 ```
 
-## Save And Load Workspace State
-
-Open the hamburger menu to access **Save**, **Save As…**, and **Load…**.
-**Save As…** opens a native file browser and defaults to `<campaign>.json`.
-After saving or loading, the drawer shows the absolute path; subsequent
-**Save** commands write to that file. The selected path is on the machine
-running Seurat.
-
-The versioned JSON document stores the active query and catalog view, grid
-layout and sizing, variable/source assignments, visualization choices and
-settings, selected cells, and timeline driver. Rendered plots, image/video
-bytes, frame payloads, and other derived media are intentionally excluded.
-Seurat validates the state-file version and campaign name, then rebuilds
-derived content from the campaign when loading.
-
 By default, Seurat stores its viewer sidecar DB under `~/.cache/seurat` using a
 filename derived from the resolved campaign path. Override the location with:
 
