@@ -5,38 +5,41 @@ capability path. Solid arrows represent implemented relationships. Dashed
 arrows and nodes labeled "planned" represent future work.
 
 ```mermaid
-%%{init: {"flowchart": {"nodeSpacing": 80, "rankSpacing": 85, "curve": "basis"}, "themeVariables": {"fontSize": "16px"}}}%%
-flowchart TB
+%%{init: {"flowchart": {"nodeSpacing": 65, "rankSpacing": 70, "curve": "basis", "wrappingWidth": 290}, "themeVariables": {"fontSize": "14px"}}}%%
+flowchart LR
   Client["Trame Vue client<br/>Renders toolbar, catalog, grid, dialogs, plots, and media<br/>Widgets bind state; JS runtimes own browser interactions"]
   State["Trame state<br/>Serializable UI state shared by Python and the browser<br/>Catalog, sources, grid, timeline, settings, and menus"]
   Controllers["Domain controllers<br/>Receive UI actions and state changes<br/>Call domain logic and application operations<br/>Write normalized results back to Trame state"]
-
   Models["Pure domain logic<br/>Deterministic grid, source, timeline, plot, and plugin rules<br/>No Trame, database, ACA, or Phobos dependencies<br/>Directly unit-testable"]
   Facade["SeuratApplication facade<br/>Backend-neutral operations used by controllers<br/>Hides local documents, ACA paths, Django objects,<br/>and REST response formats"]
-
   Capabilities["Backend capabilities<br/>Catalog: navigation and availability · Sources: descriptors and statistics<br/>Query: paused for redesign · Media and jobs: planned<br/>Contracts return normalized Seurat data-transfer objects"]
 
-  LocalBackend["LocalCampaignBackend<br/>Implements the capability contracts for a local campaign<br/>Translates normalized requests and results<br/>without exposing local storage above this boundary"]
-  PhobosBackend["Future PhobosBackend<br/>Will implement the same capability contracts<br/>using authenticated Phobos APIs<br/>UI and controllers remain unchanged"]
+  subgraph LOCAL_BRANCH["Current local implementation"]
+    direction TB
+    LocalBackend["LocalCampaignBackend<br/>Implements capability contracts for a local campaign<br/>Translates normalized requests and results<br/>without exposing local storage above this boundary"]
+    LocalServices["Local campaign services<br/>CampaignDb: discovery, reads, summaries, and rendering<br/>SQLite sidecar and ingestion · ACA and ADIOS2 payloads<br/>ffmpeg movie previews"]
+    LocalBackend --> LocalServices
+  end
 
-  LocalServices["Local campaign services<br/>CampaignDb: discovery, reads, summaries, and rendering<br/>SQLite sidecar and ingestion · ACA and ADIOS2 payloads<br/>ffmpeg movie previews"]
-  PhobosServices["Phobos services<br/>Authentication and authorization · campaign/foray/variable APIs<br/>Authorized media delivery · background jobs<br/>Durable persistence, workers, and artifacts"]
+  subgraph PHOBOS_BRANCH["Planned Phobos implementation"]
+    direction TB
+    PhobosBackend["Future PhobosBackend<br/>Implements the same capability contracts<br/>using authenticated Phobos APIs<br/>UI and controllers remain unchanged"]
+    PhobosServices["Phobos services<br/>Authentication and authorization · campaign/foray/variable APIs<br/>Authorized media delivery · background jobs<br/>Durable persistence, workers, and artifacts"]
+    PhobosBackend -. planned .-> PhobosServices
+  end
 
   Client <--> State
   State <--> Controllers
   Controllers --> Models
   Controllers --> Facade
   Facade --> Capabilities
-
-  Capabilities --> LocalBackend
-  Capabilities -. planned .-> PhobosBackend
-  LocalBackend --> LocalServices
-  PhobosBackend -. planned .-> PhobosServices
-
-  Controllers -. "temporary local compatibility paths" .-> LocalServices
+  Capabilities --> LOCAL_BRANCH
+  Capabilities -. planned .-> PHOBOS_BRANCH
+  Controllers -. "temporary local compatibility paths" .-> LOCAL_BRANCH
 
   classDef planned stroke-dasharray: 6 5
   class PhobosBackend,PhobosServices planned
+  style PHOBOS_BRANCH stroke-dasharray: 6 5
 ```
 
 ## Ownership Rules
