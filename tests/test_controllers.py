@@ -8,7 +8,7 @@ from seurat.controllers.composer import CONTROLLER_TYPES
 class ControllerOwnershipTests(unittest.TestCase):
     def test_domain_bindings_are_unique_and_owned_by_the_declaring_controller(self):
         expected_counts = {
-            "ACTION_BINDINGS": 80,
+            "ACTION_BINDINGS": 83,
             "TRIGGER_BINDINGS": 7,
             "STATE_CHANGE_BINDINGS": 3,
         }

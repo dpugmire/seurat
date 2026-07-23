@@ -2,7 +2,6 @@
 
 from trame.app import TrameComponent
 from trame.ui.vuetify3 import SinglePageLayout
-from trame.widgets import html
 from trame.widgets import vuetify3 as vuetify
 
 from seurat.widgets import InteractionRuntime, ResizeRuntime
@@ -12,6 +11,7 @@ from .dialogs import HelpDialog
 from .grid import GridWorkspace
 from .toolbar import QueryToolbar
 from .variables import VariablePanel
+from .workspace import WorkspaceMenu
 
 
 class SeuratUI(TrameComponent):
@@ -19,6 +19,7 @@ class SeuratUI(TrameComponent):
         super().__init__(server)
         self.query_toolbar = QueryToolbar(server)
         self.help_dialog = HelpDialog(server)
+        self.workspace_menu = WorkspaceMenu(server)
         self.variable_panel = VariablePanel(server)
         self.grid_workspace = GridWorkspace(server)
         self.context_menu = ContextMenu(server)
@@ -28,11 +29,19 @@ class SeuratUI(TrameComponent):
 
     def build(self, campaign_name=""):
         with SinglePageLayout(self.server) as layout:
-            layout.title.set_text(
-                f"Campaign loaded: {campaign_name}"
-                if campaign_name
-                else "Campaign loaded"
+            layout.title.set_text(campaign_name or "Seurat")
+            layout.icon.click = (
+                "workspaceDrawerOpen = !workspaceDrawerOpen"
             )
+            with vuetify.VNavigationDrawer(
+                v_model=("workspaceDrawerOpen",),
+                v_if=("workspaceDrawerOpen",),
+                location="left",
+                temporary=True,
+                width=320,
+            ) as drawer:
+                self.workspace_menu.build()
+            layout.drawer = drawer
 
             with layout.toolbar:
                 self.query_toolbar.build()
