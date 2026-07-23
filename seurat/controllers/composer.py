@@ -12,7 +12,6 @@ from .grid import GridControllerMixin
 from .lifecycle import LifecycleControllerMixin
 from .sources import SourcesControllerMixin
 from .visualization import VisualizationControllerMixin
-from .workspace import WorkspaceControllerMixin
 
 
 CONTROLLER_TYPES = (
@@ -21,7 +20,6 @@ CONTROLLER_TYPES = (
     GridControllerMixin,
     VisualizationControllerMixin,
     ContextMenuControllerMixin,
-    WorkspaceControllerMixin,
     LifecycleControllerMixin,
 )
 
@@ -32,7 +30,6 @@ class SeuratController(
     GridControllerMixin,
     VisualizationControllerMixin,
     ContextMenuControllerMixin,
-    WorkspaceControllerMixin,
     LifecycleControllerMixin,
     ControllerBase,
 ):
