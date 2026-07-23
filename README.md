@@ -7,6 +7,9 @@ query language, and preview image sequences as short videos.
 
 ## Architecture
 
+See [ARCHITECTURE.md](ARCHITECTURE.md) for a diagram of the browser, Trame,
+application, backend, local ACA/SQLite, and future Phobos layers.
+
 `seurat.app.SeuratApp` is the composition root. It owns the Trame server,
 enables Seurat's web module, initializes state, connects the data access layer
 to controller adapters, and constructs the UI. The top-level `app.py`, `ui.py`,
@@ -58,6 +61,11 @@ code. Backend implementations should return normalized application DTOs rather
 than exposing collection documents, ACA paths, or remote API objects to Trame
 controllers. See [PHOBOS_INTEGRATION.md](PHOBOS_INTEGRATION.md) for the planned
 Phobos boundary and remaining migration phases.
+
+Query rearchitecture is currently paused for product and workflow review. See
+[QUERY_REDESIGN.md](QUERY_REDESIGN.md) for the current behavior, design options,
+backend constraints, acceptance criteria, and open decisions that should be
+resolved before Phase 5B.2 resumes.
 
 Client-side event and observer ownership is lifecycle-scoped rather than
 document-global. The registered runtimes own grid timeline/VCR behavior,
