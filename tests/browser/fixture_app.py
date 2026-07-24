@@ -204,7 +204,7 @@ def build_fixture_server(mode):
         "minmax(180px, 1fr)" for _ in range(state.gridCols)
     )
     state.gridFitRowTemplate = "minmax(212px, 1fr)"
-    if mode == "scalar":
+    if mode in {"scalar", "scalar-settings"}:
         state.gridCells = [
             _scalar_field_cell("black"),
             _scalar_field_cell("white"),
@@ -216,6 +216,24 @@ def build_fixture_server(mode):
             _image_sequence_cell(mode),
             empty_grid_cell(),
         ]
+
+    if mode == "scalar-settings":
+        state.showScalarFieldSettingsModal = True
+        state.scalarFieldSettingsCellIndex = 0
+        state.scalarFieldSettingsTitle = "field_black"
+        state.scalarFieldSettingsShowHeatmap = True
+        state.scalarFieldSettingsShowContours = False
+        state.scalarFieldSettingsColormap = "viridis"
+        state.scalarFieldSettingsBackground = "black"
+        state.scalarFieldSettingsRangeAuto = True
+        state.scalarFieldSettingsShowColorbar = True
+        state.scalarFieldSettingsShowAxes = True
+        state.scalarFieldSettingsContourLevelMode = "range"
+        state.scalarFieldSettingsContourValues = "-1, 0, 1"
+        state.scalarFieldSettingsContourMin = "-1"
+        state.scalarFieldSettingsContourMax = "1"
+        state.scalarFieldSettingsContourCount = 5
+        state.scalarFieldSettingsContourColor = "#ffffff"
 
     def toggle_variable_group(group_name):
         collapsed = dict(state.variableGroupCollapsed or {})
@@ -396,6 +414,16 @@ def build_fixture_server(mode):
             state.workspaceStatePath = f"/tmp/browser-{mode}.json"
         state.workspaceStateStatus = f"Loaded: {state.workspaceStatePath}"
 
+    def toggle_scalar_field_background():
+        state.scalarFieldSettingsBackground = (
+            "black"
+            if state.scalarFieldSettingsBackground == "white"
+            else "white"
+        )
+
+    def update_scalar_field_contour_color(color):
+        state.scalarFieldSettingsContourColor = str(color or "#ffffff")
+
     server.controller.add("toggle_variable_group")(toggle_variable_group)
     server.controller.add("set_active_grid_cell")(set_active_grid_cell)
     server.controller.add("set_grid_layout_size")(set_grid_layout_size)
@@ -411,6 +439,12 @@ def build_fixture_server(mode):
     server.controller.add("save_workspace_state")(save_workspace_state)
     server.controller.add("save_workspace_state_as")(save_workspace_state_as)
     server.controller.add("load_workspace_state")(load_workspace_state)
+    server.controller.add("toggle_scalar_field_background")(
+        toggle_scalar_field_background
+    )
+    server.controller.add("update_scalar_field_contour_color")(
+        update_scalar_field_contour_color
+    )
     build_ui(server, campaign_name=f"browser-{mode}.aca")
     return server
 
@@ -420,7 +454,7 @@ def main():
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument(
         "--mode",
-        choices=("step", "physical", "scalar"),
+        choices=("step", "physical", "scalar", "scalar-settings"),
         default="step",
     )
     args = parser.parse_args()

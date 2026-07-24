@@ -325,6 +325,7 @@ class CampaignDbNavigationTests(unittest.TestCase):
                 "span_grid_cell_down",
                 "span_grid_cell_right",
                 "toggle_add_source",
+                "toggle_scalar_field_background",
                 "toggle_movie_details",
                 "toggle_source_visibility",
                 "toggle_sources",
@@ -336,6 +337,7 @@ class CampaignDbNavigationTests(unittest.TestCase):
                 "update_plot_series_color",
                 "update_plot_series_line_style",
                 "update_plugin_option_value",
+                "update_scalar_field_contour_color",
             },
         )
         self.assertEqual(
