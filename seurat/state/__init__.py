@@ -1,6 +1,6 @@
 """Explicit ownership and initialization of Seurat's client state."""
 
-from . import catalog, context_menu, grid, sources, visualization
+from . import catalog, context_menu, grid, sources, visualization, workspace
 
 
 STATE_SECTIONS = (
@@ -9,6 +9,7 @@ STATE_SECTIONS = (
     ("visualization", visualization.defaults),
     ("grid", grid.defaults),
     ("context_menu", context_menu.defaults),
+    ("workspace", workspace.defaults),
 )
 
 
