@@ -7,9 +7,10 @@ import zlib
 from contextlib import ExitStack
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+import contourpy
 import numpy as np
 from adios2 import FileReader
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageColor, ImageDraw, ImageFont
 
 from media_utils import png_bytes_to_data_uri
 from query_parser import and_filter
@@ -21,6 +22,10 @@ GENERATED_SCALAR_PLOT_VERSION = 3
 _PNG_SIG = b"\x89PNG\r\n\x1a\n"
 SCALAR_FIELD_VARIABLE_TYPE = "scalarField"
 VISUALIZATION_PAYLOAD_VARIABLE_TYPES = ("image", SCALAR_FIELD_VARIABLE_TYPE)
+SCALAR_FIELD_RENDER_MODES = ("colormap", "contours", "both")
+SCALAR_FIELD_CONTOUR_LEVEL_MODES = ("range", "values")
+SCALAR_FIELD_DEFAULT_CONTOUR_COUNT = 10
+SCALAR_FIELD_MAX_CONTOUR_LEVELS = 100
 
 
 def _stops(values: List[List[int]]) -> np.ndarray:
@@ -424,6 +429,94 @@ def _scalar_field_background_rgb(
     return np.array([0, 0, 0], dtype=np.uint8)
 
 
+def _scalar_field_render_mode(
+    render_options: Optional[Dict[str, Any]],
+) -> str:
+    options = render_options if isinstance(render_options, dict) else {}
+    mode = str(options.get("render_mode", "colormap") or "colormap").lower()
+    return mode if mode in SCALAR_FIELD_RENDER_MODES else "colormap"
+
+
+def scalar_field_contour_levels(
+    render_options: Optional[Dict[str, Any]],
+    render_min: float,
+    render_max: float,
+) -> List[float]:
+    """Resolve explicit or evenly spaced scalar-field contour levels."""
+
+    options = render_options if isinstance(render_options, dict) else {}
+    raw_contours = options.get("contours", {})
+    contours = raw_contours if isinstance(raw_contours, dict) else {}
+    level_mode = str(
+        contours.get("level_mode", "range") or "range"
+    ).strip().lower()
+
+    if level_mode == "values":
+        raw_values = contours.get("values", [])
+        if not isinstance(raw_values, (list, tuple)):
+            return []
+        values = set()
+        for value in raw_values:
+            parsed = to_float(value)
+            if parsed is not None and math.isfinite(parsed):
+                values.add(float(parsed))
+        return sorted(values)[:SCALAR_FIELD_MAX_CONTOUR_LEVELS]
+
+    contour_min = to_float(contours.get("min", None))
+    contour_max = to_float(contours.get("max", None))
+    if contour_min is None or not math.isfinite(contour_min):
+        contour_min = float(render_min)
+    if contour_max is None or not math.isfinite(contour_max):
+        contour_max = float(render_max)
+    if contour_min >= contour_max:
+        return []
+
+    try:
+        count = int(contours.get("count", SCALAR_FIELD_DEFAULT_CONTOUR_COUNT))
+    except (TypeError, ValueError):
+        count = SCALAR_FIELD_DEFAULT_CONTOUR_COUNT
+    count = max(2, min(count, SCALAR_FIELD_MAX_CONTOUR_LEVELS))
+    return [
+        float(value) for value in np.linspace(contour_min, contour_max, count)
+    ]
+
+
+def _draw_scalar_field_contours(
+    image: Image.Image,
+    values: np.ndarray,
+    levels: List[float],
+    render_options: Optional[Dict[str, Any]],
+) -> None:
+    if not levels or values.shape[0] < 2 or values.shape[1] < 2:
+        return
+
+    masked_values = np.ma.masked_invalid(values)
+    generator = contourpy.contour_generator(
+        z=masked_values,
+        name="serial",
+        corner_mask=True,
+        line_type="Separate",
+    )
+    options = render_options if isinstance(render_options, dict) else {}
+    raw_contours = options.get("contours", {})
+    contours = raw_contours if isinstance(raw_contours, dict) else {}
+    try:
+        parsed_color = ImageColor.getrgb(
+            str(contours.get("color", "#ffffff") or "#ffffff")
+        )
+        line_color = tuple(parsed_color[:3])
+    except (TypeError, ValueError):
+        line_color = (255, 255, 255)
+    draw = ImageDraw.Draw(image)
+
+    for level in levels:
+        for line in generator.lines(float(level)):
+            if len(line) < 2:
+                continue
+            points = [(float(point[0]), float(point[1])) for point in line]
+            draw.line(points, fill=line_color, width=1, joint="curve")
+
+
 def _scalar_field_render_range(
     values: np.ndarray,
     finite: np.ndarray,
@@ -485,15 +578,30 @@ def scalar_field_to_png_bytes(
 
     fmin, fmax = _scalar_field_render_range(values, finite, metadata, render_options)
 
-    if fmax <= fmin:
-        normalized = np.zeros_like(values, dtype=np.float32)
+    render_mode = _scalar_field_render_mode(render_options)
+    if render_mode == "contours":
+        rgb = np.empty((*values.shape, 3), dtype=np.uint8)
+        rgb[:] = _scalar_field_background_rgb(render_options)
     else:
-        normalized = (values - float(fmin)) / (float(fmax) - float(fmin))
-    normalized = np.where(finite, normalized, 0.0)
-    rgb = _apply_colormap(normalized, _scalar_field_colormap(render_options, metadata))
+        if fmax <= fmin:
+            normalized = np.zeros_like(values, dtype=np.float32)
+        else:
+            normalized = (values - float(fmin)) / (float(fmax) - float(fmin))
+        normalized = np.where(finite, normalized, 0.0)
+        rgb = _apply_colormap(
+            normalized,
+            _scalar_field_colormap(render_options, metadata),
+        )
     rgb[~finite] = _scalar_field_background_rgb(render_options)
 
     pil = Image.fromarray(rgb, mode="RGB")
+    if render_mode in {"contours", "both"}:
+        _draw_scalar_field_contours(
+            pil,
+            values,
+            scalar_field_contour_levels(render_options, fmin, fmax),
+            render_options,
+        )
     buf = io.BytesIO()
     pil.save(buf, format="PNG")
     return buf.getvalue()

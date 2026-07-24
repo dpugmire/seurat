@@ -666,67 +666,21 @@ class ScalarFieldSettingsPanel(TrameComponent):
                             ],
                         )
 
-                    html.Div("Color", classes="seurat-plot-settings-section-title")
+                    html.Div("Display", classes="seurat-plot-settings-section-title")
                     with html.Div(classes="seurat-plot-settings-section"):
-                        with html.Div(classes="seurat-plot-settings-row"):
-                            html.Span("Colormap", class_="text-caption")
-                            with html.Select(
-                                v_model=("scalarFieldSettingsColormap",),
-                                classes="seurat-scalar-plot-policy seurat-scalar-field-colormap",
-                            ):
-                                for label, value in SCALAR_FIELD_COLORMAP_OPTIONS:
-                                    html.Option(label, value=value)
-                        with html.Div(classes="seurat-plot-settings-row"):
-                            html.Span("Background", class_="text-caption")
-                            with html.Select(
-                                v_model=("scalarFieldSettingsBackground",),
-                                classes="seurat-scalar-plot-policy seurat-scalar-field-background",
-                            ):
-                                html.Option("Black", value="black")
-                                html.Option("White", value="white")
-
-                    html.Div("Range", classes="seurat-plot-settings-section-title mt-3")
-                    with html.Div(classes="seurat-plot-settings-section"):
-                        with html.Div(classes="seurat-plot-settings-axis-row seurat-scalar-field-range-row"):
+                        with html.Div(classes="seurat-scalar-field-compact-row"):
                             with html.Div(classes="seurat-scalar-field-auto-control"):
-                                html.Input(
-                                    v_model=("scalarFieldSettingsRangeAuto",),
-                                    classes="seurat-scalar-field-auto-checkbox",
-                                    raw_attrs=['type="checkbox"'],
+                                html.Span("Background")
+                                html.Button(
+                                    classes="seurat-scalar-field-background-toggle",
+                                    click=ctrl.toggle_scalar_field_background,
+                                    raw_attrs=[
+                                        'type="button"',
+                                        ':style="{ backgroundColor: scalarFieldSettingsBackground === \'white\' ? \'#ffffff\' : \'#000000\' }"',
+                                        ':title="\'Background: \' + (scalarFieldSettingsBackground === \'white\' ? \'White\' : \'Black\') + \'. Click to toggle.\'"',
+                                        ':aria-label="\'Background: \' + (scalarFieldSettingsBackground === \'white\' ? \'White\' : \'Black\') + \'. Click to toggle.\'"',
+                                    ],
                                 )
-                                html.Span("Auto")
-                            html.Span(
-                                "Values:",
-                                classes="seurat-plot-settings-axis-label",
-                                raw_attrs=[
-                                    ':class="{ \'is-disabled\': scalarFieldSettingsRangeAuto }"'
-                                ],
-                            )
-                            vuetify.VTextField(
-                                v_model=("scalarFieldSettingsMin",),
-                                label="Min",
-                                density="compact",
-                                hide_details=True,
-                                raw_attrs=[':disabled="scalarFieldSettingsRangeAuto"'],
-                            )
-                            vuetify.VTextField(
-                                v_model=("scalarFieldSettingsMax",),
-                                label="Max",
-                                density="compact",
-                                hide_details=True,
-                                raw_attrs=[':disabled="scalarFieldSettingsRangeAuto"'],
-                            )
-
-                    html.Div("Display", classes="seurat-plot-settings-section-title mt-3")
-                    with html.Div(classes="seurat-plot-settings-section"):
-                        with html.Div(classes="seurat-scalar-field-display-options"):
-                            with html.Div(classes="seurat-scalar-field-auto-control"):
-                                html.Input(
-                                    v_model=("scalarFieldSettingsShowColorbar",),
-                                    classes="seurat-scalar-field-auto-checkbox",
-                                    raw_attrs=['type="checkbox"'],
-                                )
-                                html.Span("Show color map")
                             with html.Div(classes="seurat-scalar-field-auto-control"):
                                 html.Input(
                                     v_model=("scalarFieldSettingsShowAxes",),
@@ -734,6 +688,233 @@ class ScalarFieldSettingsPanel(TrameComponent):
                                     raw_attrs=['type="checkbox"'],
                                 )
                                 html.Span("Show axes")
+
+                    with html.Div(
+                        classes="seurat-scalar-field-section-title mt-3"
+                    ):
+                        html.Input(
+                            v_model=("scalarFieldSettingsShowHeatmap",),
+                            classes="seurat-scalar-field-auto-checkbox",
+                            raw_attrs=['type="checkbox"'],
+                        )
+                        html.Span("Heatmap")
+                    with html.Div(
+                        classes="seurat-plot-settings-section seurat-scalar-field-layer-section",
+                        raw_attrs=[
+                            ':class="{ \'is-disabled\': !scalarFieldSettingsShowHeatmap }"'
+                        ],
+                    ):
+                        with html.Div(classes="seurat-scalar-field-compact-row"):
+                            html.Span("Colormap", class_="text-caption")
+                            with html.Select(
+                                v_model=("scalarFieldSettingsColormap",),
+                                classes="seurat-scalar-plot-policy seurat-scalar-field-colormap",
+                                raw_attrs=[
+                                    ':disabled="!scalarFieldSettingsShowHeatmap"'
+                                ],
+                            ):
+                                for label, value in SCALAR_FIELD_COLORMAP_OPTIONS:
+                                    html.Option(label, value=value)
+                            with html.Div(classes="seurat-scalar-field-auto-control"):
+                                html.Input(
+                                    v_model=("scalarFieldSettingsShowColorbar",),
+                                    classes="seurat-scalar-field-auto-checkbox",
+                                    raw_attrs=[
+                                        'type="checkbox"',
+                                        ':disabled="!scalarFieldSettingsShowHeatmap"',
+                                    ],
+                                )
+                                html.Span("Show colorbar")
+                        with html.Div(classes="seurat-scalar-field-compact-row"):
+                            html.Span("Range", class_="text-caption")
+                            with html.Div(classes="seurat-scalar-field-auto-control"):
+                                html.Input(
+                                    v_model=("scalarFieldSettingsRangeAuto",),
+                                    classes="seurat-scalar-field-auto-checkbox",
+                                    raw_attrs=[
+                                        'type="checkbox"',
+                                        ':disabled="!scalarFieldSettingsShowHeatmap"',
+                                    ],
+                                )
+                                html.Span("Auto")
+                            vuetify.VTextField(
+                                v_model=("scalarFieldSettingsMin",),
+                                label="Min",
+                                density="compact",
+                                hide_details=True,
+                                classes="seurat-scalar-field-compact-input",
+                                raw_attrs=[
+                                    ':disabled="scalarFieldSettingsRangeAuto || !scalarFieldSettingsShowHeatmap"'
+                                ],
+                            )
+                            vuetify.VTextField(
+                                v_model=("scalarFieldSettingsMax",),
+                                label="Max",
+                                density="compact",
+                                hide_details=True,
+                                classes="seurat-scalar-field-compact-input",
+                                raw_attrs=[
+                                    ':disabled="scalarFieldSettingsRangeAuto || !scalarFieldSettingsShowHeatmap"'
+                                ],
+                            )
+
+                    with html.Div(
+                        classes="seurat-scalar-field-section-title mt-3"
+                    ):
+                        html.Input(
+                            v_model=("scalarFieldSettingsShowContours",),
+                            classes="seurat-scalar-field-auto-checkbox",
+                            raw_attrs=['type="checkbox"'],
+                        )
+                        html.Span("Contour")
+                    with html.Div(
+                        classes="seurat-plot-settings-section seurat-scalar-field-layer-section seurat-scalar-field-contour-section",
+                        raw_attrs=[
+                            ':class="{ \'is-disabled\': !scalarFieldSettingsShowContours }"'
+                        ],
+                    ):
+                        with html.Div(classes="seurat-scalar-field-compact-row"):
+                            html.Span("Color", class_="text-caption")
+                            with html.Div(classes="seurat-plot-settings-color-menu"):
+                                html.Button(
+                                    "",
+                                    classes="seurat-plot-settings-current-color seurat-scalar-field-contour-color",
+                                    raw_attrs=[
+                                        'type="button"',
+                                        ':disabled="!scalarFieldSettingsShowContours"',
+                                        ':title="\'Contour color: \' + (scalarFieldSettingsContourColor || \'#ffffff\')"',
+                                        ':style="{ backgroundColor: scalarFieldSettingsContourColor || \'#ffffff\', cursor: scalarFieldSettingsShowContours ? \'pointer\' : \'not-allowed\' }"',
+                                    ],
+                                )
+                                with vuetify.VMenu(
+                                    activator="parent",
+                                    location="bottom end",
+                                    close_on_content_click=False,
+                                    raw_attrs=[
+                                        ':disabled="!scalarFieldSettingsShowContours"'
+                                    ],
+                                ):
+                                    with vuetify.VCard(
+                                        classes="seurat-plot-settings-color-popup",
+                                        elevation=4,
+                                    ):
+                                        with vuetify.VCardText(class_="pa-2"):
+                                            html.Div(
+                                                "Standard Colors",
+                                                classes="text-caption seurat-plot-settings-popup-title",
+                                            )
+                                            with html.Div(
+                                                classes="seurat-plot-settings-standard-colors"
+                                            ):
+                                                with vuetify.Template(
+                                                    v_for="color in plotSettingsStandardColors",
+                                                    key="'contour:' + color",
+                                                ):
+                                                    html.Button(
+                                                        "",
+                                                        classes="seurat-plot-settings-color-swatch",
+                                                        raw_attrs=[
+                                                            'type="button"',
+                                                            ':disabled="!scalarFieldSettingsShowContours"',
+                                                            ':title="color"',
+                                                            ':style="{ backgroundColor: color, boxShadow: ((scalarFieldSettingsContourColor || \'\').toLowerCase() === color.toLowerCase()) ? \'0 0 0 2px #111\' : \'none\' }"',
+                                                        ],
+                                                        click=(
+                                                            ctrl.update_scalar_field_contour_color,
+                                                            "[color]",
+                                                        ),
+                                                    )
+                                            html.Div(
+                                                "More colors...",
+                                                classes="text-caption seurat-plot-settings-more-colors",
+                                            )
+                                            vuetify.VColorPicker(
+                                                hide_header=True,
+                                                hide_inputs=False,
+                                                show_swatches=False,
+                                                width=220,
+                                                raw_attrs=[
+                                                    ':model-value="scalarFieldSettingsContourColor"',
+                                                    ':modes="[\'hex\', \'rgb\', \'hsl\']"',
+                                                    ':disabled="!scalarFieldSettingsShowContours"',
+                                                ],
+                                                update_modelValue=(
+                                                    ctrl.update_scalar_field_contour_color,
+                                                    "[$event]",
+                                                ),
+                                            )
+
+                        with html.Div(classes="seurat-scalar-field-compact-row"):
+                            html.Span("Definition", class_="text-caption")
+                            with vuetify.VRadioGroup(
+                                v_model=(
+                                    "scalarFieldSettingsContourLevelMode",
+                                ),
+                                inline=True,
+                                density="compact",
+                                hide_details=True,
+                                classes="seurat-scalar-field-contour-level-mode",
+                                raw_attrs=[
+                                    ':disabled="!scalarFieldSettingsShowContours"'
+                                ],
+                            ):
+                                vuetify.VRadio(label="Range", value="range")
+                                vuetify.VRadio(label="Values", value="values")
+
+                        with vuetify.Template(
+                            v_if="scalarFieldSettingsContourLevelMode === 'range'"
+                        ):
+                            with html.Div(classes="seurat-scalar-field-compact-row"):
+                                html.Span("Range", class_="text-caption")
+                                vuetify.VTextField(
+                                    v_model=("scalarFieldSettingsContourMin",),
+                                    label="Min",
+                                    density="compact",
+                                    hide_details=True,
+                                    classes="seurat-scalar-field-compact-input",
+                                    raw_attrs=[
+                                        ':disabled="!scalarFieldSettingsShowContours"'
+                                    ],
+                                )
+                                vuetify.VTextField(
+                                    v_model=("scalarFieldSettingsContourMax",),
+                                    label="Max",
+                                    density="compact",
+                                    hide_details=True,
+                                    classes="seurat-scalar-field-compact-input",
+                                    raw_attrs=[
+                                        ':disabled="!scalarFieldSettingsShowContours"'
+                                    ],
+                                )
+                                vuetify.VTextField(
+                                    v_model=("scalarFieldSettingsContourCount",),
+                                    label="Number",
+                                    density="compact",
+                                    hide_details=True,
+                                    classes="seurat-scalar-field-compact-input",
+                                    raw_attrs=[
+                                        'type="number"',
+                                        'min="2"',
+                                        'max="100"',
+                                        'step="1"',
+                                        ':disabled="!scalarFieldSettingsShowContours"',
+                                    ],
+                                )
+                        with vuetify.Template(
+                            v_if="scalarFieldSettingsContourLevelMode === 'values'"
+                        ):
+                            with html.Div(classes="seurat-scalar-field-compact-row"):
+                                html.Span("Values", class_="text-caption")
+                                vuetify.VTextField(
+                                    v_model=("scalarFieldSettingsContourValues",),
+                                    placeholder="-1, -0.5, 0, 0.5, 1",
+                                    density="compact",
+                                    hide_details=True,
+                                    classes="seurat-scalar-field-contour-values",
+                                    raw_attrs=[
+                                        ':disabled="!scalarFieldSettingsShowContours"'
+                                    ],
+                                )
 
                 with vuetify.VCardActions():
                     vuetify.VSpacer()

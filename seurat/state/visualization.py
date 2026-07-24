@@ -58,6 +58,8 @@ def defaults():
         "scalarFieldSettingsTitle": "",
         "scalarFieldSettingsStatus": "",
         "scalarFieldSettingsStatusIsError": False,
+        "scalarFieldSettingsShowHeatmap": True,
+        "scalarFieldSettingsShowContours": False,
         "scalarFieldSettingsColormap": "viridis",
         "scalarFieldSettingsBackground": "black",
         "scalarFieldSettingsRangeAuto": True,
@@ -65,6 +67,12 @@ def defaults():
         "scalarFieldSettingsMax": "",
         "scalarFieldSettingsShowColorbar": False,
         "scalarFieldSettingsShowAxes": False,
+        "scalarFieldSettingsContourLevelMode": "range",
+        "scalarFieldSettingsContourValues": "",
+        "scalarFieldSettingsContourMin": "",
+        "scalarFieldSettingsContourMax": "",
+        "scalarFieldSettingsContourCount": 10,
+        "scalarFieldSettingsContourColor": "#ffffff",
     }
 
 
@@ -94,6 +102,8 @@ def right_pane_reset_defaults():
         "scalarFieldSettingsTitle": "",
         "scalarFieldSettingsStatus": "",
         "scalarFieldSettingsStatusIsError": False,
+        "scalarFieldSettingsShowHeatmap": True,
+        "scalarFieldSettingsShowContours": False,
         "scalarFieldSettingsColormap": "viridis",
         "scalarFieldSettingsBackground": "black",
         "scalarFieldSettingsRangeAuto": True,
@@ -101,4 +111,10 @@ def right_pane_reset_defaults():
         "scalarFieldSettingsMax": "",
         "scalarFieldSettingsShowColorbar": False,
         "scalarFieldSettingsShowAxes": False,
+        "scalarFieldSettingsContourLevelMode": "range",
+        "scalarFieldSettingsContourValues": "",
+        "scalarFieldSettingsContourMin": "",
+        "scalarFieldSettingsContourMax": "",
+        "scalarFieldSettingsContourCount": 10,
+        "scalarFieldSettingsContourColor": "#ffffff",
     }

@@ -38,7 +38,15 @@ class WorkspaceStateTests(unittest.TestCase):
                 ],
                 "source_dataset": "run/output.bp",
                 "plot_settings": {"show_grid": False},
-                "scalar_field_settings": {"colormap": "plasma"},
+                "scalar_field_settings": {
+                    "render_mode": "both",
+                    "colormap": "plasma",
+                    "contours": {
+                        "level_mode": "values",
+                        "values": [-1.0, 0.0, 1.0],
+                        "color": "#ff0000",
+                    },
+                },
                 "src": "data:image/png;base64,not-persisted",
                 "plot": {"series": [{"x": [0], "y": [1]}]},
                 "frame_sources": ["not-persisted"],
@@ -69,6 +77,14 @@ class WorkspaceStateTests(unittest.TestCase):
         self.assertEqual(cell["variable_id"], "density")
         self.assertEqual(cell["source_dataset"], "run/output.bp")
         self.assertEqual(cell["plot_settings"], {"show_grid": False})
+        self.assertEqual(
+            cell["scalar_field_settings"]["contours"]["values"],
+            [-1.0, 0.0, 1.0],
+        )
+        self.assertEqual(
+            cell["scalar_field_settings"]["contours"]["color"],
+            "#ff0000",
+        )
         self.assertNotIn("src", cell)
         self.assertNotIn("plot", cell)
         self.assertNotIn("frame_sources", cell)

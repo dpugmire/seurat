@@ -741,6 +741,7 @@ class GridWorkspace(TrameComponent):
                                                             v_if=(
                                                                 "tile.scalar_field_settings"
                                                                 " && tile.scalar_field_settings.show_colorbar"
+                                                                " && tile.scalar_field_settings.render_mode !== 'contours'"
                                                             )
                                                         ):
                                                             with html.Div(classes="seurat-scalar-field-colorbar"):
