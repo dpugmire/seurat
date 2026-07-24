@@ -10,7 +10,7 @@ class ControllerOwnershipTests(unittest.TestCase):
         expected_counts = {
             "ACTION_BINDINGS": 85,
             "TRIGGER_BINDINGS": 7,
-            "STATE_CHANGE_BINDINGS": 3,
+            "STATE_CHANGE_BINDINGS": 4,
         }
 
         for attribute, expected_count in expected_counts.items():

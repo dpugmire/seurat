@@ -149,6 +149,8 @@ class SeuratAppTests(unittest.TestCase):
         self.assertIn("Current state file", ui.layout.html)
         self.assertNotIn('id="seurat-workspace-state-file"', ui.layout.html)
         self.assertIn('id="seurat-variable-column"', ui.layout.html)
+        self.assertIn("Search variables", ui.layout.html)
+        self.assertIn("variableSearchText", ui.layout.html)
         self.assertIn('id="seurat-context-menu"', ui.layout.html)
         self.assertIn("scalarFieldSettingsBackground", ui.layout.html)
         self.assertIn("scalarFieldSettingsShowHeatmap", ui.layout.html)

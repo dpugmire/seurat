@@ -1,6 +1,22 @@
 .seurat-draggable-var { cursor: grab; user-select: none; }
 .seurat-draggable-var:active { cursor: grabbing; }
 .seurat-var-list { padding: 4px 2px; }
+.v-card-title.seurat-variable-card-title {
+  display: grid !important;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 12px !important;
+}
+.seurat-variable-title-text {
+  flex: 0 0 auto;
+}
+.seurat-variable-search {
+  width: 100%;
+  min-width: 0;
+  font-size: 13px;
+}
 .seurat-var-group {
   margin: 6px 6px 10px;
   padding: 6px 6px 8px;

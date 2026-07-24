@@ -17,8 +17,22 @@ class VariablePanel(TrameComponent):
                 variant="outlined",
                 style="flex:1 1 auto; min-height:0; display:flex; flex-direction:column;",
             ):
-                with vuetify.VCardTitle():
-                    html.Div("Variables")
+                with vuetify.VCardTitle(
+                    classes="seurat-variable-card-title"
+                ):
+                    html.Div("Variables", classes="seurat-variable-title-text")
+                    vuetify.VTextField(
+                        v_model=("variableSearchText",),
+                        placeholder="Search",
+                        density="compact",
+                        hide_details=True,
+                        clearable=True,
+                        classes="seurat-variable-search",
+                        raw_attrs=[
+                            'aria-label="Search variables"',
+                            'autocomplete="off"',
+                        ],
+                    )
                 with vuetify.VCardText(style="flex:1 1 auto; min-height:0; overflow-y:auto;"):
                     with html.Div(
                         style="display:flex; align-items:center; gap:8px; padding:0 4px 8px 4px;",
@@ -47,7 +61,16 @@ class VariablePanel(TrameComponent):
                             class_="text-caption",
                             style="padding:8px 10px; color:#777;",
                         )
-                        with vuetify.Template(v_for="group in variableGroups", key="group.name"):
+                        html.Div(
+                            "No matching variables",
+                            v_if="(variableSearchText || '').trim() && (variableGroups || []).length && !(filteredVariableGroups || []).length",
+                            class_="text-caption",
+                            style="padding:8px 10px; color:#777;",
+                        )
+                        with vuetify.Template(
+                            v_for="group in ((variableSearchText || '').trim() ? filteredVariableGroups : variableGroups)",
+                            key="group.name",
+                        ):
                             with html.Div(
                                 class_="seurat-var-group",
                                 style=(
@@ -62,11 +85,11 @@ class VariablePanel(TrameComponent):
                                     style="font-weight:800;",
                                     raw_attrs=[
                                         'type="button"',
-                                        ':aria-expanded="!(variableGroupCollapsed && variableGroupCollapsed[group.name])"',
+                                        ':aria-expanded="Boolean((variableSearchText || \'\').trim()) || !(variableGroupCollapsed && variableGroupCollapsed[group.name])"',
                                     ],
                                 ):
                                     html.Span(
-                                        "{{ (variableGroupCollapsed && variableGroupCollapsed[group.name]) ? '▸' : '▾' }}",
+                                        "{{ (!(variableSearchText || '').trim() && variableGroupCollapsed && variableGroupCollapsed[group.name]) ? '▸' : '▾' }}",
                                         class_="seurat-var-group-chevron",
                                     )
                                     html.Span(
@@ -74,7 +97,7 @@ class VariablePanel(TrameComponent):
                                         raw_attrs=[':title="group.name"'],
                                         style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;",
                                     )
-                                with html.Div(v_if="!(variableGroupCollapsed && variableGroupCollapsed[group.name])"):
+                                with html.Div(v_if="(variableSearchText || '').trim() || !(variableGroupCollapsed && variableGroupCollapsed[group.name])"):
                                     with vuetify.Template(v_for="v in group.variables", key="group.name + '::' + v.id"):
                                         with html.Div(
                                             click=(ctrl.pick_var, "[v.id]"),

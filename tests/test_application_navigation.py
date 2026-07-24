@@ -18,6 +18,7 @@ except ModuleNotFoundError:
 from application import SeuratApplication
 from controllers import _variable_groups_from_navigation, attach_controllers
 from db import CampaignDb
+from seurat.controllers.catalog import _filter_variable_groups
 from seurat.models.workspace_state import parse_workspace_document, workspace_json
 from sqlite_store import SQLiteCampaignCollection
 from state_init import init_state
@@ -64,6 +65,78 @@ class RecordingState(SimpleNamespace):
             return callback
 
         return register
+
+
+class VariableCatalogSearchTests(unittest.TestCase):
+    def setUp(self):
+        self.groups = [
+            {
+                "name": "0D",
+                "variables": [
+                    {
+                        "id": "internal_energy",
+                        "name": "internal_energy",
+                        "label": "Internal Energy",
+                        "path": "run-a/scalars.bp/internal_energy",
+                        "source_dataset": "run-a/scalars.bp",
+                    }
+                ],
+            },
+            {
+                "name": "run-b/output",
+                "file_count": 2,
+                "variables": [
+                    {
+                        "id": "density",
+                        "name": "density",
+                        "label": "Density",
+                        "path": "run-b/output.bp/density",
+                        "source_dataset": "run-b/output.bp",
+                    },
+                    {
+                        "id": "temperature",
+                        "name": "temperature",
+                        "label": "Temperature",
+                        "path": "run-b/output.bp/temperature",
+                        "source_dataset": "run-b/output.bp",
+                    },
+                ],
+            },
+        ]
+
+    def test_search_matches_variable_fields_case_insensitively(self):
+        by_label = _filter_variable_groups(self.groups, "ENERGY")
+        by_path = _filter_variable_groups(self.groups, "output.bp/temp")
+
+        self.assertEqual(
+            [item["id"] for item in by_label[0]["variables"]],
+            ["internal_energy"],
+        )
+        self.assertEqual(by_path[0]["name"], "run-b/output")
+        self.assertEqual(
+            [item["id"] for item in by_path[0]["variables"]],
+            ["temperature"],
+        )
+
+    def test_group_match_keeps_all_variables(self):
+        filtered = _filter_variable_groups(self.groups, "RUN-B")
+
+        self.assertEqual(len(filtered), 1)
+        self.assertEqual(
+            [item["id"] for item in filtered[0]["variables"]],
+            ["density", "temperature"],
+        )
+
+    def test_empty_search_restores_catalog_and_no_match_is_empty(self):
+        self.assertEqual(
+            _filter_variable_groups(self.groups, "   "),
+            self.groups,
+        )
+        self.assertEqual(
+            _filter_variable_groups(self.groups, "not-present"),
+            [],
+        )
+        self.assertEqual(len(self.groups[1]["variables"]), 2)
 
 
 class CampaignDbNavigationTests(unittest.TestCase):
@@ -354,7 +427,12 @@ class CampaignDbNavigationTests(unittest.TestCase):
         )
         self.assertEqual(
             set(state.change_callbacks),
-            {"selectedVar", "showOnlyVisualizedVars", "variablePaneView"},
+            {
+                "selectedVar",
+                "showOnlyVisualizedVars",
+                "variablePaneView",
+                "variableSearchText",
+            },
         )
         self.assertEqual(len(controller.on_server_ready.callbacks), 1)
 
@@ -891,6 +969,7 @@ class CampaignDbNavigationTests(unittest.TestCase):
             querySourceRestrictionFilter={},
             showOnlyVisualizedVars=False,
             variableGroupCollapsed={},
+            variableSearchText="TEMP",
         )
         server = SimpleNamespace(state=state, controller=RecordingController())
         refresh = attach_controllers(
@@ -904,6 +983,14 @@ class CampaignDbNavigationTests(unittest.TestCase):
         refresh()
 
         self.assertEqual(state.variableGroups, self.db.grouped_variable_names())
+        self.assertEqual(
+            [
+                variable["id"]
+                for group in state.filteredVariableGroups
+                for variable in group["variables"]
+            ],
+            ["temperature"],
+        )
         self.assertEqual(state.variableNames, ["temperature", "density"])
         self.assertEqual(
             state.variableLabelsById,

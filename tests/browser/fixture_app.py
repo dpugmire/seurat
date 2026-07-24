@@ -10,6 +10,7 @@ if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
 from seurat import module as seurat_module  # noqa: E402
+from seurat.controllers.catalog import _filter_variable_groups  # noqa: E402
 from seurat.models.grid import empty_grid_cell  # noqa: E402
 from seurat.state import init_state  # noqa: E402
 from trame.app import get_server  # noqa: E402
@@ -182,6 +183,7 @@ def build_fixture_server(mode):
             ],
         },
     ]
+    state.filteredVariableGroups = []
     state.variableNames = ["internal_energy", "current_z"]
     state.variableLabelsById = {
         "internal_energy": "internal_energy",
@@ -239,6 +241,15 @@ def build_fixture_server(mode):
         collapsed = dict(state.variableGroupCollapsed or {})
         collapsed[str(group_name)] = not bool(collapsed.get(str(group_name), False))
         state.variableGroupCollapsed = collapsed
+
+    @state.change("variableSearchText")
+    def filter_variable_groups(variableSearchText, **_):
+        search_text = str(variableSearchText or "").strip()
+        state.filteredVariableGroups = (
+            _filter_variable_groups(state.variableGroups, search_text)
+            if search_text
+            else []
+        )
 
     def set_active_grid_cell(cell_index, _ignored=0, _extend_selection=0):
         state.activeGridCell = int(cell_index)

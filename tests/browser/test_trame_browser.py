@@ -434,6 +434,44 @@ def test_variable_group_expands_and_collapses(page, seurat_server):
     assert expanded_group.get_attribute("aria-expanded") == "true"
 
 
+def test_variable_catalog_search_filters_locally_and_preserves_collapse_state(
+    page,
+    seurat_server,
+):
+    _open_app(page, seurat_server)
+
+    search = page.locator(".seurat-variable-search input")
+    zero_d_group = page.get_by_role("button", name="▾0D", exact=True)
+    internal_energy = page.locator('[data-item="internal_energy"]')
+    current_z = page.locator('[data-item="current_z"]')
+
+    zero_d_group.click()
+    internal_energy.wait_for(state="hidden")
+
+    search.fill("ENERGY")
+    internal_energy.wait_for(state="visible")
+    current_z.wait_for(state="detached")
+    assert page.get_by_role("button", name="▾0D", exact=True).get_attribute(
+        "aria-expanded"
+    ) == "true"
+
+    search.fill("fixture/images")
+    current_z.wait_for(state="visible")
+    internal_energy.wait_for(state="detached")
+
+    search.fill("not-present")
+    page.get_by_text("No matching variables", exact=True).wait_for(
+        state="visible"
+    )
+
+    search.fill("")
+    current_z.wait_for(state="visible")
+    internal_energy.wait_for(state="hidden")
+    assert page.get_by_role("button", name="▸0D", exact=True).get_attribute(
+        "aria-expanded"
+    ) == "false"
+
+
 def test_grid_selection_assignment_and_layout_controls(page, seurat_server):
     _open_app(page, seurat_server)
 

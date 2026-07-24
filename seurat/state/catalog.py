@@ -5,7 +5,9 @@ def defaults():
     return {
         "variableNames": [],
         "variableGroups": [],
+        "filteredVariableGroups": [],
         "variableLabelsById": {},
+        "variableSearchText": "",
         "variablePaneView": "variables",
         "variableGroupCollapsed": {},
         "variableGroupCollapsedByView": {"variables": {}, "files": {}},

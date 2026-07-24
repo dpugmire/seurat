@@ -53,6 +53,53 @@ def _variable_groups_from_navigation(
     return groups
 
 
+def _filter_variable_groups(
+    groups: List[Dict[str, Any]],
+    search_text: Any,
+) -> List[Dict[str, Any]]:
+    """Filter catalog groups locally without changing the canonical catalog."""
+
+    needle = str(search_text or "").strip().casefold()
+    if not needle:
+        return list(groups or [])
+
+    filtered: List[Dict[str, Any]] = []
+    variable_fields = (
+        "id",
+        "name",
+        "label",
+        "path",
+        "source_dataset",
+    )
+    for raw_group in groups or []:
+        if not isinstance(raw_group, dict):
+            continue
+        group = dict(raw_group)
+        variables = [
+            variable
+            for variable in (raw_group.get("variables", []) or [])
+            if isinstance(variable, dict)
+        ]
+        group_matches = needle in str(
+            raw_group.get("name", "") or ""
+        ).casefold()
+        if group_matches:
+            matches = variables
+        else:
+            matches = [
+                variable
+                for variable in variables
+                if any(
+                    needle in str(variable.get(field, "") or "").casefold()
+                    for field in variable_fields
+                )
+            ]
+        if matches:
+            group["variables"] = matches
+            filtered.append(group)
+    return filtered
+
+
 def _display_representation_summary(raw: Any) -> Dict[str, Any]:
     representation = dict(raw or {}) if isinstance(raw, dict) else {}
     return {
@@ -92,6 +139,7 @@ class CatalogControllerMixin:
     STATE_CHANGE_BINDINGS = (
         (("showOnlyVisualizedVars",), "on_show_only_visualized_vars"),
         (("variablePaneView",), "on_variable_pane_view"),
+        (("variableSearchText",), "on_variable_search_text"),
         (("selectedVar",), "on_selected_var"),
     )
 
@@ -118,6 +166,7 @@ class CatalogControllerMixin:
         )
         grouped = _variable_groups_from_navigation(navigation)
         self.state.variableGroups = grouped
+        self.update_variable_search_results()
         variables = [
             variable
             for group in grouped
@@ -156,6 +205,19 @@ class CatalogControllerMixin:
             "Connected"
             if backend_status.ok
             else f"DB error: {backend_status.error}"
+        )
+
+    def update_variable_search_results(self) -> None:
+        search_text = str(
+            getattr(self.state, "variableSearchText", "") or ""
+        ).strip()
+        self.state.filteredVariableGroups = (
+            _filter_variable_groups(
+                list(self.state.variableGroups or []),
+                search_text,
+            )
+            if search_text
+            else []
         )
 
     def show_help(self, title: str) -> None:
@@ -524,6 +586,9 @@ Notes:
 
     def on_variable_pane_view(self, variablePaneView, **_):
         self.refresh_variable_list()
+
+    def on_variable_search_text(self, variableSearchText, **_):
+        self.update_variable_search_results()
 
     def on_selected_var(self, selectedVar, **_):
         if not selectedVar:
