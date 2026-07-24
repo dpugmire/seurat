@@ -453,7 +453,10 @@ class SourcesControllerMixin:
         }
 
     def source_extrema_for_title(
-        self, variable_id: str, source_filter: Dict[str, Any]
+        self,
+        variable_id: str,
+        source_filter: Dict[str, Any],
+        representation_id: str = "",
     ) -> Tuple[Optional[float], Optional[float]]:
         var_id = str(variable_id or "").strip()
         if not var_id or not source_filter:
@@ -464,6 +467,33 @@ class SourcesControllerMixin:
         summary = self.application.get_source_summary(
             {"variable_id": var_id, "query": extra_filter or {}}
         )
+        derived_id = str(representation_id or "").strip()
+        if derived_id:
+            derived_representations = [
+                representation
+                for representation in summary.get(
+                    "derived_representations", []
+                )
+                or []
+                if isinstance(representation, dict)
+            ]
+            representation = next(
+                (
+                    item
+                    for item in derived_representations
+                    if str(item.get("id", "") or "") == derived_id
+                ),
+                None,
+            )
+            if representation is None and len(derived_representations) == 1:
+                representation = derived_representations[0]
+            if representation is None:
+                return None, None
+            return self.valid_title_extrema(
+                representation.get("global_min", None),
+                representation.get("global_max", None),
+            )
+
         return self.valid_title_extrema(
             summary.get("global_min", None),
             summary.get("global_max", None),

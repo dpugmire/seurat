@@ -65,7 +65,27 @@ class SourceDescriptor(TypedDict, total=False):
     maximum: Optional[float]
 
 
-class SourceSummary(TypedDict):
+class RepresentationSummary(TypedDict, total=False):
+    """Statistics and identifying metadata for one variable representation."""
+
+    id: str
+    label: str
+    kind: str
+    data_model: str
+    source_data_model: str
+    shape: str
+    axes: str
+    num_frames: int
+    num_sources: int
+    global_min: Optional[float]
+    global_max: Optional[float]
+    mean_min: Optional[float]
+    mean_max: Optional[float]
+    median_min: Optional[float]
+    median_max: Optional[float]
+
+
+class _RequiredSourceSummary(TypedDict):
     variable_id: str
     num_sources: int
     global_min: Optional[float]
@@ -75,6 +95,11 @@ class SourceSummary(TypedDict):
     median_min: Optional[float]
     median_max: Optional[float]
     sources: List[SourceDescriptor]
+
+
+class SourceSummary(_RequiredSourceSummary, total=False):
+    source_representation: RepresentationSummary
+    derived_representations: List[RepresentationSummary]
 
 
 class SourceSummaryRequest(TypedDict, total=False):

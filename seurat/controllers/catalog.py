@@ -53,6 +53,29 @@ def _variable_groups_from_navigation(
     return groups
 
 
+def _display_representation_summary(raw: Any) -> Dict[str, Any]:
+    representation = dict(raw or {}) if isinstance(raw, dict) else {}
+    return {
+        "id": str(representation.get("id", "") or ""),
+        "label": str(representation.get("label", "") or ""),
+        "kind": str(representation.get("kind", "") or ""),
+        "data_model": str(representation.get("data_model", "") or ""),
+        "source_data_model": str(
+            representation.get("source_data_model", "") or ""
+        ),
+        "shape": str(representation.get("shape", "") or ""),
+        "axes": str(representation.get("axes", "") or ""),
+        "num_frames": int(representation.get("num_frames", 0) or 0),
+        "num_sources": int(representation.get("num_sources", 0) or 0),
+        "global_min": fmt(representation.get("global_min", None)),
+        "global_max": fmt(representation.get("global_max", None)),
+        "mean_min": fmt(representation.get("mean_min", None)),
+        "mean_max": fmt(representation.get("mean_max", None)),
+        "median_min": fmt(representation.get("median_min", None)),
+        "median_max": fmt(representation.get("median_max", None)),
+    }
+
+
 class CatalogControllerMixin:
     ACTION_BINDINGS = (
         ("pick_var", "pick_var"),
@@ -252,6 +275,14 @@ Notes:
         self.state.detailsMeanMax = fmt(summary.get("mean_max", None))
         self.state.detailsMedianMin = fmt(summary.get("median_min", None))
         self.state.detailsMedianMax = fmt(summary.get("median_max", None))
+        self.state.detailsSourceRepresentation = _display_representation_summary(
+            summary.get("source_representation", {})
+        )
+        self.state.detailsDerivedRepresentations = [
+            _display_representation_summary(representation)
+            for representation in summary.get("derived_representations", []) or []
+            if isinstance(representation, dict)
+        ]
 
         rows = summary.get("sources", []) or []
         source_rows_all: List[Dict[str, Any]] = []

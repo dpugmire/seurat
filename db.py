@@ -1784,6 +1784,221 @@ class CampaignDb:
             "source_count": len(series),
         }
 
+    @staticmethod
+    def _representation_shape(metadata: Any) -> str:
+        if not isinstance(metadata, dict):
+            return ""
+
+        grid = metadata.get("grid", {})
+        if not isinstance(grid, dict):
+            grid = {}
+        raw_shape = grid.get(
+            "shape",
+            metadata.get("shape", metadata.get("Shape", "")),
+        )
+        if isinstance(raw_shape, (list, tuple)):
+            return " × ".join(str(value) for value in raw_shape)
+
+        shape = str(raw_shape or "").strip().strip("[]()")
+        if not shape:
+            return ""
+        parts = [
+            part.strip()
+            for part in shape.replace("×", ",").replace("x", ",").split(",")
+            if part.strip()
+        ]
+        return " × ".join(parts) if len(parts) > 1 else shape
+
+    @staticmethod
+    def _representation_axes(metadata: Any) -> str:
+        if not isinstance(metadata, dict):
+            return ""
+
+        grid = metadata.get("grid", {})
+        if not isinstance(grid, dict):
+            grid = {}
+        axes = grid.get("axes", metadata.get("axes", []))
+        if isinstance(axes, (list, tuple)):
+            labels = [str(axis).strip() for axis in axes if str(axis).strip()]
+            if labels:
+                return " × ".join(labels)
+
+        column_axis = str(grid.get("column_axis", "") or "").strip()
+        row_axis = str(grid.get("row_axis", "") or "").strip()
+        return " × ".join(axis for axis in (column_axis, row_axis) if axis)
+
+    @staticmethod
+    def _representation_statistics(
+        mins: List[float],
+        maxs: List[float],
+    ) -> Dict[str, Optional[float]]:
+        if not mins or not maxs:
+            return {
+                "global_min": None,
+                "global_max": None,
+                "mean_min": None,
+                "mean_max": None,
+                "median_min": None,
+                "median_max": None,
+            }
+        return {
+            "global_min": min(mins),
+            "global_max": max(maxs),
+            "mean_min": statistics.fmean(mins),
+            "mean_max": statistics.fmean(maxs),
+            "median_min": statistics.median(mins),
+            "median_max": statistics.median(maxs),
+        }
+
+    def _source_representation_summary(
+        self,
+        source_docs: List[Dict[str, Any]],
+        mins: List[float],
+        maxs: List[float],
+        num_sources: int,
+    ) -> Dict[str, Any]:
+        if not source_docs:
+            return {}
+
+        metadata = next(
+            (
+                doc.get("metadata", {})
+                for doc in source_docs
+                if isinstance(doc.get("metadata", {}), dict)
+            ),
+            {},
+        )
+        data_model = next(
+            (
+                str(doc.get("data_model", "") or "").strip()
+                for doc in source_docs
+                if str(doc.get("data_model", "") or "").strip()
+            ),
+            "",
+        )
+        if not data_model and isinstance(metadata, dict):
+            data_model = str(metadata.get("data_model", "") or "").strip()
+
+        num_frames = 0
+        for doc in source_docs:
+            doc_metadata = doc.get("metadata", {})
+            schema_num_timesteps = to_float(
+                doc.get("schema_num_timesteps", None)
+            )
+            schema_frames = (
+                int(schema_num_timesteps)
+                if schema_num_timesteps is not None
+                and math.isfinite(schema_num_timesteps)
+                else 0
+            )
+            num_frames = max(
+                num_frames,
+                self._metadata_steps_count(doc_metadata),
+                schema_frames,
+            )
+
+        result: Dict[str, Any] = {
+            "id": "source",
+            "label": (
+                "Source coefficients"
+                if "coefficient" in data_model.lower()
+                else "Source data"
+            ),
+            "kind": "source",
+            "data_model": data_model,
+            "shape": self._representation_shape(metadata),
+            "axes": self._representation_axes(metadata),
+            "num_frames": num_frames,
+            "num_sources": num_sources,
+        }
+        result.update(self._representation_statistics(mins, maxs))
+        return result
+
+    def _derived_representation_summaries(
+        self,
+        variable_id: str,
+        extra_filter: Optional[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        query = and_filter(
+            self._variable_filter(variable_id, SCALAR_FIELD_VARIABLE_TYPE),
+            extra_filter,
+        )
+        projection = {
+            "_id": 0,
+            "source_dataset": 1,
+            "producer": 1,
+            "casename": 1,
+            "file": 1,
+            "visualization_name": 1,
+            "scalar_field_metadata": 1,
+            "min": 1,
+            "max": 1,
+            "frame_index": 1,
+        }
+        groups: Dict[Tuple[str, str, str, str], Dict[str, Any]] = {}
+
+        for doc in self.collection.find(query, projection):
+            metadata = doc.get("scalar_field_metadata", {})
+            if not isinstance(metadata, dict):
+                metadata = {}
+            visualization_name = str(doc.get("visualization_name", "") or "")
+            data_model = str(metadata.get("data_model", "") or "")
+            shape = self._representation_shape(metadata)
+            axes = self._representation_axes(metadata)
+            key = (visualization_name, data_model, shape, axes)
+            group = groups.setdefault(
+                key,
+                {
+                    "id": visualization_name or data_model or "derived-scalar-field",
+                    "label": "Derived scalar field",
+                    "kind": "derived",
+                    "data_model": data_model,
+                    "source_data_model": str(
+                        metadata.get("source_data_model", "") or ""
+                    ),
+                    "shape": shape,
+                    "axes": axes,
+                    "_mins": [],
+                    "_maxs": [],
+                    "_frames_by_source": {},
+                },
+            )
+
+            fmin, fmax = valid_extrema(
+                to_float(doc.get("min", metadata.get("min", None))),
+                to_float(doc.get("max", metadata.get("max", None))),
+            )
+            if fmin is not None and fmax is not None:
+                group["_mins"].append(fmin)
+                group["_maxs"].append(fmax)
+
+            source_key = (
+                str(doc.get("source_dataset", "") or ""),
+                str(doc.get("producer", "") or ""),
+                str(doc.get("casename", "") or ""),
+                str(doc.get("file", "") or ""),
+            )
+            frames = group["_frames_by_source"].setdefault(source_key, set())
+            frames.add(doc.get("frame_index", len(frames)))
+
+        summaries: List[Dict[str, Any]] = []
+        multiple = len(groups) > 1
+        for key in sorted(groups):
+            group = groups[key]
+            frames_by_source = group.pop("_frames_by_source")
+            mins = group.pop("_mins")
+            maxs = group.pop("_maxs")
+            group["num_sources"] = len(frames_by_source)
+            group["num_frames"] = max(
+                (len(frames) for frames in frames_by_source.values()),
+                default=0,
+            )
+            if multiple and key[0]:
+                group["label"] = f"Derived scalar field ({key[0]})"
+            group.update(self._representation_statistics(mins, maxs))
+            summaries.append(group)
+        return summaries
+
     def variable_min_max_summary(
         self,
         variable_id: str,
@@ -1819,6 +2034,7 @@ class CampaignDb:
             "schema_role": 1,
             "schema_mode": 1,
             "schema_num_timesteps": 1,
+            "data_model": 1,
         }
 
         try:
@@ -1861,6 +2077,16 @@ class CampaignDb:
 
             valid = len(mins)
             sources = self._finalize_sources(source_groups)
+            source_representation = self._source_representation_summary(
+                source_docs,
+                mins,
+                maxs,
+                len(sources),
+            )
+            derived_representations = self._derived_representation_summaries(
+                variable_id,
+                extra_filter,
+            )
 
             # Stage 2 support: if this variable has no ADIOS variable docs, but does
             # have visualization payload docs, return those source rows so the
@@ -1885,6 +2111,7 @@ class CampaignDb:
                     "median_min": statistics.median(image_mins) if image_valid else None,
                     "median_max": statistics.median(image_maxs) if image_valid else None,
                     "sources": image_sources,
+                    "derived_representations": derived_representations,
                 }
 
             return {
@@ -1897,6 +2124,8 @@ class CampaignDb:
                 "median_min": statistics.median(mins) if valid else None,
                 "median_max": statistics.median(maxs) if valid else None,
                 "sources": sources,
+                "source_representation": source_representation,
+                "derived_representations": derived_representations,
             }
 
         except Exception as e:
