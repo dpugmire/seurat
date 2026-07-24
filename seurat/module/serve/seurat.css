@@ -254,9 +254,10 @@ body.seurat-plot-zooming {
   min-height: 0;
   padding: 6px;
   box-sizing: border-box;
-  background: #111;
+  color: var(--seurat-scalar-field-foreground, #fff);
+  background: var(--seurat-scalar-field-background, #000);
 }
-.seurat-scalar-field-plot-frame {
+.seurat-scalar-field-plot-frame.seurat-panzoom-viewport {
   position: relative;
   display: flex;
   align-items: center;
@@ -265,30 +266,106 @@ body.seurat-plot-zooming {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+  box-sizing: border-box;
+  color: var(--seurat-scalar-field-foreground, #fff);
+  background: var(--seurat-scalar-field-background, #000);
 }
 .seurat-scalar-field-plot-frame.seurat-scalar-field-show-axes {
-  padding-left: 16px;
-  padding-bottom: 14px;
+  padding: 8px 8px 40px 62px;
 }
-.seurat-scalar-field-plot-frame.seurat-scalar-field-show-axes::before {
-  content: "";
+.seurat-scalar-field-y-axis {
   position: absolute;
-  left: 10px;
-  top: 4px;
-  bottom: 12px;
-  width: 0;
-  border-left: 1px solid rgba(255, 255, 255, 0.78);
+  z-index: 2;
+  left: 0;
+  top: 8px;
+  bottom: 40px;
+  width: 62px;
+  border-right: 1px solid currentColor;
+  box-sizing: border-box;
   pointer-events: none;
 }
-.seurat-scalar-field-plot-frame.seurat-scalar-field-show-axes::after {
+.seurat-scalar-field-x-axis {
+  position: absolute;
+  z-index: 2;
+  left: 62px;
+  right: 8px;
+  bottom: 0;
+  height: 40px;
+  border-top: 1px solid currentColor;
+  box-sizing: border-box;
+  pointer-events: none;
+}
+.seurat-scalar-field-x-tick,
+.seurat-scalar-field-y-tick {
+  position: absolute;
+  color: currentColor;
+  font-size: 10px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.seurat-scalar-field-x-tick {
+  top: -1px;
+  transform: translateX(-50%);
+  padding-top: 7px;
+  text-align: center;
+}
+.seurat-scalar-field-x-tick::before {
   content: "";
   position: absolute;
-  left: 10px;
-  right: 2px;
-  bottom: 12px;
-  height: 0;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.78);
-  pointer-events: none;
+  top: 0;
+  left: 50%;
+  height: 5px;
+  border-left: 1px solid currentColor;
+}
+.seurat-scalar-field-x-tick.is-start {
+  transform: none;
+  text-align: left;
+}
+.seurat-scalar-field-x-tick.is-start::before {
+  left: 0;
+}
+.seurat-scalar-field-x-tick.is-end {
+  transform: translateX(-100%);
+  text-align: right;
+}
+.seurat-scalar-field-x-tick.is-end::before {
+  left: 100%;
+}
+.seurat-scalar-field-y-tick {
+  right: -1px;
+  transform: translateY(50%);
+  padding-right: 7px;
+  text-align: right;
+}
+.seurat-scalar-field-y-tick::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: 0;
+  width: 5px;
+  border-top: 1px solid currentColor;
+}
+.seurat-scalar-field-x-label,
+.seurat-scalar-field-y-label {
+  position: absolute;
+  color: currentColor;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  text-align: center;
+  white-space: nowrap;
+}
+.seurat-scalar-field-x-label {
+  left: 50%;
+  bottom: 1px;
+  transform: translateX(-50%);
+}
+.seurat-scalar-field-y-label {
+  left: 3px;
+  top: 50%;
+  transform: translate(-50%, -50%) rotate(-90deg);
+  transform-origin: center;
 }
 .seurat-scalar-field-plot-frame img {
   display: block;
@@ -297,7 +374,7 @@ body.seurat-plot-zooming {
   min-width: 0;
   min-height: 0;
   object-fit: contain;
-  background: #111;
+  background: var(--seurat-scalar-field-background, #000);
 }
 .seurat-scalar-field-colorbar {
   display: flex;
@@ -305,16 +382,15 @@ body.seurat-plot-zooming {
   flex: 0 0 54px;
   min-height: 0;
   gap: 4px;
-  color: #fff;
+  color: var(--seurat-scalar-field-foreground, #fff);
   font-size: 10px;
   line-height: 1;
-  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.55);
 }
 .seurat-scalar-field-colorbar-ramp {
   flex: 0 0 14px;
   width: 14px;
   min-height: 32px;
-  border: 1px solid rgba(255, 255, 255, 0.72);
+  border: 1px solid currentColor;
   border-radius: 2px;
   box-sizing: border-box;
   background: var(--seurat-scalar-field-colorbar, linear-gradient(to top, #440154, #fde725));
@@ -878,6 +954,9 @@ body.seurat-panzoom-zooming * {
 }
 .seurat-scalar-field-colormap {
   min-width: 180px;
+}
+.seurat-scalar-field-background {
+  min-width: 120px;
 }
 .seurat-plot-settings-axis-list {
   display: flex;

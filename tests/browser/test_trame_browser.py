@@ -127,6 +127,106 @@ def test_app_mounts_and_renders_structural_ui(page, seurat_server):
     assert console_errors == [], response_errors
 
 
+def test_scalar_field_axes_and_backgrounds_use_automatic_contrast(
+    page,
+    seurat_server,
+):
+    console_errors, page_errors, response_errors = _open_app(
+        page,
+        seurat_server,
+        mode="scalar",
+    )
+
+    black_view = page.locator(
+        '.seurat-dropcell[data-cell-index="0"] .seurat-scalar-field-view'
+    )
+    white_view = page.locator(
+        '.seurat-dropcell[data-cell-index="1"] .seurat-scalar-field-view'
+    )
+
+    for view in (black_view, white_view):
+        assert view.locator('[data-scalar-axis="x"]').is_visible()
+        assert view.locator('[data-scalar-axis="y"]').is_visible()
+        assert view.locator(".seurat-scalar-field-x-tick").count() == 3
+        assert view.locator(".seurat-scalar-field-y-tick").count() == 3
+        assert view.locator(".seurat-scalar-field-x-label").text_content() == "R"
+        assert view.locator(".seurat-scalar-field-y-label").text_content() == "Z"
+
+    assert black_view.evaluate(
+        "view => getComputedStyle(view).backgroundColor"
+    ) == "rgb(0, 0, 0)"
+    assert black_view.locator(".seurat-scalar-field-x-tick").first.evaluate(
+        "tick => getComputedStyle(tick).color"
+    ) == "rgb(255, 255, 255)"
+    assert black_view.locator(".seurat-scalar-field-x-axis").evaluate(
+        "axis => getComputedStyle(axis).borderTopColor"
+    ) == "rgb(255, 255, 255)"
+
+    assert white_view.evaluate(
+        "view => getComputedStyle(view).backgroundColor"
+    ) == "rgb(255, 255, 255)"
+    assert white_view.locator(".seurat-scalar-field-x-tick").first.evaluate(
+        "tick => getComputedStyle(tick).color"
+    ) == "rgb(17, 17, 17)"
+    assert white_view.locator(".seurat-scalar-field-x-axis").evaluate(
+        "axis => getComputedStyle(axis).borderTopColor"
+    ) == "rgb(17, 17, 17)"
+
+    black_viewport = black_view.locator(".seurat-panzoom-viewport")
+    page.wait_for_function(
+        """() => Boolean(
+            document.querySelector(
+                '.seurat-dropcell[data-cell-index="0"] .seurat-panzoom-viewport'
+            ).__seuratScalarFieldDataRect
+        )"""
+    )
+    data_rect = black_viewport.evaluate(
+        "viewport => ({ ...viewport.__seuratScalarFieldDataRect })"
+    )
+    x_axis_box = black_view.locator(
+        ".seurat-scalar-field-x-axis"
+    ).bounding_box()
+    y_axis_box = black_view.locator(
+        ".seurat-scalar-field-y-axis"
+    ).bounding_box()
+    assert x_axis_box["width"] == pytest.approx(data_rect["width"], abs=1)
+    assert y_axis_box["height"] == pytest.approx(data_rect["height"], abs=1)
+
+    def axis_values(axis):
+        return black_view.locator(
+            f'.seurat-scalar-field-{axis}-axis'
+        ).evaluate(
+            """axis => Array.from(axis.querySelectorAll('[data-axis-value]'))
+                .map(tick => Number(tick.getAttribute('data-axis-value')))"""
+        )
+
+    initial_x = axis_values("x")
+    initial_y = axis_values("y")
+    viewport_box = black_viewport.bounding_box()
+    page.mouse.move(
+        viewport_box["x"] + data_rect["left"] + data_rect["width"] / 2,
+        viewport_box["y"] + data_rect["top"] + data_rect["height"] / 2,
+    )
+    page.mouse.wheel(0, -120)
+    zoomed_x = axis_values("x")
+    zoomed_y = axis_values("y")
+    assert zoomed_x[-1] - zoomed_x[0] < initial_x[-1] - initial_x[0]
+    assert zoomed_y[-1] - zoomed_y[0] < initial_y[-1] - initial_y[0]
+
+    page.keyboard.down("Shift")
+    _drag(page, black_viewport, delta_x=30)
+    page.keyboard.up("Shift")
+    panned_x = axis_values("x")
+    assert panned_x[0] != pytest.approx(zoomed_x[0])
+
+    black_viewport.dblclick()
+    assert axis_values("x") == pytest.approx(initial_x)
+    assert axis_values("y") == pytest.approx(initial_y)
+
+    assert page_errors == []
+    assert console_errors == [], response_errors
+
+
 def test_workspace_commands_are_in_hamburger_drawer(page, seurat_server):
     console_errors, page_errors, response_errors = _open_app(
         page,

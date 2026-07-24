@@ -676,6 +676,14 @@ class ScalarFieldSettingsPanel(TrameComponent):
                             ):
                                 for label, value in SCALAR_FIELD_COLORMAP_OPTIONS:
                                     html.Option(label, value=value)
+                        with html.Div(classes="seurat-plot-settings-row"):
+                            html.Span("Background", class_="text-caption")
+                            with html.Select(
+                                v_model=("scalarFieldSettingsBackground",),
+                                classes="seurat-scalar-plot-policy seurat-scalar-field-background",
+                            ):
+                                html.Option("Black", value="black")
+                                html.Option("White", value="white")
 
                     html.Div("Range", classes="seurat-plot-settings-section-title mt-3")
                     with html.Div(classes="seurat-plot-settings-section"):

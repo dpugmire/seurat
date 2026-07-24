@@ -149,6 +149,116 @@ def to_float(value: Any) -> Optional[float]:
             return None
 
 
+def _scalar_field_axis_value(value: float) -> str:
+    return f"{float(value):.5g}"
+
+
+def _scalar_field_axis_ticks(
+    start_value: float,
+    end_value: float,
+) -> List[Dict[str, Any]]:
+    values = (
+        float(start_value),
+        (float(start_value) + float(end_value)) * 0.5,
+        float(end_value),
+    )
+    return [
+        {
+            "position": position,
+            "value": value,
+            "label": _scalar_field_axis_value(value),
+        }
+        for position, value in zip((0, 50, 100), values)
+    ]
+
+
+def _scalar_field_axis_bounds(
+    bounds: Any,
+) -> Optional[Tuple[float, float]]:
+    if not isinstance(bounds, (list, tuple)) or len(bounds) < 2:
+        return None
+    start = to_float(bounds[0])
+    end = to_float(bounds[1])
+    if (
+        start is None
+        or end is None
+        or not math.isfinite(start)
+        or not math.isfinite(end)
+    ):
+        return None
+    return float(start), float(end)
+
+
+def scalar_field_axis_spec(metadata: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Return display-ready scalar-field axes from grid metadata or array indices."""
+
+    raw = dict(metadata or {})
+    grid_value = raw.get("grid", {})
+    grid = dict(grid_value) if isinstance(grid_value, dict) else {}
+
+    shape = grid.get("shape", raw.get("shape", []))
+    if not isinstance(shape, (list, tuple)) or len(shape) < 2:
+        return {}
+    try:
+        height = int(shape[0])
+        width = int(shape[1])
+    except (TypeError, ValueError):
+        return {}
+    if height <= 0 or width <= 0:
+        return {}
+
+    axes = grid.get("axes", [])
+    if not isinstance(axes, (list, tuple)):
+        axes = []
+    column_axis = str(
+        grid.get("column_axis", "")
+        or (axes[0] if len(axes) > 0 else "")
+        or "column"
+    )
+    row_axis = str(
+        grid.get("row_axis", "")
+        or (axes[1] if len(axes) > 1 else "")
+        or "row"
+    )
+
+    bounds_value = grid.get("bounds", {})
+    bounds = dict(bounds_value) if isinstance(bounds_value, dict) else {}
+    x_bounds = _scalar_field_axis_bounds(bounds.get(column_axis))
+    y_bounds = _scalar_field_axis_bounds(bounds.get(row_axis))
+
+    if x_bounds is None:
+        x_bounds = (0.0, float(max(0, width - 1)))
+    if y_bounds is None:
+        y_bounds = (0.0, float(max(0, height - 1)))
+
+    x_start, x_end = x_bounds
+    if str(grid.get("column_order", "ascending") or "ascending").lower() == "descending":
+        x_start, x_end = x_end, x_start
+
+    row_order = str(grid.get("row_order", "") or "").lower()
+    if not row_order:
+        row_order = "descending" if bounds.get(row_axis) is not None else "ascending"
+    y_low, y_high = y_bounds
+    y_start, y_end = (
+        (y_high, y_low) if row_order == "ascending" else (y_low, y_high)
+    )
+
+    return {
+        "x": {
+            "label": column_axis,
+            "start": x_start,
+            "end": x_end,
+            "ticks": _scalar_field_axis_ticks(x_start, x_end),
+        },
+        "y": {
+            "label": row_axis,
+            "start": y_start,
+            "end": y_end,
+            "ticks": _scalar_field_axis_ticks(y_start, y_end),
+        },
+    }
+
+
 def valid_extrema(fmin: Optional[float], fmax: Optional[float]) -> Tuple[Optional[float], Optional[float]]:
     if fmin is None or fmax is None:
         return None, None
@@ -304,6 +414,16 @@ def _scalar_field_colormap(render_options: Optional[Dict[str, Any]], metadata: D
     return value if value in SCALAR_FIELD_COLORMAPS else "viridis"
 
 
+def _scalar_field_background_rgb(
+    render_options: Optional[Dict[str, Any]],
+) -> np.ndarray:
+    options = render_options if isinstance(render_options, dict) else {}
+    background = str(options.get("background", "black") or "black").lower()
+    if background == "white":
+        return np.array([255, 255, 255], dtype=np.uint8)
+    return np.array([0, 0, 0], dtype=np.uint8)
+
+
 def _scalar_field_render_range(
     values: np.ndarray,
     finite: np.ndarray,
@@ -371,7 +491,7 @@ def scalar_field_to_png_bytes(
         normalized = (values - float(fmin)) / (float(fmax) - float(fmin))
     normalized = np.where(finite, normalized, 0.0)
     rgb = _apply_colormap(normalized, _scalar_field_colormap(render_options, metadata))
-    rgb[~finite] = np.array([0, 0, 0], dtype=np.uint8)
+    rgb[~finite] = _scalar_field_background_rgb(render_options)
 
     pil = Image.fromarray(rgb, mode="RGB")
     buf = io.BytesIO()
@@ -1971,6 +2091,7 @@ class CampaignDb:
             "variable_type": 1,
             "payload_type": 1,
             "visualization_item_type": 1,
+            "scalar_field_metadata": 1,
             "min": 1,
             "max": 1,
         }
@@ -2054,6 +2175,9 @@ class CampaignDb:
                         "variable_type": str(doc.get("variable_type", "") or ""),
                         "payload_type": str(doc.get("payload_type", "") or ""),
                         "visualization_item_type": str(doc.get("visualization_item_type", "") or ""),
+                        "scalar_field_axes": scalar_field_axis_spec(
+                            doc.get("scalar_field_metadata", {})
+                        ),
                         "src": src,
                         "media_type": media_type,
                         "status": status,
