@@ -753,10 +753,13 @@ class CampaignDb:
                 "variable_path": 1,
                 "source_dataset": 1,
                 "variable_type": 1,
+                "variable_group": 1,
+                "variable_group_order": 1,
+                "role": 1,
                 "metadata": 1,
             }
 
-            by_id: Dict[str, Dict[str, str]] = {}
+            by_id: Dict[str, Dict[str, Any]] = {}
             for query in queries:
                 for doc in self.collection.find(query, proj):
                     if self._is_static_scalar_variable_doc(doc):
@@ -774,13 +777,21 @@ class CampaignDb:
                         name = physical.rsplit("/", 1)[-1] if physical else variable_id.rsplit("/", 1)[-1]
 
                     display_path = self._variable_display_path({**doc, "variable_id": variable_id})
-                    by_id[variable_id] = {
+                    item: Dict[str, Any] = {
                         "id": variable_id,
                         "name": name,
                         "label": name,
                         "path": display_path,
                         "source_dataset": str(doc.get("source_dataset", "") or ""),
                     }
+                    variable_group = str(doc.get("variable_group", "") or "")
+                    if variable_group:
+                        item["variable_group"] = variable_group
+                        item["variable_group_order"] = int(
+                            doc.get("variable_group_order", 0) or 0
+                        )
+                        item["role"] = str(doc.get("role", "") or "")
+                    by_id[variable_id] = item
 
             counts: Dict[str, int] = {}
             for item in by_id.values():
@@ -822,19 +833,53 @@ class CampaignDb:
             extra_filter=extra_filter,
             only_visualized=only_visualized,
         )
-        groups: Dict[str, List[Dict[str, str]]] = {"Scalars": [], "2D": []}
+        schema_groups: Dict[str, Dict[str, Any]] = {}
+        fallback_groups: Dict[str, List[Dict[str, Any]]] = {
+            "Scalars": [],
+            "2D": [],
+        }
 
         for variable in variables:
-            group = self._classify_variable_group(variable["id"], extra_filter=extra_filter)
-            if group not in groups:
-                group = "2D"
-            groups[group].append(variable)
+            schema_group = str(variable.get("variable_group", "") or "")
+            if schema_group:
+                group = schema_groups.setdefault(
+                    schema_group,
+                    {
+                        "name": schema_group,
+                        "order": int(variable.get("variable_group_order", 0) or 0),
+                        "variables": [],
+                    },
+                )
+                group["variables"].append(variable)
+                continue
 
-        ordered = []
-        if groups["Scalars"]:
-            ordered.append({"name": "0D", "variables": groups["Scalars"]})
-        if groups["2D"]:
-            ordered.append({"name": "2D", "variables": groups["2D"]})
+            fallback_group = self._classify_variable_group(
+                variable["id"],
+                extra_filter=extra_filter,
+            )
+            if fallback_group not in fallback_groups:
+                fallback_group = "2D"
+            fallback_groups[fallback_group].append(variable)
+
+        ordered = [
+            {
+                "name": str(group["name"]),
+                "variables": list(group["variables"]),
+            }
+            for group in sorted(
+                schema_groups.values(),
+                key=lambda item: (
+                    int(item.get("order", 0) or 0),
+                    str(item.get("name", "") or ""),
+                ),
+            )
+        ]
+        if fallback_groups["Scalars"]:
+            ordered.append(
+                {"name": "0D", "variables": fallback_groups["Scalars"]}
+            )
+        if fallback_groups["2D"]:
+            ordered.append({"name": "2D", "variables": fallback_groups["2D"]})
         return ordered
 
     def grouped_variables_by_source_dataset(
@@ -1380,6 +1425,14 @@ class CampaignDb:
             if ndims == 0:
                 y = y_raw.reshape(-1)
                 x, x_label = CampaignDb._plot_timeline_values(y.size, explicit_time_values)
+                return x, y, x_label
+
+            if ndims == 1:
+                y = y_raw.reshape(-1)
+                x, x_label = CampaignDb._plot_timeline_values(
+                    y.size,
+                    explicit_time_values,
+                )
                 return x, y, x_label
 
             if y_raw.ndim >= 2:
