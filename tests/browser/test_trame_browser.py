@@ -227,6 +227,117 @@ def test_scalar_field_axes_and_backgrounds_use_automatic_contrast(
     assert console_errors == [], response_errors
 
 
+def test_scalar_field_contour_controls_follow_render_mode(
+    page,
+    seurat_server,
+):
+    console_errors, page_errors, response_errors = _open_app(
+        page,
+        seurat_server,
+        mode="scalar-settings",
+    )
+
+    panel = page.locator("#seurat-scalar-field-settings-panel")
+    panel.wait_for(state="visible")
+    section_titles = panel.locator(".seurat-scalar-field-section-title")
+    heatmap = section_titles.nth(0).locator('input[type="checkbox"]')
+    contour = section_titles.nth(1).locator('input[type="checkbox"]')
+    sections = panel.locator(".seurat-scalar-field-layer-section")
+    display_section = panel.locator(".seurat-plot-settings-section").nth(0)
+    heatmap_section = sections.nth(0)
+    contour_section = panel.locator(".seurat-scalar-field-contour-section")
+    background = display_section.locator(
+        ".seurat-scalar-field-background-toggle"
+    )
+    axes = display_section.locator('input[type="checkbox"]')
+    colormap_row = heatmap_section.locator(
+        ".seurat-scalar-field-compact-row"
+    ).nth(0)
+    range_row = heatmap_section.locator(
+        ".seurat-scalar-field-compact-row"
+    ).nth(1)
+    colormap = colormap_row.locator(".seurat-scalar-field-colormap")
+    colorbar = colormap_row.locator('input[type="checkbox"]')
+
+    assert heatmap.is_checked()
+    assert not contour.is_checked()
+    assert (
+        panel.locator(".seurat-plot-settings-section-title")
+        .first.text_content()
+        .strip()
+        == "Display"
+    )
+    assert axes.count() == 1
+    assert background.evaluate(
+        "element => getComputedStyle(element).backgroundColor"
+    ) == "rgb(0, 0, 0)"
+    assert not colormap.is_disabled()
+    assert not colorbar.is_disabled()
+    assert range_row.get_by_text("Range", exact=True).is_visible()
+    assert range_row.get_by_text("Auto", exact=True).is_visible()
+    assert range_row.get_by_label("Min").is_disabled()
+    assert range_row.get_by_label("Max").is_disabled()
+    assert contour_section.locator(
+        ".seurat-scalar-field-contour-color"
+    ).is_disabled()
+
+    background.click()
+    page.wait_for_function(
+        """() => getComputedStyle(
+            document.querySelector('.seurat-scalar-field-background-toggle')
+        ).backgroundColor === 'rgb(255, 255, 255)'"""
+    )
+    background.click()
+    page.wait_for_function(
+        """() => getComputedStyle(
+            document.querySelector('.seurat-scalar-field-background-toggle')
+        ).backgroundColor === 'rgb(0, 0, 0)'"""
+    )
+
+    contour.check()
+    assert contour_section.is_visible()
+    assert not colormap.is_disabled()
+    assert not colorbar.is_disabled()
+    contour_color = contour_section.locator(
+        ".seurat-scalar-field-contour-color"
+    )
+    assert not contour_color.is_disabled()
+
+    heatmap.uncheck()
+    assert colormap.is_disabled()
+    assert colorbar.is_disabled()
+
+    range_radio = contour_section.get_by_label("Range", exact=True)
+    values_radio = contour_section.get_by_label("Values", exact=True)
+    assert range_radio.is_checked()
+    assert contour_section.get_by_label("Min").input_value() == "-1"
+    assert contour_section.get_by_label("Max").input_value() == "1"
+    assert contour_section.get_by_label("Number").input_value() == "5"
+
+    values_radio.check()
+    values = panel.locator(".seurat-scalar-field-contour-values input")
+    values.wait_for(state="visible")
+    assert values.input_value() == "-1, 0, 1"
+
+    contour_color.click()
+    color_popup = page.locator(".seurat-plot-settings-color-popup").last
+    color_popup.wait_for(state="visible")
+    color_popup.locator('button[title="#ff0000"]').click()
+    page.wait_for_function(
+        """() => getComputedStyle(
+            document.querySelector('.seurat-scalar-field-contour-color')
+        ).backgroundColor === 'rgb(255, 0, 0)'"""
+    )
+
+    heatmap.check()
+    assert not colormap.is_disabled()
+    assert not colorbar.is_disabled()
+    assert contour_section.is_visible()
+
+    assert page_errors == []
+    assert console_errors == [], response_errors
+
+
 def test_workspace_commands_are_in_hamburger_drawer(page, seurat_server):
     console_errors, page_errors, response_errors = _open_app(
         page,

@@ -5,8 +5,12 @@ from typing import Any, Dict, List, Optional
 from config import MAX_MOVIE_FRAMES, MOVIE_FPS
 from db import (
     GENERATED_SCALAR_PLOT_VIS,
+    SCALAR_FIELD_CONTOUR_LEVEL_MODES,
     SCALAR_FIELD_COLORMAP_CSS_GRADIENTS,
     SCALAR_FIELD_COLORMAPS,
+    SCALAR_FIELD_DEFAULT_CONTOUR_COUNT,
+    SCALAR_FIELD_MAX_CONTOUR_LEVELS,
+    SCALAR_FIELD_RENDER_MODES,
     SCALAR_FIELD_VARIABLE_TYPE,
 )
 from plugin_runtime import (
@@ -50,6 +54,8 @@ class VisualizationControllerMixin:
         ("cancel_scalar_field_settings", "cancel_scalar_field_settings"),
         ("reset_scalar_field_settings", "reset_scalar_field_settings"),
         ("apply_scalar_field_settings", "apply_scalar_field_settings"),
+        ("toggle_scalar_field_background", "toggle_scalar_field_background"),
+        ("update_scalar_field_contour_color", "update_scalar_field_contour_color"),
         ("reset_plot_settings", "reset_plot_settings"),
         ("update_plot_background_color", "update_plot_background_color"),
         ("update_plot_grid_color", "update_plot_grid_color"),
@@ -323,11 +329,48 @@ class VisualizationControllerMixin:
     def scalar_field_background(value: Any) -> str:
         return "white" if str(value or "").strip().lower() == "white" else "black"
 
+    @staticmethod
+    def scalar_field_render_mode(value: Any) -> str:
+        mode = str(value or "colormap").strip().lower()
+        return mode if mode in SCALAR_FIELD_RENDER_MODES else "colormap"
+
+    @staticmethod
+    def scalar_field_contour_level_mode(value: Any) -> str:
+        mode = str(value or "range").strip().lower()
+        return mode if mode in SCALAR_FIELD_CONTOUR_LEVEL_MODES else "range"
+
+    def parse_scalar_field_contour_values(self, value: Any) -> List[float]:
+        if isinstance(value, (list, tuple)):
+            tokens = list(value)
+        else:
+            text = str(value or "").replace(",", " ").replace(";", " ")
+            tokens = text.split()
+
+        values: List[float] = []
+        for token in tokens:
+            parsed = self.finite_float(token)
+            if parsed is None:
+                raise ValueError(f'Invalid contour value: "{token}"')
+            values.append(float(parsed))
+
+        values = sorted(set(values))
+        if not values:
+            raise ValueError("Enter at least one contour value.")
+        if len(values) > SCALAR_FIELD_MAX_CONTOUR_LEVELS:
+            raise ValueError(
+                "Contour values are limited to "
+                f"{SCALAR_FIELD_MAX_CONTOUR_LEVELS} levels."
+            )
+        return values
+
     def normalize_scalar_field_settings(
         self, raw_settings: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         raw = dict(raw_settings or {})
         background = self.scalar_field_background(raw.get("background", "black"))
+        render_mode = self.scalar_field_render_mode(
+            raw.get("render_mode", "colormap")
+        )
         range_mode = str(raw.get("range_mode", "") or "").strip().lower()
         range_auto = raw.get("range_auto", None)
         if range_auto is None:
@@ -345,7 +388,45 @@ class VisualizationControllerMixin:
             max_value = None
             range_auto = True
 
+        raw_contours = raw.get("contours", {})
+        contours = raw_contours if isinstance(raw_contours, dict) else {}
+        contour_level_mode = self.scalar_field_contour_level_mode(
+            contours.get("level_mode", "range")
+        )
+        contour_values: List[float] = []
+        raw_contour_values = contours.get("values", [])
+        if isinstance(raw_contour_values, (list, tuple)):
+            for value in raw_contour_values:
+                parsed = self.finite_float(value)
+                if parsed is not None:
+                    contour_values.append(float(parsed))
+        contour_values = sorted(set(contour_values))[
+            :SCALAR_FIELD_MAX_CONTOUR_LEVELS
+        ]
+        contour_min = self.finite_float(contours.get("min", None))
+        contour_max = self.finite_float(contours.get("max", None))
+        if (
+            contour_min is None
+            or contour_max is None
+            or contour_min >= contour_max
+        ):
+            contour_min = None
+            contour_max = None
+        try:
+            contour_count = int(
+                contours.get("count", SCALAR_FIELD_DEFAULT_CONTOUR_COUNT)
+            )
+        except (TypeError, ValueError):
+            contour_count = SCALAR_FIELD_DEFAULT_CONTOUR_COUNT
+        if not 2 <= contour_count <= SCALAR_FIELD_MAX_CONTOUR_LEVELS:
+            contour_count = SCALAR_FIELD_DEFAULT_CONTOUR_COUNT
+        contour_color = self.clean_plot_color(
+            contours.get("color", "#ffffff"),
+            "#ffffff",
+        )
+
         return {
+            "render_mode": render_mode,
             "colormap": self.scalar_colormap(raw.get("colormap", "viridis")),
             "colorbar_gradient": self.scalar_colormap_gradient(
                 raw.get("colormap", "viridis")
@@ -359,6 +440,14 @@ class VisualizationControllerMixin:
             "max": max_value,
             "show_colorbar": self.to_bool(raw.get("show_colorbar", False), False),
             "show_axes": self.to_bool(raw.get("show_axes", False), False),
+            "contours": {
+                "level_mode": contour_level_mode,
+                "values": contour_values,
+                "min": contour_min,
+                "max": contour_max,
+                "count": contour_count,
+                "color": contour_color,
+            },
         }
 
     def is_scalar_field_cell(self, cell: Dict[str, Any]) -> bool:
@@ -408,6 +497,17 @@ class VisualizationControllerMixin:
         self.state.scalarFieldSettingsColormap = str(
             settings.get("colormap", "viridis") or "viridis"
         )
+        render_mode = self.scalar_field_render_mode(
+            settings.get("render_mode", "colormap")
+        )
+        self.state.scalarFieldSettingsShowHeatmap = render_mode in {
+            "colormap",
+            "both",
+        }
+        self.state.scalarFieldSettingsShowContours = render_mode in {
+            "contours",
+            "both",
+        }
         self.state.scalarFieldSettingsBackground = str(
             settings.get("background", "black") or "black"
         )
@@ -422,6 +522,36 @@ class VisualizationControllerMixin:
             settings.get("show_colorbar", False)
         )
         self.state.scalarFieldSettingsShowAxes = bool(settings.get("show_axes", False))
+        contours = dict(settings.get("contours", {}) or {})
+        self.state.scalarFieldSettingsContourLevelMode = str(
+            contours.get("level_mode", "range") or "range"
+        )
+        self.state.scalarFieldSettingsContourValues = ", ".join(
+            self.settings_value_text(value)
+            for value in contours.get("values", [])
+        )
+        contour_min = contours.get("min", None)
+        contour_max = contours.get("max", None)
+        if contour_min is None:
+            contour_min = self.finite_float(
+                cell.get("scalar_field_colorbar_min", None)
+            )
+        if contour_max is None:
+            contour_max = self.finite_float(
+                cell.get("scalar_field_colorbar_max", None)
+            )
+        self.state.scalarFieldSettingsContourMin = self.settings_value_text(
+            contour_min
+        )
+        self.state.scalarFieldSettingsContourMax = self.settings_value_text(
+            contour_max
+        )
+        self.state.scalarFieldSettingsContourCount = int(
+            contours.get("count", SCALAR_FIELD_DEFAULT_CONTOUR_COUNT)
+        )
+        self.state.scalarFieldSettingsContourColor = str(
+            contours.get("color", "#ffffff") or "#ffffff"
+        )
         self.state.showScalarFieldSettingsModal = True
 
     def load_plot_settings_dialog(self, idx: int, reset: bool = False) -> None:
@@ -1241,6 +1371,23 @@ class VisualizationControllerMixin:
         if self.is_valid_grid_index(idx):
             self.load_scalar_field_settings_dialog(idx, reset=True)
 
+    def toggle_scalar_field_background(self, **_):
+        background = self.scalar_field_background(
+            self.state.scalarFieldSettingsBackground
+        )
+        self.state.scalarFieldSettingsBackground = (
+            "black" if background == "white" else "white"
+        )
+
+    def update_scalar_field_contour_color(self, color: Any, **_):
+        self.state.scalarFieldSettingsContourColor = self.clean_plot_color(
+            color,
+            str(
+                self.state.scalarFieldSettingsContourColor
+                or "#ffffff"
+            ),
+        )
+
     def apply_scalar_field_settings(self, **_):
         try:
             idx = int(self.state.scalarFieldSettingsCellIndex)
@@ -1261,6 +1408,19 @@ class VisualizationControllerMixin:
             return
 
         colormap = self.scalar_colormap(self.state.scalarFieldSettingsColormap)
+        show_heatmap = bool(self.state.scalarFieldSettingsShowHeatmap)
+        show_contours = bool(self.state.scalarFieldSettingsShowContours)
+        if not show_heatmap and not show_contours:
+            self.state.scalarFieldSettingsStatus = (
+                "Select Heatmap, Contour, or both."
+            )
+            self.state.scalarFieldSettingsStatusIsError = True
+            return
+        render_mode = (
+            "both"
+            if show_heatmap and show_contours
+            else ("colormap" if show_heatmap else "contours")
+        )
         background = self.scalar_field_background(
             self.state.scalarFieldSettingsBackground
         )
@@ -1269,7 +1429,7 @@ class VisualizationControllerMixin:
         show_axes = bool(self.state.scalarFieldSettingsShowAxes)
         min_value = self.finite_float(self.state.scalarFieldSettingsMin)
         max_value = self.finite_float(self.state.scalarFieldSettingsMax)
-        if not range_auto:
+        if show_heatmap and not range_auto:
             if min_value is None or max_value is None:
                 self.state.scalarFieldSettingsStatus = (
                     "Manual range requires min and max values."
@@ -1283,8 +1443,78 @@ class VisualizationControllerMixin:
                 self.state.scalarFieldSettingsStatusIsError = True
                 return
 
+        contour_level_mode = self.scalar_field_contour_level_mode(
+            self.state.scalarFieldSettingsContourLevelMode
+        )
+        existing_contours = dict(
+            self.normalize_scalar_field_settings(
+                cell.get("scalar_field_settings", {})
+            ).get("contours", {})
+        )
+        contour_values_text = str(
+            self.state.scalarFieldSettingsContourValues or ""
+        ).strip()
+        try:
+            contour_values = (
+                self.parse_scalar_field_contour_values(contour_values_text)
+                if contour_values_text
+                else list(existing_contours.get("values", []) or [])
+            )
+        except ValueError as e:
+            if render_mode != "colormap" and contour_level_mode == "values":
+                self.state.scalarFieldSettingsStatus = str(e)
+                self.state.scalarFieldSettingsStatusIsError = True
+                return
+            contour_values = list(existing_contours.get("values", []) or [])
+
+        contour_min = self.finite_float(self.state.scalarFieldSettingsContourMin)
+        contour_max = self.finite_float(self.state.scalarFieldSettingsContourMax)
+        contour_color = self.clean_plot_color(
+            self.state.scalarFieldSettingsContourColor,
+            "#ffffff",
+        )
+        try:
+            contour_count = int(self.state.scalarFieldSettingsContourCount)
+        except (TypeError, ValueError):
+            contour_count = 0
+
+        contours_active = render_mode != "colormap"
+        if contours_active and contour_level_mode == "values" and not contour_values:
+            self.state.scalarFieldSettingsStatus = (
+                "Enter at least one contour value."
+            )
+            self.state.scalarFieldSettingsStatusIsError = True
+            return
+        if contours_active and contour_level_mode == "range":
+            if contour_min is None or contour_max is None:
+                self.state.scalarFieldSettingsStatus = (
+                    "Contour range requires min and max values."
+                )
+                self.state.scalarFieldSettingsStatusIsError = True
+                return
+            if contour_min >= contour_max:
+                self.state.scalarFieldSettingsStatus = (
+                    "Contour range must have min < max."
+                )
+                self.state.scalarFieldSettingsStatusIsError = True
+                return
+            if not 2 <= contour_count <= SCALAR_FIELD_MAX_CONTOUR_LEVELS:
+                self.state.scalarFieldSettingsStatus = (
+                    "Contour count must be between 2 and "
+                    f"{SCALAR_FIELD_MAX_CONTOUR_LEVELS}."
+                )
+                self.state.scalarFieldSettingsStatusIsError = True
+                return
+        elif not 2 <= contour_count <= SCALAR_FIELD_MAX_CONTOUR_LEVELS:
+            contour_count = int(
+                existing_contours.get(
+                    "count", SCALAR_FIELD_DEFAULT_CONTOUR_COUNT
+                )
+            )
+
         settings = self.normalize_scalar_field_settings(
             {
+                "render_mode": render_mode,
                 "colormap": colormap,
                 "background": background,
                 "range_auto": range_auto,
@@ -1292,6 +1522,14 @@ class VisualizationControllerMixin:
                 "max": None if range_auto else max_value,
                 "show_colorbar": show_colorbar,
                 "show_axes": show_axes,
+                "contours": {
+                    "level_mode": contour_level_mode,
+                    "values": contour_values,
+                    "min": contour_min,
+                    "max": contour_max,
+                    "count": contour_count,
+                    "color": contour_color,
+                },
             }
         )
         cell["scalar_field_settings"] = settings

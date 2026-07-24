@@ -1,6 +1,7 @@
 trame
 trame-vuetify
 adios2
+contourpy
 numpy
 Pillow
 
