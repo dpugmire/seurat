@@ -99,6 +99,59 @@ def _image_sequence_cell(mode):
     return cell
 
 
+def _scalar_field_cell(background):
+    is_white = background == "white"
+    background_color = "#ffffff" if is_white else "#000000"
+    foreground_color = "#111111" if is_white else "#ffffff"
+    cell = empty_grid_cell()
+    cell.update(
+        {
+            "variable_id": f"field_{background}",
+            "variable_name": f"field_{background}",
+            "display_title": f"field_{background}",
+            "variable_type": "scalarField",
+            "payload_type": "SCALAR_FIELD",
+            "visualization_item_type": "SCALAR_FIELD",
+            "media_type": "image",
+            "status": "ok",
+            "src": _image_source(background_color),
+            "scalar_field_settings": {
+                "background": background,
+                "background_color": background_color,
+                "foreground_color": foreground_color,
+                "show_axes": True,
+                "show_colorbar": True,
+                "colorbar_gradient": "linear-gradient(to top, #440154, #fde725)",
+            },
+            "scalar_field_axes": {
+                "x": {
+                    "label": "R",
+                    "start": 0.2,
+                    "end": 4.6,
+                    "ticks": [
+                        {"position": 0, "value": 0.2, "label": "0.2"},
+                        {"position": 50, "value": 2.4, "label": "2.4"},
+                        {"position": 100, "value": 4.6, "label": "4.6"},
+                    ],
+                },
+                "y": {
+                    "label": "Z",
+                    "start": -2.5,
+                    "end": 2.5,
+                    "ticks": [
+                        {"position": 0, "value": -2.5, "label": "-2.5"},
+                        {"position": 50, "value": 0.0, "label": "0"},
+                        {"position": 100, "value": 2.5, "label": "2.5"},
+                    ],
+                },
+            },
+            "scalar_field_colorbar_min": "-1",
+            "scalar_field_colorbar_max": "1",
+        }
+    )
+    return cell
+
+
 def build_fixture_server(mode):
     server = get_server(f"seurat-browser-{mode}", client_type="vue3")
     server.enable_module(seurat_module)
@@ -151,7 +204,18 @@ def build_fixture_server(mode):
         "minmax(180px, 1fr)" for _ in range(state.gridCols)
     )
     state.gridFitRowTemplate = "minmax(212px, 1fr)"
-    state.gridCells = [_plot_cell(mode), _image_sequence_cell(mode), empty_grid_cell()]
+    if mode == "scalar":
+        state.gridCells = [
+            _scalar_field_cell("black"),
+            _scalar_field_cell("white"),
+            empty_grid_cell(),
+        ]
+    else:
+        state.gridCells = [
+            _plot_cell(mode),
+            _image_sequence_cell(mode),
+            empty_grid_cell(),
+        ]
 
     def toggle_variable_group(group_name):
         collapsed = dict(state.variableGroupCollapsed or {})
@@ -354,7 +418,11 @@ def build_fixture_server(mode):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, required=True)
-    parser.add_argument("--mode", choices=("step", "physical"), default="step")
+    parser.add_argument(
+        "--mode",
+        choices=("step", "physical", "scalar"),
+        default="step",
+    )
     args = parser.parse_args()
 
     server = build_fixture_server(args.mode)

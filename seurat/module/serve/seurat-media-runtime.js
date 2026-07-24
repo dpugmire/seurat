@@ -12,6 +12,10 @@
   let resetViewObserver = null;
   let resetViewRequestElement = null;
   let lastResetViewRequest = "";
+  let panZoomResizeObserver = null;
+  let panZoomDomObserver = null;
+  let observedPanZoomViewports = null;
+  let panZoomScanFrame = 0;
 
   function runtimeBody() {
     const ownerDocument = runtimeRoot && runtimeRoot.ownerDocument;
@@ -43,6 +47,183 @@
     return Math.max(PAN_ZOOM_MIN_SCALE, Math.min(PAN_ZOOM_MAX_SCALE, value));
   }
 
+  function scalarAxisNumber(value) {
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
+  }
+
+  function formatScalarAxisValue(value) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return "";
+    if (Math.abs(number) < 1e-12) return "0";
+    const magnitude = Math.abs(number);
+    if (magnitude >= 1e5 || magnitude < 1e-4) {
+      return number
+        .toExponential(4)
+        .replace(/\.?0+e/, "e")
+        .replace(/e([+-])0+/, "e$1");
+    }
+    return number
+      .toPrecision(5)
+      .replace(/(\.\d*?[1-9])0+$/, "$1")
+      .replace(/\.0+$/, "");
+  }
+
+  function scalarFieldDataRect(viewport) {
+    if (
+      !viewport ||
+      !viewport.classList.contains("seurat-scalar-field-show-axes")
+    ) {
+      return null;
+    }
+    const content = panZoomContent(viewport);
+    const image = content && content.querySelector
+      ? content.querySelector("img")
+      : null;
+    if (!content || !image) return null;
+
+    const contentWidth = Number(content.clientWidth) || 0;
+    const contentHeight = Number(content.clientHeight) || 0;
+    if (contentWidth <= 0 || contentHeight <= 0) return null;
+
+    const naturalWidth = Number(image.naturalWidth) || contentWidth;
+    const naturalHeight = Number(image.naturalHeight) || contentHeight;
+    const containScale = Math.min(
+      contentWidth / Math.max(1, naturalWidth),
+      contentHeight / Math.max(1, naturalHeight)
+    );
+    const width = Math.max(1, naturalWidth * containScale);
+    const height = Math.max(1, naturalHeight * containScale);
+    const imageOffsetX = (contentWidth - width) * 0.5;
+    const imageOffsetY = (contentHeight - height) * 0.5;
+    const contentLeft = Number(content.offsetLeft) || 0;
+    const contentTop = Number(content.offsetTop) || 0;
+    const key = [
+      viewport.clientWidth,
+      viewport.clientHeight,
+      contentLeft,
+      contentTop,
+      contentWidth,
+      contentHeight,
+      naturalWidth,
+      naturalHeight,
+    ].join(":");
+
+    if (
+      viewport.__seuratScalarFieldDataRect &&
+      viewport.__seuratScalarFieldDataRectKey === key
+    ) {
+      return viewport.__seuratScalarFieldDataRect;
+    }
+
+    const rect = {
+      contentLeft,
+      contentTop,
+      imageOffsetX,
+      imageOffsetY,
+      left: contentLeft + imageOffsetX,
+      top: contentTop + imageOffsetY,
+      width,
+      height,
+    };
+    viewport.__seuratScalarFieldDataRectKey = key;
+    viewport.__seuratScalarFieldDataRect = rect;
+    return rect;
+  }
+
+  function alignScalarFieldAxes(viewport, dataRect) {
+    if (!viewport || !dataRect) return;
+    const xAxis = viewport.querySelector(".seurat-scalar-field-x-axis");
+    const yAxis = viewport.querySelector(".seurat-scalar-field-y-axis");
+    if (!xAxis || !yAxis) return;
+
+    const viewportWidth = Number(viewport.clientWidth) || 0;
+    const viewportHeight = Number(viewport.clientHeight) || 0;
+    const imageRight = dataRect.left + dataRect.width;
+    const imageBottom = dataRect.top + dataRect.height;
+    const xAxisHeight =
+      Number.parseFloat(getComputedStyle(xAxis).height) || 40;
+
+    xAxis.style.left = dataRect.left.toFixed(2) + "px";
+    xAxis.style.right =
+      Math.max(0, viewportWidth - imageRight).toFixed(2) + "px";
+    xAxis.style.bottom =
+      Math.max(0, viewportHeight - imageBottom - xAxisHeight).toFixed(2) +
+      "px";
+
+    yAxis.style.width = Math.max(0, dataRect.left).toFixed(2) + "px";
+    yAxis.style.top = dataRect.top.toFixed(2) + "px";
+    yAxis.style.bottom =
+      Math.max(0, viewportHeight - imageBottom).toFixed(2) + "px";
+  }
+
+  function updateScalarAxisTicks(axis, start, end) {
+    if (!axis || !Number.isFinite(start) || !Number.isFinite(end)) return;
+    for (const tick of axis.querySelectorAll("[data-axis-position]")) {
+      const position = scalarAxisNumber(
+        tick.getAttribute("data-axis-position")
+      );
+      if (position === null) continue;
+      const value = start + (end - start) * (position / 100);
+      const label = tick.querySelector(".seurat-scalar-field-tick-label");
+      const text = formatScalarAxisValue(value);
+      if (label && label.textContent !== text) label.textContent = text;
+      tick.setAttribute("data-axis-value", String(value));
+    }
+  }
+
+  function syncScalarFieldAxes(viewport, state) {
+    const dataRect = scalarFieldDataRect(viewport);
+    if (!dataRect) return;
+    alignScalarFieldAxes(viewport, dataRect);
+
+    const xAxis = viewport.querySelector(".seurat-scalar-field-x-axis");
+    const yAxis = viewport.querySelector(".seurat-scalar-field-y-axis");
+    if (!xAxis || !yAxis) return;
+
+    const xStart = scalarAxisNumber(xAxis.getAttribute("data-axis-start"));
+    const xEnd = scalarAxisNumber(xAxis.getAttribute("data-axis-end"));
+    const yStart = scalarAxisNumber(yAxis.getAttribute("data-axis-start"));
+    const yEnd = scalarAxisNumber(yAxis.getAttribute("data-axis-end"));
+    if (
+      xStart === null ||
+      xEnd === null ||
+      yStart === null ||
+      yEnd === null
+    ) {
+      return;
+    }
+
+    const scale = Math.max(1e-12, Number(state.scale) || 1);
+    const tx = Number(state.tx) || 0;
+    const ty = Number(state.ty) || 0;
+    const xFraction = function(position) {
+      return (
+        ((dataRect.imageOffsetX + position * dataRect.width - tx) / scale -
+          dataRect.imageOffsetX) /
+        dataRect.width
+      );
+    };
+    const yFraction = function(position) {
+      return (
+        ((dataRect.imageOffsetY + position * dataRect.height - ty) / scale -
+          dataRect.imageOffsetY) /
+        dataRect.height
+      );
+    };
+
+    const visibleXStart = xStart + (xEnd - xStart) * xFraction(0);
+    const visibleXEnd = xStart + (xEnd - xStart) * xFraction(1);
+    const valueAtYFraction = function(fraction) {
+      return yEnd + (yStart - yEnd) * fraction;
+    };
+    const visibleYStart = valueAtYFraction(yFraction(1));
+    const visibleYEnd = valueAtYFraction(yFraction(0));
+
+    updateScalarAxisTicks(xAxis, visibleXStart, visibleXEnd);
+    updateScalarAxisTicks(yAxis, visibleYStart, visibleYEnd);
+  }
+
   function applyPanZoom(viewport) {
     const content = panZoomContent(viewport);
     if (!content) return;
@@ -61,6 +242,7 @@
         Math.abs(state.tx) > 0.5 ||
         Math.abs(state.ty) > 0.5
     );
+    syncScalarFieldAxes(viewport, state);
   }
 
   function resetPanZoom(viewport) {
@@ -88,10 +270,17 @@
 
   function setPanZoomScaleAt(viewport, base, clientX, clientY, scale) {
     const rect = viewport.getBoundingClientRect();
+    const content = panZoomContent(viewport);
     const state = panZoomState(viewport);
     const nextScale = clampPanZoomScale(scale);
-    const localX = (Number(clientX) || 0) - rect.left;
-    const localY = (Number(clientY) || 0) - rect.top;
+    const localX =
+      (Number(clientX) || 0) -
+      rect.left -
+      (content ? Number(content.offsetLeft) || 0 : 0);
+    const localY =
+      (Number(clientY) || 0) -
+      rect.top -
+      (content ? Number(content.offsetTop) || 0 : 0);
     const contentX = (localX - base.tx) / base.scale;
     const contentY = (localY - base.ty) / base.scale;
     state.scale = nextScale;
@@ -274,6 +463,46 @@
     event.stopPropagation();
   }
 
+  function observePanZoomViewport(viewport) {
+    if (
+      !viewport ||
+      !observedPanZoomViewports ||
+      observedPanZoomViewports.has(viewport)
+    ) {
+      return;
+    }
+    observedPanZoomViewports.add(viewport);
+    if (panZoomResizeObserver) panZoomResizeObserver.observe(viewport);
+  }
+
+  function scanPanZoomViewports() {
+    panZoomScanFrame = 0;
+    if (!runtimeRoot) return;
+    for (const viewport of runtimeRoot.querySelectorAll(
+      ".seurat-panzoom-viewport"
+    )) {
+      observePanZoomViewport(viewport);
+      applyPanZoom(viewport);
+    }
+  }
+
+  function schedulePanZoomViewportScan() {
+    if (!runtimeRoot || panZoomScanFrame) return;
+    panZoomScanFrame = requestAnimationFrame(scanPanZoomViewports);
+  }
+
+  function onPanZoomImageLoad(event) {
+    const image = event && event.target;
+    const viewport =
+      image && image.closest
+        ? image.closest(".seurat-panzoom-viewport")
+        : null;
+    if (!viewport || !runtimeRoot || !runtimeRoot.contains(viewport)) return;
+    viewport.__seuratScalarFieldDataRectKey = "";
+    observePanZoomViewport(viewport);
+    applyPanZoom(viewport);
+  }
+
   function handleResetViewRequest(raw) {
     const text = String(raw || "");
     if (!text || text === lastResetViewRequest) return;
@@ -316,6 +545,20 @@
     root.removeEventListener("dragstart", onPanZoomDragStart, true);
     root.removeEventListener("auxclick", onPanZoomAuxClick, true);
     root.removeEventListener("click", onPanZoomClick, true);
+    root.removeEventListener("load", onPanZoomImageLoad, true);
+    if (panZoomScanFrame) {
+      cancelAnimationFrame(panZoomScanFrame);
+      panZoomScanFrame = 0;
+    }
+    if (panZoomResizeObserver) {
+      panZoomResizeObserver.disconnect();
+      panZoomResizeObserver = null;
+    }
+    if (panZoomDomObserver) {
+      panZoomDomObserver.disconnect();
+      panZoomDomObserver = null;
+    }
+    observedPanZoomViewports = null;
     if (resetViewObserver) {
       resetViewObserver.disconnect();
       resetViewObserver = null;
@@ -343,6 +586,7 @@
         options && typeof options.onResetViewRequest === "function"
           ? options.onResetViewRequest
           : null;
+      schedulePanZoomViewportScan();
       return;
     }
     if (runtimeRoot) unmountPanZoomRuntime(runtimeRoot);
@@ -367,6 +611,20 @@
     root.addEventListener("dragstart", onPanZoomDragStart, true);
     root.addEventListener("auxclick", onPanZoomAuxClick, true);
     root.addEventListener("click", onPanZoomClick, true);
+    root.addEventListener("load", onPanZoomImageLoad, true);
+
+    observedPanZoomViewports = new WeakSet();
+    panZoomResizeObserver = new ResizeObserver(function(entries) {
+      for (const entry of entries || []) {
+        if (entry && entry.target) applyPanZoom(entry.target);
+      }
+    });
+    panZoomDomObserver = new MutationObserver(schedulePanZoomViewportScan);
+    panZoomDomObserver.observe(root, {
+      childList: true,
+      subtree: true,
+    });
+    scanPanZoomViewports();
 
     lastResetViewRequest = "";
     resetViewRequestElement = root.querySelector("#seurat-reset-view-request");

@@ -150,6 +150,7 @@ class SeuratAppTests(unittest.TestCase):
         self.assertNotIn('id="seurat-workspace-state-file"', ui.layout.html)
         self.assertIn('id="seurat-variable-column"', ui.layout.html)
         self.assertIn('id="seurat-context-menu"', ui.layout.html)
+        self.assertIn("scalarFieldSettingsBackground", ui.layout.html)
         self.assertIsInstance(ui.grid_workspace.runtime, GridRuntime)
         self.assertIn("seurat-grid-runtime", ui.layout.html)
         self.assertIsInstance(ui.interaction_runtime, InteractionRuntime)

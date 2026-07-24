@@ -46,6 +46,7 @@ def empty_grid_cell() -> GridCell:
         "plugin_options": {},
         "plugin_options_schema": [],
         "scalar_field_settings": {},
+        "scalar_field_axes": {},
         "scalar_field_colorbar_min": "",
         "scalar_field_colorbar_max": "",
         "grid_row": 1,

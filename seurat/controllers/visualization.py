@@ -313,10 +313,15 @@ class VisualizationControllerMixin:
             SCALAR_FIELD_COLORMAP_CSS_GRADIENTS.get("viridis", ""),
         )
 
+    @staticmethod
+    def scalar_field_background(value: Any) -> str:
+        return "white" if str(value or "").strip().lower() == "white" else "black"
+
     def normalize_scalar_field_settings(
         self, raw_settings: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         raw = dict(raw_settings or {})
+        background = self.scalar_field_background(raw.get("background", "black"))
         range_mode = str(raw.get("range_mode", "") or "").strip().lower()
         range_auto = raw.get("range_auto", None)
         if range_auto is None:
@@ -339,6 +344,9 @@ class VisualizationControllerMixin:
             "colorbar_gradient": self.scalar_colormap_gradient(
                 raw.get("colormap", "viridis")
             ),
+            "background": background,
+            "background_color": "#ffffff" if background == "white" else "#000000",
+            "foreground_color": "#111111" if background == "white" else "#ffffff",
             "range_auto": range_auto,
             "range_mode": "auto" if range_auto else "manual",
             "min": min_value,
@@ -393,6 +401,9 @@ class VisualizationControllerMixin:
         self.state.scalarFieldSettingsStatusIsError = False
         self.state.scalarFieldSettingsColormap = str(
             settings.get("colormap", "viridis") or "viridis"
+        )
+        self.state.scalarFieldSettingsBackground = str(
+            settings.get("background", "black") or "black"
         )
         self.state.scalarFieldSettingsRangeAuto = bool(settings.get("range_auto", True))
         self.state.scalarFieldSettingsMin = self.settings_value_text(
@@ -1244,6 +1255,9 @@ class VisualizationControllerMixin:
             return
 
         colormap = self.scalar_colormap(self.state.scalarFieldSettingsColormap)
+        background = self.scalar_field_background(
+            self.state.scalarFieldSettingsBackground
+        )
         range_auto = bool(self.state.scalarFieldSettingsRangeAuto)
         show_colorbar = bool(self.state.scalarFieldSettingsShowColorbar)
         show_axes = bool(self.state.scalarFieldSettingsShowAxes)
@@ -1266,6 +1280,7 @@ class VisualizationControllerMixin:
         settings = self.normalize_scalar_field_settings(
             {
                 "colormap": colormap,
+                "background": background,
                 "range_auto": range_auto,
                 "min": None if range_auto else min_value,
                 "max": None if range_auto else max_value,

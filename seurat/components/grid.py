@@ -639,7 +639,15 @@ class GridWorkspace(TrameComponent):
                                                         " || tile.visualization_item_type === 'SCALAR_FIELD')"
                                                     )
                                                 ):
-                                                    with html.Div(classes="seurat-scalar-field-view"):
+                                                    with html.Div(
+                                                        classes="seurat-scalar-field-view",
+                                                        raw_attrs=[
+                                                            ":style=\"{"
+                                                            " '--seurat-scalar-field-background': ((tile.scalar_field_settings && tile.scalar_field_settings.background_color) || '#000000'),"
+                                                            " '--seurat-scalar-field-foreground': ((tile.scalar_field_settings && tile.scalar_field_settings.foreground_color) || '#ffffff')"
+                                                            " }\"",
+                                                        ],
+                                                    ):
                                                         with html.Div(
                                                             classes="seurat-scalar-field-plot-frame seurat-panzoom-viewport",
                                                             raw_attrs=[
@@ -665,6 +673,70 @@ class GridWorkspace(TrameComponent):
                                                                     )
                                                                 with vuetify.Template(v_if="tile.media_type === 'image'"):
                                                                     html.Img(src=("tile.src",), raw_attrs=['draggable="false"'])
+                                                            with vuetify.Template(
+                                                                v_if=(
+                                                                    "tile.scalar_field_settings"
+                                                                    " && tile.scalar_field_settings.show_axes"
+                                                                )
+                                                            ):
+                                                                with html.Div(
+                                                                    classes="seurat-scalar-field-y-axis",
+                                                                    raw_attrs=[
+                                                                        'data-scalar-axis="y"',
+                                                                        ":data-axis-start=\"tile.scalar_field_axes && tile.scalar_field_axes.y && tile.scalar_field_axes.y.start\"",
+                                                                        ":data-axis-end=\"tile.scalar_field_axes && tile.scalar_field_axes.y && tile.scalar_field_axes.y.end\"",
+                                                                    ],
+                                                                ):
+                                                                    with vuetify.Template(
+                                                                        v_for="tick in ((tile.scalar_field_axes && tile.scalar_field_axes.y && tile.scalar_field_axes.y.ticks) || [])",
+                                                                        key="'y:' + tick.position",
+                                                                    ):
+                                                                        with html.Div(
+                                                                            classes="seurat-scalar-field-y-tick",
+                                                                            raw_attrs=[
+                                                                                ":class=\"{ 'is-start': tick.position === 0, 'is-end': tick.position === 100 }\"",
+                                                                                ":style=\"{ bottom: tick.position + '%' }\"",
+                                                                                ':data-axis-position="tick.position"',
+                                                                                ':data-axis-value="tick.value"',
+                                                                            ],
+                                                                        ):
+                                                                            html.Span(
+                                                                                "{{ tick.label }}",
+                                                                                classes="seurat-scalar-field-tick-label",
+                                                                            )
+                                                                    html.Div(
+                                                                        "{{ (tile.scalar_field_axes && tile.scalar_field_axes.y && tile.scalar_field_axes.y.label) || 'row' }}",
+                                                                        classes="seurat-scalar-field-y-label",
+                                                                    )
+                                                                with html.Div(
+                                                                    classes="seurat-scalar-field-x-axis",
+                                                                    raw_attrs=[
+                                                                        'data-scalar-axis="x"',
+                                                                        ":data-axis-start=\"tile.scalar_field_axes && tile.scalar_field_axes.x && tile.scalar_field_axes.x.start\"",
+                                                                        ":data-axis-end=\"tile.scalar_field_axes && tile.scalar_field_axes.x && tile.scalar_field_axes.x.end\"",
+                                                                    ],
+                                                                ):
+                                                                    with vuetify.Template(
+                                                                        v_for="tick in ((tile.scalar_field_axes && tile.scalar_field_axes.x && tile.scalar_field_axes.x.ticks) || [])",
+                                                                        key="'x:' + tick.position",
+                                                                    ):
+                                                                        with html.Div(
+                                                                            classes="seurat-scalar-field-x-tick",
+                                                                            raw_attrs=[
+                                                                                ":class=\"{ 'is-start': tick.position === 0, 'is-end': tick.position === 100 }\"",
+                                                                                ":style=\"{ left: tick.position + '%' }\"",
+                                                                                ':data-axis-position="tick.position"',
+                                                                                ':data-axis-value="tick.value"',
+                                                                            ],
+                                                                        ):
+                                                                            html.Span(
+                                                                                "{{ tick.label }}",
+                                                                                classes="seurat-scalar-field-tick-label",
+                                                                            )
+                                                                    html.Div(
+                                                                        "{{ (tile.scalar_field_axes && tile.scalar_field_axes.x && tile.scalar_field_axes.x.label) || 'column' }}",
+                                                                        classes="seurat-scalar-field-x-label",
+                                                                    )
                                                         with vuetify.Template(
                                                             v_if=(
                                                                 "tile.scalar_field_settings"
