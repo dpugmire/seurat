@@ -870,7 +870,12 @@ class GridWorkspace(TrameComponent):
             with vuetify.VCard(variant="outlined", style="flex:0 0 auto;"):
                 with vuetify.VCardText(class_="py-2"):
                     with vuetify.Template(v_if="detailsSelectedVar"):
-                        with html.Div(style="display:flex; align-items:center; gap:12px; width:100%;"):
+                        with html.Div(
+                            style=(
+                                "display:flex; align-items:center; gap:12px; "
+                                "width:100%; flex-wrap:wrap;"
+                            )
+                        ):
                             html.Div("{{ 'Details: ' + detailsSelectedVar }}", class_="text-body-2")
                             vuetify.VBtn(
                                 "{{ 'SOURCES(' + detailsNumSources + ')' }}",
@@ -878,20 +883,81 @@ class GridWorkspace(TrameComponent):
                                 size="small",
                                 click=ctrl.toggle_sources,
                             )
-                            with html.Div(
-                                class_="text-caption",
-                                style="display:flex; align-items:center; gap:12px; white-space:nowrap;",
+                            with vuetify.Template(
+                                v_if="(detailsDerivedRepresentations || []).length"
                             ):
-                                html.Span("Min/Max")
-                                with html.Span():
-                                    html.Strong("Global ")
-                                    html.Span("{{ detailsGlobalMin + ' / ' + detailsGlobalMax }}")
-                                with html.Span():
-                                    html.Strong("Median ")
-                                    html.Span("{{ detailsMedianMin + ' / ' + detailsMedianMax }}")
-                                with html.Span():
-                                    html.Strong("Mean ")
-                                    html.Span("{{ detailsMeanMin + ' / ' + detailsMeanMax }}")
+                                with html.Div(
+                                    id="seurat-representation-details",
+                                    class_="text-caption",
+                                    style=(
+                                        "display:flex; align-items:flex-start; gap:18px; "
+                                        "flex:1 1 auto; flex-wrap:wrap; min-width:0;"
+                                    ),
+                                ):
+                                    with html.Div(
+                                        v_if=(
+                                            "detailsSourceRepresentation && "
+                                            "detailsSourceRepresentation.label"
+                                        ),
+                                        style="min-width:260px;",
+                                    ):
+                                        html.Div(
+                                            "{{ detailsSourceRepresentation.label }}",
+                                            class_="font-weight-bold",
+                                        )
+                                        html.Div(
+                                            "Global {{ detailsSourceRepresentation.global_min }}"
+                                            " / {{ detailsSourceRepresentation.global_max }}"
+                                            " · Median {{ detailsSourceRepresentation.median_min }}"
+                                            " / {{ detailsSourceRepresentation.median_max }}"
+                                            " · Mean {{ detailsSourceRepresentation.mean_min }}"
+                                            " / {{ detailsSourceRepresentation.mean_max }}",
+                                            style="white-space:nowrap;",
+                                        )
+                                    with vuetify.Template(
+                                        v_for=(
+                                            "representation in "
+                                            "detailsDerivedRepresentations"
+                                        ),
+                                        key="representation.id",
+                                    ):
+                                        with html.Div(
+                                            class_="seurat-derived-representation-details",
+                                            style="min-width:260px;",
+                                        ):
+                                            html.Div(
+                                                "{{ representation.label }}",
+                                                class_="font-weight-bold",
+                                            )
+                                            html.Div(
+                                                "Global {{ representation.global_min }}"
+                                                " / {{ representation.global_max }}"
+                                                " · Median {{ representation.median_min }}"
+                                                " / {{ representation.median_max }}"
+                                                " · Mean {{ representation.mean_min }}"
+                                                " / {{ representation.mean_max }}",
+                                                style="white-space:nowrap;",
+                                            )
+                            with vuetify.Template(
+                                v_if="!(detailsDerivedRepresentations || []).length"
+                            ):
+                                with html.Div(
+                                    class_="text-caption",
+                                    style=(
+                                        "display:flex; align-items:center; gap:12px; "
+                                        "white-space:nowrap;"
+                                    ),
+                                ):
+                                    html.Span("Min/Max")
+                                    with html.Span():
+                                        html.Strong("Global ")
+                                        html.Span("{{ detailsGlobalMin + ' / ' + detailsGlobalMax }}")
+                                    with html.Span():
+                                        html.Strong("Median ")
+                                        html.Span("{{ detailsMedianMin + ' / ' + detailsMedianMax }}")
+                                    with html.Span():
+                                        html.Strong("Mean ")
+                                        html.Span("{{ detailsMeanMin + ' / ' + detailsMeanMax }}")
                             vuetify.VSpacer()
                             html.Div("{{ 'QueryView: ' + queryViewLabel }}", class_="text-caption")
                     with vuetify.Template(v_if="!detailsSelectedVar"):

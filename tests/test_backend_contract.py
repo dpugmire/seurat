@@ -45,6 +45,38 @@ SOURCE_SUMMARY = {
     "median_min": 1.5,
     "median_max": 3.5,
     "sources": [],
+    "source_representation": {
+        "id": "source",
+        "label": "Source coefficients",
+        "kind": "source",
+        "data_model": "m3dc1_element_basis_coefficients",
+        "shape": "27894 × 20",
+        "num_frames": 51,
+        "global_min": -5.6e9,
+        "global_max": 1.3e10,
+        "mean_min": -5.6e9,
+        "mean_max": 1.3e10,
+        "median_min": -5.6e9,
+        "median_max": 1.3e10,
+    },
+    "derived_representations": [
+        {
+            "id": "scalar_field",
+            "label": "Derived scalar field",
+            "kind": "derived",
+            "data_model": "m3dc1_regular_rz_grid",
+            "source_data_model": "m3dc1_element_basis_coefficients",
+            "shape": "256 × 256",
+            "axes": "R × Z",
+            "num_frames": 51,
+            "global_min": -0.02,
+            "global_max": 3.56,
+            "mean_min": -0.01,
+            "mean_max": 3.0,
+            "median_min": -0.01,
+            "median_max": 3.1,
+        }
+    ],
 }
 
 
@@ -105,6 +137,42 @@ class RecordingCampaignDb:
             "mean_max": 3.5,
             "median_min": 1.5,
             "median_max": 3.5,
+            "source_representation": {
+                "id": "source",
+                "label": "Source coefficients",
+                "kind": "source",
+                "data_model": "m3dc1_element_basis_coefficients",
+                "shape": "27894 × 20",
+                "num_frames": "51",
+                "num_sources": "1",
+                "global_min": "-5.6e9",
+                "global_max": "1.3e10",
+                "mean_min": "-5.6e9",
+                "mean_max": "1.3e10",
+                "median_min": "-5.6e9",
+                "median_max": "1.3e10",
+            },
+            "derived_representations": [
+                {
+                    "id": "scalar_field",
+                    "label": "Derived scalar field",
+                    "kind": "derived",
+                    "data_model": "m3dc1_regular_rz_grid",
+                    "source_data_model": (
+                        "m3dc1_element_basis_coefficients"
+                    ),
+                    "shape": "256 × 256",
+                    "axes": "R × Z",
+                    "num_frames": "51",
+                    "num_sources": "1",
+                    "global_min": "-0.02",
+                    "global_max": "3.56",
+                    "mean_min": "-0.01",
+                    "mean_max": "3.0",
+                    "median_min": "-0.01",
+                    "median_max": "3.1",
+                }
+            ],
             "sources": [
                 {
                     "source_label": "run/output",
@@ -296,6 +364,22 @@ class LocalCampaignBackendTests(unittest.TestCase):
         self.assertEqual(first["sources"][0]["maximum"], 4.0)
         self.assertEqual(first["sources"][0]["label"], "run/output")
         self.assertEqual(first["sources"][0]["num_timesteps"], 34)
+        self.assertEqual(
+            first["source_representation"]["data_model"],
+            "m3dc1_element_basis_coefficients",
+        )
+        self.assertEqual(
+            first["source_representation"]["global_min"],
+            -5.6e9,
+        )
+        self.assertEqual(
+            first["derived_representations"][0]["data_model"],
+            "m3dc1_regular_rz_grid",
+        )
+        self.assertEqual(
+            first["derived_representations"][0]["global_max"],
+            3.56,
+        )
         self.assertTrue(
             first["sources"][0]["id"].startswith("local-source:v1:")
         )
@@ -458,6 +542,18 @@ class BackendInjectionTests(unittest.TestCase):
         self.assertEqual(state.detailsNumSources, 0)
         self.assertEqual(state.detailsGlobalMin, "1")
         self.assertEqual(state.detailsGlobalMax, "4")
+        self.assertEqual(
+            state.detailsSourceRepresentation["label"],
+            "Source coefficients",
+        )
+        self.assertEqual(
+            state.detailsDerivedRepresentations[0]["label"],
+            "Derived scalar field",
+        )
+        self.assertEqual(
+            state.detailsDerivedRepresentations[0]["global_max"],
+            "3.56",
+        )
 
     def test_controller_source_restriction_uses_injected_backend(self):
         backend = FakeCatalogBackend(

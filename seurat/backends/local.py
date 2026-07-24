@@ -10,6 +10,7 @@ from .contracts import (
     NavigationNode,
     NavigationRequest,
     NavigationResource,
+    RepresentationSummary,
     SourceDescriptor,
     SourceLookupRequest,
     SourceRestrictionRequest,
@@ -56,7 +57,7 @@ class LocalCampaignBackend:
             variable_id,
             extra_filter=query,
         )
-        return {
+        result: SourceSummary = {
             "variable_id": str(raw.get("variable", "") or variable_id),
             "num_sources": int(raw.get("num_sources", 0) or 0),
             "global_min": self._optional_float(raw.get("global_min")),
@@ -70,6 +71,42 @@ class LocalCampaignBackend:
                 for source in raw.get("sources", []) or []
                 if isinstance(source, dict)
             ],
+        }
+        source_representation = raw.get("source_representation", {})
+        if isinstance(source_representation, dict) and source_representation:
+            result["source_representation"] = self._representation_summary(
+                source_representation
+            )
+        derived_representations = [
+            self._representation_summary(representation)
+            for representation in raw.get("derived_representations", []) or []
+            if isinstance(representation, dict)
+        ]
+        if derived_representations:
+            result["derived_representations"] = derived_representations
+        return result
+
+    @classmethod
+    def _representation_summary(
+        cls,
+        raw: Dict[str, Any],
+    ) -> RepresentationSummary:
+        return {
+            "id": str(raw.get("id", "") or ""),
+            "label": str(raw.get("label", "") or ""),
+            "kind": str(raw.get("kind", "") or ""),
+            "data_model": str(raw.get("data_model", "") or ""),
+            "source_data_model": str(raw.get("source_data_model", "") or ""),
+            "shape": str(raw.get("shape", "") or ""),
+            "axes": str(raw.get("axes", "") or ""),
+            "num_frames": int(raw.get("num_frames", 0) or 0),
+            "num_sources": int(raw.get("num_sources", 0) or 0),
+            "global_min": cls._optional_float(raw.get("global_min")),
+            "global_max": cls._optional_float(raw.get("global_max")),
+            "mean_min": cls._optional_float(raw.get("mean_min")),
+            "mean_max": cls._optional_float(raw.get("mean_max")),
+            "median_min": cls._optional_float(raw.get("median_min")),
+            "median_max": cls._optional_float(raw.get("median_max")),
         }
 
     def find_source(

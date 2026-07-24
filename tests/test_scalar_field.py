@@ -2,14 +2,30 @@ import io
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
 from PIL import Image
 
 from db import CampaignDb, scalar_field_axis_spec, scalar_field_to_png_bytes
+from seurat.controllers.sources import SourcesControllerMixin
 from seurat.controllers.visualization import VisualizationControllerMixin
 from sqlite_store import SQLiteCampaignCollection
+
+
+class ScalarFieldTitleController(
+    SourcesControllerMixin,
+    VisualizationControllerMixin,
+):
+    def __init__(self, summary):
+        self.application = SimpleNamespace(
+            get_source_summary=lambda _request: summary
+        )
+
+    @staticmethod
+    def active_query_filter():
+        return None
 
 
 class ScalarFieldAxisTests(unittest.TestCase):
@@ -109,6 +125,146 @@ class ScalarFieldAxisTests(unittest.TestCase):
         self.assertEqual(len(tiles), 1)
         self.assertEqual(tiles[0]["scalar_field_axes"]["x"]["label"], "R")
         self.assertEqual(tiles[0]["scalar_field_axes"]["y"]["label"], "Z")
+
+
+class ScalarFieldRepresentationSummaryTests(unittest.TestCase):
+    def test_source_and_derived_statistics_are_reported_separately(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            collection = SQLiteCampaignCollection(
+                Path(temp_dir) / "campaign.sqlite",
+                "/campaign/example.aca",
+            )
+            collection.insert_one(
+                {
+                    "campaign_path": "/campaign/example.aca",
+                    "variable_id": "fields/P",
+                    "variable_name": "P",
+                    "variable_type": "variable",
+                    "source_dataset": "run/output.bp",
+                    "data_model": "m3dc1_element_basis_coefficients",
+                    "metadata": {
+                        "Shape": "27894,20",
+                        "AvailableStepsCount": "51",
+                    },
+                    "min": -5.6e9,
+                    "max": 1.3e10,
+                }
+            )
+            for frame_index, minimum, maximum in (
+                (0, 0.1, 3.5),
+                (1, -0.2, 2.5),
+            ):
+                collection.insert_one(
+                    {
+                        "campaign_path": "/campaign/example.aca",
+                        "variable_id": "fields/P",
+                        "variable_name": "P",
+                        "variable_type": "scalarField",
+                        "source_dataset": "run/output.bp",
+                        "visualization_name": "scalar_field",
+                        "frame_index": frame_index,
+                        "min": minimum,
+                        "max": maximum,
+                        "scalar_field_metadata": {
+                            "data_model": "m3dc1_regular_rz_grid",
+                            "source_data_model": (
+                                "m3dc1_element_basis_coefficients"
+                            ),
+                            "shape": [256, 256],
+                            "grid": {
+                                "axes": ["R", "Z"],
+                                "shape": [256, 256],
+                            },
+                        },
+                    }
+                )
+
+            summary = CampaignDb(collection).variable_min_max_summary(
+                "fields/P"
+            )
+            collection._con.close()
+
+        source = summary["source_representation"]
+        self.assertEqual(source["label"], "Source coefficients")
+        self.assertEqual(
+            source["data_model"],
+            "m3dc1_element_basis_coefficients",
+        )
+        self.assertEqual(source["shape"], "27894 × 20")
+        self.assertEqual(source["num_frames"], 51)
+        self.assertEqual(source["global_min"], -5.6e9)
+        self.assertEqual(source["global_max"], 1.3e10)
+
+        self.assertEqual(len(summary["derived_representations"]), 1)
+        derived = summary["derived_representations"][0]
+        self.assertEqual(derived["label"], "Derived scalar field")
+        self.assertEqual(derived["data_model"], "m3dc1_regular_rz_grid")
+        self.assertEqual(
+            derived["source_data_model"],
+            "m3dc1_element_basis_coefficients",
+        )
+        self.assertEqual(derived["shape"], "256 × 256")
+        self.assertEqual(derived["axes"], "R × Z")
+        self.assertEqual(derived["num_frames"], 2)
+        self.assertEqual(derived["num_sources"], 1)
+        self.assertEqual(derived["global_min"], -0.2)
+        self.assertEqual(derived["global_max"], 3.5)
+        self.assertAlmostEqual(derived["mean_min"], -0.05)
+        self.assertEqual(derived["mean_max"], 3.0)
+
+
+class ScalarFieldTitleRangeTests(unittest.TestCase):
+    @staticmethod
+    def scalar_field_cell():
+        return {
+            "media_type": "image_sequence",
+            "variable_type": "scalarField",
+            "variable_id": "fields/P",
+            "source_dataset": "run/output.bp",
+            "visualization_name": "fields/P/scalar_field",
+            "selected_visualization": "fields/P/scalar_field",
+            "min": 0.1,
+            "max": 3.5,
+            "scalar_field_settings": {},
+        }
+
+    def test_scalar_field_title_and_colorbar_use_derived_global_range(self):
+        controller = ScalarFieldTitleController(
+            {
+                "global_min": -5.6e9,
+                "global_max": 1.3e10,
+                "derived_representations": [
+                    {
+                        "id": "fields/P/scalar_field",
+                        "global_min": -0.2,
+                        "global_max": 3.5,
+                    }
+                ],
+            }
+        )
+        cell = self.scalar_field_cell()
+
+        controller.update_2d_display_title(cell, "fields/P", "P")
+
+        self.assertEqual(cell["display_title"], "P [-0.2, 3.5]")
+        self.assertEqual(cell["scalar_field_colorbar_min"], "-0.2")
+        self.assertEqual(cell["scalar_field_colorbar_max"], "3.5")
+
+    def test_scalar_field_without_derived_summary_uses_payload_range(self):
+        controller = ScalarFieldTitleController(
+            {
+                "global_min": -5.6e9,
+                "global_max": 1.3e10,
+                "derived_representations": [],
+            }
+        )
+        cell = self.scalar_field_cell()
+
+        controller.update_2d_display_title(cell, "fields/P", "P")
+
+        self.assertEqual(cell["display_title"], "P [0.1, 3.5]")
+        self.assertEqual(cell["scalar_field_colorbar_min"], "0.1")
+        self.assertEqual(cell["scalar_field_colorbar_max"], "3.5")
 
 
 class ScalarFieldBackgroundTests(unittest.TestCase):

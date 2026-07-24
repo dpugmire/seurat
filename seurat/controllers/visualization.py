@@ -247,9 +247,15 @@ class VisualizationControllerMixin:
         title_min: Optional[float] = None
         title_max: Optional[float] = None
         if self.is_scalar_field_cell(cell):
+            representation_id = str(
+                cell.get("selected_visualization", "")
+                or cell.get("visualization_name", "")
+                or ""
+            )
             fmin, fmax = self.source_extrema_for_title(
                 variable_id,
                 self.source_filter_from_cell(cell),
+                representation_id=representation_id,
             )
             if fmin is None or fmax is None:
                 fmin, fmax = self.valid_title_extrema(

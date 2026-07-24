@@ -14,6 +14,8 @@ def details_defaults():
         "detailsMeanMax": "",
         "detailsMedianMin": "",
         "detailsMedianMax": "",
+        "detailsSourceRepresentation": {},
+        "detailsDerivedRepresentations": [],
         "showSourcesModal": False,
         "sourceDialogMode": "single",
         "sourceDialogCellIndex": -1,
