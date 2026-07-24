@@ -62,6 +62,10 @@ _CAMPAIGN_SCHEMA_TABLES = {
     "repfiles",
     "file",
 }
+_CAMPAIGN_SCHEMA_DATASET_NAMES = (
+    "__campaign_schema.yaml",
+    "schema.yaml",
+)
 _DISPLAY_ROLE_PRIORITY = {
     "color-by": 0,
     "y-axis": 1,
@@ -102,6 +106,7 @@ def _read_campaign_schema_text(campaign_path: str) -> Optional[str]:
         row = con.execute(
             """
             select
+                d.name as dataset_name,
                 r.keyid as keyid,
                 f.compression as compression,
                 f.data as data
@@ -109,17 +114,26 @@ def _read_campaign_schema_text(campaign_path: str) -> Optional[str]:
             join replica as r on r.datasetid = d.rowid
             join repfiles as rf on rf.replicaid = r.rowid
             join file as f on f.fileid = rf.fileid
-            where d.name = ? and d.fileformat = 'TEXT' and d.deltime = 0 and r.deltime = 0
-            order by r.rowid desc, f.fileid desc
+            where d.name in (?, ?) and d.fileformat = 'TEXT' and d.deltime = 0 and r.deltime = 0
+            order by
+                case d.name when ? then 0 else 1 end,
+                r.rowid desc,
+                f.fileid desc
             limit 1
             """,
-            ("schema.yaml",),
+            (
+                _CAMPAIGN_SCHEMA_DATASET_NAMES[0],
+                _CAMPAIGN_SCHEMA_DATASET_NAMES[1],
+                _CAMPAIGN_SCHEMA_DATASET_NAMES[0],
+            ),
         ).fetchone()
         if row is None:
             return None
 
         if int(row["keyid"] or 0) > 0:
-            raise ValueError("schema.yaml is encrypted; Seurat cannot read it without a keyfile")
+            raise ValueError(
+                f"{row['dataset_name']} is encrypted; Seurat cannot read it without a keyfile"
+            )
 
         data = bytes(row["data"])
         if int(row["compression"] or 0):
@@ -261,6 +275,385 @@ def _apply_root_time(time_spec: Any, file_groups: Dict[str, Dict[str, Any]]) -> 
             group.setdefault("time", dict(group_time))
 
 
+def _schema_optional_mapping(value: Any, field_name: str) -> Dict[str, Any]:
+    if value is None:
+        return {}
+    return _schema_mapping(value, field_name)
+
+
+def _schema_file_group_reference(
+    value: Any,
+    field_name: str,
+    file_groups: Dict[str, Dict[str, Any]],
+) -> str:
+    file_group = _schema_nonempty_string(value, field_name)
+    if file_group not in file_groups:
+        raise ValueError(f"{field_name} references unknown file group: {file_group}")
+    return file_group
+
+
+def _interpret_schema_axes(
+    raw_axes: Any,
+    file_groups: Dict[str, Dict[str, Any]],
+) -> Dict[str, Dict[str, str]]:
+    axes: Dict[str, Dict[str, str]] = {}
+    for raw_name, raw_axis in _schema_optional_mapping(raw_axes, "axes").items():
+        name = _schema_nonempty_string(raw_name, "axes name")
+        axis = _schema_mapping(raw_axis, f"axes.{name}")
+        axes[name] = {
+            "file": _schema_file_group_reference(
+                axis.get("file"),
+                f"axes.{name}.file",
+                file_groups,
+            ),
+            "variable": _schema_nonempty_string(
+                axis.get("variable"),
+                f"axes.{name}.variable",
+            ),
+            "kind": _schema_nonempty_string(axis.get("kind"), f"axes.{name}.kind"),
+        }
+    return axes
+
+
+def _schema_string_list(value: Any, field_name: str) -> List[str]:
+    if not isinstance(value, (list, tuple)):
+        raise ValueError(f"{field_name} must be a list")
+    return [_schema_nonempty_string(item, f"{field_name} item") for item in value]
+
+
+def _interpret_schema_meshes(
+    raw_meshes: Any,
+    file_groups: Dict[str, Dict[str, Any]],
+) -> Dict[str, Dict[str, Any]]:
+    meshes: Dict[str, Dict[str, Any]] = {}
+    for raw_name, raw_mesh in _schema_optional_mapping(raw_meshes, "meshes").items():
+        name = _schema_nonempty_string(raw_name, "meshes name")
+        mesh = _schema_mapping(raw_mesh, f"meshes.{name}")
+        normalized: Dict[str, Any] = {
+            "file": _schema_file_group_reference(
+                mesh.get("file"),
+                f"meshes.{name}.file",
+                file_groups,
+            ),
+            "variable": _schema_nonempty_string(
+                mesh.get("variable"),
+                f"meshes.{name}.variable",
+            ),
+            "model": _schema_nonempty_string(mesh.get("model"), f"meshes.{name}.model"),
+        }
+        if "columns" in mesh:
+            normalized["columns"] = _schema_string_list(
+                mesh.get("columns"),
+                f"meshes.{name}.columns",
+            )
+        meshes[name] = normalized
+    return meshes
+
+
+def _interpret_schema_basis(
+    raw_basis: Any,
+    file_groups: Dict[str, Dict[str, Any]],
+) -> Dict[str, Dict[str, Any]]:
+    basis: Dict[str, Dict[str, Any]] = {}
+    for raw_name, raw_spec in _schema_optional_mapping(raw_basis, "basis").items():
+        name = _schema_nonempty_string(raw_name, "basis name")
+        spec = _schema_mapping(raw_spec, f"basis.{name}")
+        raw_variables = _schema_mapping(
+            spec.get("variables"),
+            f"basis.{name}.variables",
+        )
+        if not raw_variables:
+            raise ValueError(f"basis.{name}.variables must not be empty")
+        variables = {
+            _schema_nonempty_string(
+                role,
+                f"basis.{name}.variables role",
+            ): _schema_nonempty_string(
+                variable,
+                f"basis.{name}.variables.{role}",
+            )
+            for role, variable in raw_variables.items()
+        }
+        basis[name] = {
+            "file": _schema_file_group_reference(
+                spec.get("file"),
+                f"basis.{name}.file",
+                file_groups,
+            ),
+            "variables": variables,
+            "model": _schema_nonempty_string(spec.get("model"), f"basis.{name}.model"),
+        }
+    return basis
+
+
+def _compile_schema_variable_pattern(pattern: str, field_name: str) -> Pattern[str]:
+    parts = ["^"]
+    index = 0
+    while index < len(pattern):
+        char = pattern[index]
+        if char == "*":
+            if index + 1 < len(pattern) and pattern[index + 1] == "*":
+                parts.append(".*")
+                index += 2
+            else:
+                parts.append("[^/]*")
+                index += 1
+            continue
+        if char == "?":
+            parts.append("[^/]")
+        else:
+            parts.append(re.escape(char))
+        index += 1
+    parts.append("$")
+    try:
+        return re.compile("".join(parts))
+    except re.error as e:
+        raise ValueError(f"Invalid {field_name}: {e}") from e
+
+
+def _schema_named_reference(
+    value: Any,
+    field_name: str,
+    targets: Dict[str, Any],
+) -> str:
+    name = _schema_nonempty_string(value, field_name)
+    if name not in targets:
+        raise ValueError(f"{field_name} references unknown name: {name}")
+    return name
+
+
+def _schema_axis_reference(
+    value: Any,
+    field_name: str,
+    group_file: str,
+    axes: Dict[str, Dict[str, str]],
+) -> str:
+    name = _schema_named_reference(value, field_name, axes)
+    if axes[name]["file"] != group_file:
+        raise ValueError(
+            f"{field_name} references axis {name!r} from a different file group"
+        )
+    return name
+
+
+def _interpret_schema_variable_groups(
+    raw_groups: Any,
+    file_groups: Dict[str, Dict[str, Any]],
+    axes: Dict[str, Dict[str, str]],
+    meshes: Dict[str, Dict[str, Any]],
+    basis: Dict[str, Dict[str, Any]],
+) -> Dict[str, Dict[str, Any]]:
+    variable_groups: Dict[str, Dict[str, Any]] = {}
+    for raw_name, raw_group in _schema_optional_mapping(
+        raw_groups,
+        "variable_groups",
+    ).items():
+        name = _schema_nonempty_string(raw_name, "variable_groups name")
+        group = _schema_mapping(raw_group, f"variable_groups.{name}")
+        file_group = _schema_file_group_reference(
+            group.get("file"),
+            f"variable_groups.{name}.file",
+            file_groups,
+        )
+        pattern = _schema_nonempty_string(
+            group.get("pattern"),
+            f"variable_groups.{name}.pattern",
+        )
+        _compile_schema_variable_pattern(
+            pattern,
+            f"variable_groups.{name}.pattern",
+        )
+        normalized: Dict[str, Any] = {
+            "file": file_group,
+            "pattern": pattern,
+            "role": _schema_nonempty_string(
+                group.get("role"),
+                f"variable_groups.{name}.role",
+            ),
+        }
+
+        if "data_model" in group:
+            normalized["data_model"] = _schema_nonempty_string(
+                group.get("data_model"),
+                f"variable_groups.{name}.data_model",
+            )
+
+        for key, targets in (("mesh", meshes), ("basis", basis)):
+            if key not in group:
+                continue
+            reference = _schema_named_reference(
+                group.get(key),
+                f"variable_groups.{name}.{key}",
+                targets,
+            )
+            if targets[reference]["file"] != file_group:
+                raise ValueError(
+                    f"variable_groups.{name}.{key} references "
+                    f"{reference!r} from a different file group"
+                )
+            normalized[key] = reference
+
+        for key in ("time_axis", "x_axis", "timestep_axis"):
+            if key in group:
+                normalized[key] = _schema_axis_reference(
+                    group.get(key),
+                    f"variable_groups.{name}.{key}",
+                    file_group,
+                    axes,
+                )
+
+        if "static" in group:
+            if not isinstance(group.get("static"), bool):
+                raise ValueError(f"variable_groups.{name}.static must be a boolean")
+            normalized["static"] = bool(group.get("static"))
+        if normalized.get("static") and any(
+            key in normalized for key in ("time_axis", "x_axis", "timestep_axis")
+        ):
+            raise ValueError(
+                f"variable_groups.{name} is static and cannot reference an axis"
+            )
+
+        variable_groups[name] = normalized
+    return variable_groups
+
+
+def _schema_declared_exact_variables(
+    axes: Dict[str, Dict[str, str]],
+    meshes: Dict[str, Dict[str, Any]],
+    basis: Dict[str, Dict[str, Any]],
+) -> set[str]:
+    variables = {axis["variable"] for axis in axes.values()}
+    variables.update(mesh["variable"] for mesh in meshes.values())
+    for spec in basis.values():
+        variables.update(str(variable) for variable in spec["variables"].values())
+    return variables
+
+
+def _schema_declares_variable(
+    variable: str,
+    exact_variables: set[str],
+    variable_groups: Dict[str, Dict[str, Any]],
+) -> bool:
+    if variable in exact_variables:
+        return True
+    return any(
+        _compile_schema_variable_pattern(
+            str(group["pattern"]),
+            f"variable_groups.{name}.pattern",
+        ).fullmatch(variable)
+        for name, group in variable_groups.items()
+    )
+
+
+def _interpret_schema_visualization_templates(
+    raw_templates: Any,
+    axes: Dict[str, Dict[str, str]],
+    meshes: Dict[str, Dict[str, Any]],
+    basis: Dict[str, Dict[str, Any]],
+    variable_groups: Dict[str, Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    if raw_templates is None:
+        return []
+    if not isinstance(raw_templates, (list, tuple)):
+        raise ValueError("visualization_templates must be a list")
+
+    exact_variables = _schema_declared_exact_variables(axes, meshes, basis)
+    templates: List[Dict[str, Any]] = []
+    names: set[str] = set()
+    for index, raw_template in enumerate(raw_templates):
+        field_name = f"visualization_templates[{index}]"
+        template = _schema_mapping(raw_template, field_name)
+        name = _schema_nonempty_string(template.get("name"), f"{field_name}.name")
+        if name in names:
+            raise ValueError(f"Duplicate visualization template name: {name}")
+        names.add(name)
+
+        raw_variables = template.get("variables")
+        if not isinstance(raw_variables, (list, tuple)) or not raw_variables:
+            raise ValueError(f"{field_name}.variables must be a non-empty list")
+        variables = []
+        for variable_index, raw_variable in enumerate(raw_variables):
+            variable_field = f"{field_name}.variables[{variable_index}]"
+            variable_spec = _schema_mapping(raw_variable, variable_field)
+            variable = _schema_nonempty_string(
+                variable_spec.get("variable"),
+                f"{variable_field}.variable",
+            )
+            if not _schema_declares_variable(
+                variable,
+                exact_variables,
+                variable_groups,
+            ):
+                raise ValueError(
+                    f"{variable_field}.variable is not declared by the schema: "
+                    f"{variable}"
+                )
+            variables.append(
+                {
+                    "role": _schema_nonempty_string(
+                        variable_spec.get("role"),
+                        f"{variable_field}.role",
+                    ),
+                    "variable": variable,
+                }
+            )
+
+        normalized = dict(template)
+        normalized.update(
+            {
+                "name": name,
+                "kind": _schema_nonempty_string(
+                    template.get("kind"),
+                    f"{field_name}.kind",
+                ),
+                "variables": variables,
+            }
+        )
+        templates.append(normalized)
+    return templates
+
+
+def _interpret_schema_optional_metadata(
+    schema: Dict[str, Any],
+    file_groups: Dict[str, Dict[str, Any]],
+) -> Dict[str, Any]:
+    result: Dict[str, Any] = {}
+
+    axes = _interpret_schema_axes(schema.get("axes"), file_groups)
+    if "axes" in schema:
+        result["axes"] = axes
+
+    meshes = _interpret_schema_meshes(schema.get("meshes"), file_groups)
+    if "meshes" in schema:
+        result["meshes"] = meshes
+
+    basis = _interpret_schema_basis(schema.get("basis"), file_groups)
+    if "basis" in schema:
+        result["basis"] = basis
+
+    variable_groups = _interpret_schema_variable_groups(
+        schema.get("variable_groups"),
+        file_groups,
+        axes,
+        meshes,
+        basis,
+    )
+    if "variable_groups" in schema:
+        result["variable_groups"] = variable_groups
+
+    templates = _interpret_schema_visualization_templates(
+        schema.get("visualization_templates"),
+        axes,
+        meshes,
+        basis,
+        variable_groups,
+    )
+    if "visualization_templates" in schema:
+        result["visualization_templates"] = templates
+
+    return result
+
+
 def _schema_extract_step_indices(group_name: str, group: Dict[str, Any], datasets: List[str]) -> List[int]:
     pattern = _schema_nonempty_string(group.get("step_from_filename"), f"files.{group_name}.step_from_filename")
     try:
@@ -375,11 +768,13 @@ def _interpret_campaign_schema(
         file_groups[group_name] = result
 
     _apply_root_time(schema.get("time"), file_groups)
-    return {
+    layout = {
         "schema_version": schema_version,
         "schema_name": str(schema.get("name", "") or ""),
         "file_groups": file_groups,
     }
+    layout.update(_interpret_schema_optional_metadata(schema, file_groups))
+    return layout
 
 
 def _load_campaign_schema(
@@ -388,7 +783,7 @@ def _load_campaign_schema(
     timeseries: Dict[str, List[str]],
     campaign_schema_path: Optional[str] = None,
 ) -> Dict[str, Any]:
-    schema_source = "embedded schema.yaml"
+    schema_source = "embedded campaign schema"
     if campaign_schema_path:
         schema_file = Path(campaign_schema_path).expanduser().resolve()
         if not schema_file.exists():
@@ -447,6 +842,251 @@ def _read_numeric_array(fr: FileReader, varpath: str, varinfo: Optional[Dict[str
     return values
 
 
+def _schema_dataset_variables(
+    vars_dict: Dict[str, Any],
+    dataset: str,
+) -> Dict[str, Any]:
+    prefix = f"{str(dataset or '').strip('/')}/"
+    if not prefix or prefix == "/":
+        return {}
+    return {
+        str(path)[len(prefix) :]: info
+        for path, info in vars_dict.items()
+        if str(path).startswith(prefix)
+    }
+
+
+def _schema_required_variable_path(
+    vars_dict: Dict[str, Any],
+    dataset: str,
+    variable: str,
+    field_name: str,
+) -> str:
+    path = f"{str(dataset or '').strip('/')}/{str(variable or '').strip('/')}"
+    if path not in vars_dict:
+        raise ValueError(
+            f"{field_name} references missing ADIOS variable "
+            f"{variable!r} in dataset {dataset!r}"
+        )
+    return path
+
+
+def _schema_axis_values(
+    context: Dict[str, Any],
+    fr: FileReader,
+    vars_dict: Dict[str, Any],
+    dataset: str,
+    axis_name: str,
+) -> List[float]:
+    cache_key = f"{dataset}\0{axis_name}"
+    cached = context["axis_values"].get(cache_key)
+    if isinstance(cached, list):
+        return list(cached)
+
+    axis = context["axes"][axis_name]
+    variable = str(axis.get("variable", "") or "")
+    path = _schema_required_variable_path(
+        vars_dict,
+        dataset,
+        variable,
+        f"axes.{axis_name}.variable",
+    )
+    values = _read_numeric_array(fr, path, vars_dict.get(path))
+    if not values:
+        raise ValueError(
+            f"axes.{axis_name}.variable could not be read as a numeric axis: "
+            f"{path}"
+        )
+    context["axis_values"][cache_key] = list(values)
+    return values
+
+
+def _validate_schema_resource_variables(
+    schema_layout: Dict[str, Any],
+    context: Dict[str, Any],
+    vars_dict: Dict[str, Any],
+) -> None:
+    resources: List[tuple[str, str, List[str]]] = []
+    for name, axis in context["axes"].items():
+        resources.append(
+            (
+                f"axes.{name}",
+                str(axis.get("file", "") or ""),
+                [str(axis.get("variable", "") or "")],
+            )
+        )
+    for name, mesh in context["meshes"].items():
+        resources.append(
+            (
+                f"meshes.{name}",
+                str(mesh.get("file", "") or ""),
+                [str(mesh.get("variable", "") or "")],
+            )
+        )
+    for name, spec in context["basis"].items():
+        resources.append(
+            (
+                f"basis.{name}",
+                str(spec.get("file", "") or ""),
+                [str(variable) for variable in spec.get("variables", {}).values()],
+            )
+        )
+
+    file_groups = schema_layout.get("file_groups", {}) or {}
+    for field_name, file_group, variables in resources:
+        datasets = list((file_groups.get(file_group, {}) or {}).get("datasets", []) or [])
+        for dataset in datasets:
+            for variable in variables:
+                _schema_required_variable_path(
+                    vars_dict,
+                    str(dataset),
+                    variable,
+                    field_name,
+                )
+
+
+def _build_schema_variable_context(
+    schema_layout: Dict[str, Any],
+    context: Dict[str, Any],
+    fr: FileReader,
+    vars_dict: Dict[str, Any],
+) -> None:
+    if not context["variable_groups"]:
+        return
+
+    _validate_schema_resource_variables(schema_layout, context, vars_dict)
+    file_groups = schema_layout.get("file_groups", {}) or {}
+    matched_variables: set[str] = set()
+
+    for group_order, (group_name, group) in enumerate(
+        context["variable_groups"].items()
+    ):
+        file_group = str(group.get("file", "") or "")
+        datasets = list((file_groups.get(file_group, {}) or {}).get("datasets", []) or [])
+        matcher = _compile_schema_variable_pattern(
+            str(group.get("pattern", "") or ""),
+            f"variable_groups.{group_name}.pattern",
+        )
+
+        for raw_dataset in datasets:
+            dataset = str(raw_dataset)
+            relative_variables = _schema_dataset_variables(vars_dict, dataset)
+            matches = sorted(
+                variable
+                for variable in relative_variables
+                if matcher.fullmatch(variable)
+            )
+            if not matches:
+                raise ValueError(
+                    f"variable_groups.{group_name}.pattern matched no ADIOS "
+                    f"variables in dataset {dataset!r}: {group.get('pattern')}"
+                )
+
+            for variable in matches:
+                existing = context["variable_metadata"].setdefault(dataset, {}).get(variable)
+                if existing is not None:
+                    raise ValueError(
+                        f"ADIOS variable {variable!r} in dataset {dataset!r} "
+                        f"matches multiple variable groups: "
+                        f"{existing.get('variable_group')} and {group_name}"
+                    )
+
+                metadata: Dict[str, Any] = {
+                    "variable_group": str(group_name),
+                    "variable_group_order": group_order,
+                    "role": str(group.get("role", "") or ""),
+                    "static": bool(group.get("static", False)),
+                }
+                for key in (
+                    "data_model",
+                    "mesh",
+                    "basis",
+                    "time_axis",
+                    "x_axis",
+                    "timestep_axis",
+                ):
+                    if key in group:
+                        metadata[key] = group[key]
+
+                time_axis_name = str(
+                    group.get("time_axis", group.get("x_axis", "")) or ""
+                )
+                if time_axis_name:
+                    axis = context["axes"][time_axis_name]
+                    metadata["time_values"] = _schema_axis_values(
+                        context,
+                        fr,
+                        vars_dict,
+                        dataset,
+                        time_axis_name,
+                    )
+                    metadata["time_source"] = (
+                        f"variable:{str(axis.get('variable', '') or '')}"
+                    )
+                    metadata["schema_num_timesteps"] = len(metadata["time_values"])
+                    if "time_axis" in group:
+                        metadata["time_axis_variable"] = str(
+                            axis.get("variable", "") or ""
+                        )
+                    if "x_axis" in group:
+                        metadata["x_axis_variable"] = str(
+                            axis.get("variable", "") or ""
+                        )
+                elif metadata["static"]:
+                    metadata["schema_num_timesteps"] = 1
+
+                timestep_axis_name = str(group.get("timestep_axis", "") or "")
+                if timestep_axis_name:
+                    axis = context["axes"][timestep_axis_name]
+                    metadata["timestep_values"] = _schema_axis_values(
+                        context,
+                        fr,
+                        vars_dict,
+                        dataset,
+                        timestep_axis_name,
+                    )
+                    metadata["timestep_axis_variable"] = str(
+                        axis.get("variable", "") or ""
+                    )
+
+                context["variable_metadata"][dataset][variable] = metadata
+                matched_variables.add(variable)
+
+    for template in context["visualization_templates"]:
+        for variable_spec in template.get("variables", []) or []:
+            variable = str(variable_spec.get("variable", "") or "")
+            if variable not in matched_variables and not any(
+                variable
+                in _schema_dataset_variables(vars_dict, str(dataset))
+                for group in file_groups.values()
+                for dataset in group.get("datasets", []) or []
+            ):
+                raise ValueError(
+                    f"Visualization template {template.get('name')!r} "
+                    f"references missing ADIOS variable: {variable}"
+                )
+
+    for dataset, variable_map in context["variable_metadata"].items():
+        for variable, metadata in variable_map.items():
+            template_refs = []
+            for template in context["visualization_templates"]:
+                roles = [
+                    str(spec.get("role", "") or "")
+                    for spec in template.get("variables", []) or []
+                    if str(spec.get("variable", "") or "") == variable
+                ]
+                if roles:
+                    template_refs.append(
+                        {
+                            "name": str(template.get("name", "") or ""),
+                            "kind": str(template.get("kind", "") or ""),
+                            "roles": roles,
+                        }
+                    )
+            if template_refs:
+                metadata["visualization_templates"] = template_refs
+
+
 def _build_schema_time_context(
     schema_layout: Dict[str, Any],
     fr: FileReader,
@@ -462,6 +1102,15 @@ def _build_schema_time_context(
         "group_step_metadata": {},
         "group_frame_metadata": {},
         "file_groups": schema_layout.get("file_groups", {}) or {},
+        "axes": schema_layout.get("axes", {}) or {},
+        "meshes": schema_layout.get("meshes", {}) or {},
+        "basis": schema_layout.get("basis", {}) or {},
+        "variable_groups": schema_layout.get("variable_groups", {}) or {},
+        "visualization_templates": (
+            schema_layout.get("visualization_templates", []) or []
+        ),
+        "axis_values": {},
+        "variable_metadata": {},
     }
 
     for group_name, group in context["file_groups"].items():
@@ -560,7 +1209,64 @@ def _build_schema_time_context(
             if isinstance(step_index, int):
                 context["group_step_metadata"].setdefault(str(group_name), {})[step_index] = metadata
 
+    if vars_dict:
+        _build_schema_variable_context(
+            schema_layout,
+            context,
+            fr,
+            dict(vars_dict),
+        )
+
     return context
+
+
+def _schema_metadata_for_frame(
+    schema_context: Dict[str, Any],
+    metadata: Dict[str, Any],
+    frame_index: Optional[int],
+) -> Dict[str, Any]:
+    result = dict(metadata)
+    if frame_index is not None and metadata.get("schema_mode") == "file_per_timestep":
+        try:
+            frame_value = int(frame_index)
+        except Exception:
+            frame_value = -1
+        group_name = str(metadata.get("schema_file_group", "") or "")
+        step_metadata = schema_context.get("group_step_metadata", {}).get(group_name, {}).get(frame_value)
+        if isinstance(step_metadata, dict):
+            result = dict(step_metadata)
+        else:
+            frame_metadata = schema_context.get("group_frame_metadata", {}).get(group_name, {}).get(frame_value)
+            if isinstance(frame_metadata, dict):
+                result = dict(frame_metadata)
+    return result
+
+
+def _finalize_schema_axis_metadata(
+    metadata: Dict[str, Any],
+    frame_index: Optional[int],
+    include_time_values: bool,
+) -> Dict[str, Any]:
+    result = dict(metadata)
+    time_values = result.pop("time_values", None)
+    timestep_values = result.pop("timestep_values", None)
+    if include_time_values and isinstance(time_values, list):
+        result["time_values"] = list(time_values)
+    if include_time_values and isinstance(timestep_values, list):
+        result["timestep_values"] = list(timestep_values)
+
+    if frame_index is not None:
+        try:
+            idx = int(frame_index)
+        except Exception:
+            idx = -1
+        if isinstance(time_values, list) and 0 <= idx < len(time_values):
+            result["physical_time"] = time_values[idx]
+            result["time_index"] = idx
+        if isinstance(timestep_values, list) and 0 <= idx < len(timestep_values):
+            result["simulation_timestep"] = timestep_values[idx]
+
+    return result
 
 
 def _schema_metadata_for_file(
@@ -578,35 +1284,68 @@ def _schema_metadata_for_file(
     if not isinstance(base, dict):
         return {}
 
-    metadata = dict(base)
-    if frame_index is not None and metadata.get("schema_mode") == "file_per_timestep":
-        try:
-            frame_value = int(frame_index)
-        except Exception:
-            frame_value = -1
-        group_name = str(metadata.get("schema_file_group", "") or "")
-        step_metadata = schema_context.get("group_step_metadata", {}).get(group_name, {}).get(frame_value)
-        if isinstance(step_metadata, dict):
-            metadata = dict(step_metadata)
-        else:
-            frame_metadata = schema_context.get("group_frame_metadata", {}).get(group_name, {}).get(frame_value)
-            if isinstance(frame_metadata, dict):
-                metadata = dict(frame_metadata)
+    metadata = _schema_metadata_for_frame(
+        schema_context,
+        dict(base),
+        frame_index,
+    )
+    return _finalize_schema_axis_metadata(
+        metadata,
+        frame_index,
+        include_time_values,
+    )
 
-    time_values = metadata.pop("time_values", None)
-    if include_time_values and isinstance(time_values, list):
-        metadata["time_values"] = list(time_values)
 
-    if isinstance(time_values, list) and frame_index is not None:
-        try:
-            idx = int(frame_index)
-        except Exception:
-            idx = -1
-        if 0 <= idx < len(time_values):
-            metadata["physical_time"] = time_values[idx]
-            metadata["time_index"] = idx
+def _schema_metadata_for_variable(
+    schema_context: Dict[str, Any],
+    source_dataset: str,
+    variable_id: str,
+    frame_index: Optional[int] = None,
+    include_time_values: bool = True,
+) -> Dict[str, Any]:
+    metadata = _schema_metadata_for_file(
+        schema_context,
+        source_dataset,
+        frame_index=frame_index,
+        include_time_values=True,
+    )
+    if not schema_context:
+        return metadata
 
-    return metadata
+    dataset = str(source_dataset or "").strip("/")
+    variable = str(variable_id or "").strip("/")
+    if dataset and variable.startswith(dataset + "/"):
+        variable = variable[len(dataset) + 1 :]
+    variable_metadata = (
+        schema_context.get("variable_metadata", {})
+        .get(dataset, {})
+        .get(variable)
+    )
+    if not isinstance(variable_metadata, dict):
+        return _finalize_schema_axis_metadata(
+            metadata,
+            frame_index,
+            include_time_values,
+        )
+
+    for key in (
+        "time_values",
+        "timestep_values",
+        "time_source",
+        "physical_time",
+        "time_index",
+        "simulation_timestep",
+    ):
+        metadata.pop(key, None)
+    metadata.update(variable_metadata)
+    if metadata.get("static"):
+        metadata.pop("time_source", None)
+
+    return _finalize_schema_axis_metadata(
+        metadata,
+        frame_index,
+        include_time_values,
+    )
 
 
 def _visualization_record_matches_frame(
@@ -1444,7 +2183,10 @@ def parse_campaign(
         schema_context = _build_schema_time_context(campaign_schema, fr, vars_dict)
 
         for varname, varinfo in vars_dict.items():
-            if varname == "schema.yaml" or varname.startswith("schema.yaml/"):
+            if any(
+                varname == schema_name or varname.startswith(schema_name + "/")
+                for schema_name in _CAMPAIGN_SCHEMA_DATASET_NAMES
+            ):
                 continue
 
             type_key = varname + "/__dataset_type__"
@@ -1678,9 +2420,10 @@ def parse_campaign(
                         }
                     )
                     document.update(
-                        _schema_metadata_for_file(
+                        _schema_metadata_for_variable(
                             schema_context,
                             record_source_dataset or source_dataset,
+                            str(record.get("variable_id") or record["physical_var"]),
                             frame_index=frame_index_value,
                             include_time_values=False,
                         )
@@ -1710,9 +2453,10 @@ def parse_campaign(
                     "max": fmax,
                 }
                 document.update(
-                    _schema_metadata_for_file(
+                    _schema_metadata_for_variable(
                         schema_context,
                         source_dataset or file,
+                        physical_var,
                         include_time_values=True,
                     )
                 )
@@ -1810,9 +2554,10 @@ def parse_campaign(
                 }
             )
             document.update(
-                _schema_metadata_for_file(
+                _schema_metadata_for_variable(
                     schema_context,
                     record_source_dataset,
+                    str(record.get("variable_id") or record["physical_var"]),
                     frame_index=int(visualization_api_entry.get("item_order", 0) or 0),
                     include_time_values=False,
                 )

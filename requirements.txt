@@ -4,5 +4,5 @@ adios2
 numpy
 Pillow
 
-# Optional: only needed when using --image-association-schema with YAML files.
+# Optional: needed for YAML campaign and image-association schemas.
 PyYAML

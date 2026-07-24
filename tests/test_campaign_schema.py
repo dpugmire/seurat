@@ -1,3 +1,4 @@
+import sqlite3
 import sys
 import tempfile
 import types
@@ -19,7 +20,9 @@ from ingest_campaign import (
     _build_schema_time_context,
     _interpret_campaign_schema,
     _load_campaign_schema,
+    _read_campaign_schema_text,
     _schema_metadata_for_file,
+    _schema_metadata_for_variable,
 )
 
 
@@ -190,6 +193,257 @@ files:
         self.assertEqual(
             context["dataset_metadata"][datasets[0]]["schema_pattern"],
             "xgc.3d.*.bp",
+        )
+
+    def test_canonical_embedded_schema_takes_precedence_over_legacy_name(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            campaign_path = Path(temp_dir) / "campaign.aca"
+            con = sqlite3.connect(campaign_path)
+            con.executescript(
+                """
+                create table dataset (
+                    rowid integer primary key,
+                    name text,
+                    fileformat text,
+                    deltime integer
+                );
+                create table replica (
+                    rowid integer primary key,
+                    datasetid integer,
+                    keyid integer,
+                    deltime integer
+                );
+                create table repfiles (replicaid integer, fileid integer);
+                create table file (
+                    fileid integer primary key,
+                    compression integer,
+                    data blob
+                );
+                """
+            )
+            for rowid, name, text in (
+                (1, "schema.yaml", "name: legacy\n"),
+                (2, "__campaign_schema.yaml", "name: canonical\n"),
+            ):
+                con.execute(
+                    "insert into dataset(rowid, name, fileformat, deltime) "
+                    "values (?, ?, 'TEXT', 0)",
+                    (rowid, name),
+                )
+                con.execute(
+                    "insert into replica(rowid, datasetid, keyid, deltime) "
+                    "values (?, ?, 0, 0)",
+                    (rowid, rowid),
+                )
+                con.execute(
+                    "insert into file(fileid, compression, data) values (?, 0, ?)",
+                    (rowid, text.encode("utf-8")),
+                )
+                con.execute(
+                    "insert into repfiles(replicaid, fileid) values (?, ?)",
+                    (rowid, rowid),
+                )
+            con.commit()
+            con.close()
+
+            schema_text = _read_campaign_schema_text(str(campaign_path))
+
+        self.assertEqual(schema_text, "name: canonical\n")
+
+    def test_m3dc1_variable_groups_use_independent_axes(self):
+        dataset = "fwz3_2d_mgi3.rs4.bp"
+        schema = {
+            "schema_version": 1,
+            "name": "code_m3dc1",
+            "files": {
+                "output": {
+                    "role": "time_series",
+                    "mode": "append",
+                    "path": dataset,
+                }
+            },
+            "axes": {
+                "field_time": {
+                    "file": "output",
+                    "variable": "metadata/time_values",
+                    "kind": "time",
+                },
+                "scalar_time": {
+                    "file": "output",
+                    "variable": "scalars/time",
+                    "kind": "time",
+                },
+                "simulation_timestep": {
+                    "file": "output",
+                    "variable": "metadata/ntimesteps",
+                    "kind": "timestep_index",
+                },
+            },
+            "meshes": {
+                "mesh": {
+                    "file": "output",
+                    "variable": "mesh/elements",
+                    "model": "m3dc1_2d_unstructured_elements",
+                }
+            },
+            "basis": {
+                "basis": {
+                    "file": "output",
+                    "variables": {
+                        "mi": "basis/mi",
+                        "ni": "basis/ni",
+                    },
+                    "model": "m3dc1_reduced_quintic_2d_basis",
+                }
+            },
+            "variable_groups": {
+                "fields": {
+                    "file": "output",
+                    "pattern": "fields/*",
+                    "role": "field",
+                    "data_model": "m3dc1_element_basis_coefficients",
+                    "mesh": "mesh",
+                    "basis": "basis",
+                    "time_axis": "field_time",
+                    "timestep_axis": "simulation_timestep",
+                },
+                "equilibrium_fields": {
+                    "file": "output",
+                    "pattern": "equilibrium/fields/*",
+                    "role": "field",
+                    "data_model": "m3dc1_element_basis_coefficients",
+                    "mesh": "mesh",
+                    "basis": "basis",
+                    "static": True,
+                },
+                "scalars": {
+                    "file": "output",
+                    "pattern": "scalars/*",
+                    "role": "scalar_trace",
+                    "x_axis": "scalar_time",
+                },
+                "pellet": {
+                    "file": "output",
+                    "pattern": "pellet/*",
+                    "role": "pellet_trace",
+                    "x_axis": "scalar_time",
+                },
+            },
+            "visualization_templates": [
+                {
+                    "name": "P_2d",
+                    "kind": "field_2d",
+                    "variables": [
+                        {"role": "color-by", "variable": "fields/P"}
+                    ],
+                }
+            ],
+        }
+        values = {
+            f"{dataset}/metadata/time_values": [0.0, 100.0],
+            f"{dataset}/metadata/ntimesteps": [0, 50],
+            f"{dataset}/scalars/time": [0.0, 50.0, 100.0],
+        }
+        variables = {
+            **{
+                path: {"AvailableStepsCount": "1"}
+                for path in values
+            },
+            f"{dataset}/mesh/elements": {},
+            f"{dataset}/basis/mi": {},
+            f"{dataset}/basis/ni": {},
+            f"{dataset}/fields/P": {"AvailableStepsCount": "2"},
+            f"{dataset}/equilibrium/fields/P": {"AvailableStepsCount": "1"},
+            f"{dataset}/scalars/toroidal_current": {"AvailableStepsCount": "1"},
+            f"{dataset}/pellet/pellet_r": {"AvailableStepsCount": "1"},
+        }
+        layout = _interpret_campaign_schema(schema, [dataset], {})
+        context = _build_schema_time_context(
+            layout,
+            FakeReader(values),
+            variables,
+        )
+
+        field = _schema_metadata_for_variable(
+            context,
+            dataset,
+            "fields/P",
+            frame_index=1,
+            include_time_values=False,
+        )
+        scalar = _schema_metadata_for_variable(
+            context,
+            dataset,
+            "scalars/toroidal_current",
+        )
+        equilibrium = _schema_metadata_for_variable(
+            context,
+            dataset,
+            "equilibrium/fields/P",
+        )
+        pellet = _schema_metadata_for_variable(
+            context,
+            dataset,
+            "pellet/pellet_r",
+        )
+
+        self.assertEqual(field["variable_group"], "fields")
+        self.assertEqual(field["physical_time"], 100.0)
+        self.assertEqual(field["simulation_timestep"], 50.0)
+        self.assertEqual(field["data_model"], "m3dc1_element_basis_coefficients")
+        self.assertEqual(scalar["variable_group"], "scalars")
+        self.assertEqual(scalar["time_values"], [0.0, 50.0, 100.0])
+        self.assertEqual(pellet["variable_group"], "pellet")
+        self.assertEqual(pellet["x_axis_variable"], "scalars/time")
+        self.assertEqual(equilibrium["variable_group"], "equilibrium_fields")
+        self.assertTrue(equilibrium["static"])
+        self.assertNotIn("time_values", equilibrium)
+        self.assertNotIn("physical_time", equilibrium)
+
+    def test_variable_group_patterns_match_full_paths(self):
+        schema = {
+            "schema_version": 1,
+            "files": {
+                "output": {
+                    "role": "time_series",
+                    "mode": "append",
+                    "path": "run.bp",
+                }
+            },
+            "variable_groups": {
+                "fields": {
+                    "file": "output",
+                    "pattern": "fields/*",
+                    "role": "field",
+                },
+                "equilibrium_fields": {
+                    "file": "output",
+                    "pattern": "equilibrium/fields/*",
+                    "role": "field",
+                    "static": True,
+                },
+            },
+        }
+        variables = {
+            "run.bp/fields/P": {},
+            "run.bp/equilibrium/fields/P": {},
+        }
+        layout = _interpret_campaign_schema(schema, ["run.bp"], {})
+        context = _build_schema_time_context(
+            layout,
+            FakeReader({}),
+            variables,
+        )
+
+        self.assertEqual(
+            context["variable_metadata"]["run.bp"]["fields/P"]["variable_group"],
+            "fields",
+        )
+        self.assertEqual(
+            context["variable_metadata"]["run.bp"]["equilibrium/fields/P"][
+                "variable_group"
+            ],
+            "equilibrium_fields",
         )
 
 

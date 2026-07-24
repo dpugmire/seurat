@@ -159,8 +159,10 @@ export SEURAT_SQLITE_DB=/path/to/viewer-cache.sqlite
 
 ## Embedded Campaign Schema
 
-Seurat reads a text dataset named `schema.yaml` from the campaign archive. A
-time-series group written by appending steps to one ADIOS dataset can select
+Seurat reads hpc-campaign's canonical embedded text dataset
+`__campaign_schema.yaml`. Archives using the earlier `schema.yaml` name remain
+supported as a fallback. If both names are present, the canonical name wins.
+A time-series group written by appending steps to one ADIOS dataset can select
 either one exact campaign dataset with `path` or multiple datasets with
 `pattern`. Each matched append-mode dataset resolves its time variable relative
 to itself.
@@ -190,6 +192,18 @@ files:
 Embedding the schema keeps it available when the campaign is copied to another
 system. For archives without an embedded schema, pass the same schema explicitly
 with `--campaign-schema path/to/schema.yaml`.
+
+Optional `axes`, `meshes`, `basis`, `variable_groups`, and
+`visualization_templates` sections describe multiple logical data models inside
+one source dataset. Variable-group patterns match complete ADIOS variable paths;
+`*` stays within one path segment and `**` may cross `/` separators. Seurat
+validates referenced ADIOS variables during ingest and attaches the matched
+group, role, data model, resources, axes, and static status to each variable.
+
+This permits one M3D-C1 BP dataset, for example, to use
+`metadata/time_values` for `fields/*`, `scalars/time` for `scalars/*` and
+`pellet/*`, and no timeline for static `equilibrium/fields/*`. The canonical
+M3D-C1 example is `data/schema_examples/code_m3dc1.yaml` in hpc-campaign.
 
 Visualization association notes:
 

@@ -186,6 +186,30 @@ class CampaignDbNavigationTests(unittest.TestCase):
             "step",
         )
 
+    def test_rank_one_scalar_plot_uses_schema_time_values(self):
+        class PlotReader:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self, _path, **_kwargs):
+                return [2.0, 4.0, 8.0]
+
+        metadata = {"Shape": "3", "AvailableStepsCount": "1"}
+        with patch("db.FileReader", return_value=PlotReader()):
+            x, y, x_label = CampaignDb._read_plot_series(
+                "/campaign/example.aca",
+                "run-a/output.bp/scalars/energy",
+                metadata,
+                [0.0, 0.5, 2.0],
+            )
+
+        self.assertEqual(x.tolist(), [0.0, 0.5, 2.0])
+        self.assertEqual(y.tolist(), [2.0, 4.0, 8.0])
+        self.assertEqual(x_label, "time")
+
     def test_scalar_plot_candidate_preserves_declared_time_values(self):
         self.collection.insert_one(
             {
@@ -592,6 +616,48 @@ class CampaignDbNavigationTests(unittest.TestCase):
                     ],
                 },
             ],
+        )
+
+    def test_schema_variable_groups_override_shape_grouping(self):
+        self.collection.insert_one(
+            {
+                "campaign_path": "/campaign/example.aca",
+                "variable_id": "fields/P",
+                "variable_name": "P",
+                "variable_type": "variable",
+                "source_dataset": "run-a/m3dc1.bp",
+                "variable_path": "run-a/m3dc1.bp",
+                "variable_group": "fields",
+                "variable_group_order": 0,
+                "role": "field",
+                "metadata": {"Shape": "27894,20", "AvailableStepsCount": "51"},
+            }
+        )
+        self.collection.insert_one(
+            {
+                "campaign_path": "/campaign/example.aca",
+                "variable_id": "scalars/toroidal_current",
+                "variable_name": "toroidal_current",
+                "variable_type": "variable",
+                "source_dataset": "run-a/m3dc1.bp",
+                "variable_path": "run-a/m3dc1.bp",
+                "variable_group": "scalars",
+                "variable_group_order": 2,
+                "role": "scalar_trace",
+                "metadata": {"Shape": "10001", "AvailableStepsCount": "1"},
+            }
+        )
+
+        groups = self.db.grouped_variable_names()
+
+        self.assertEqual(
+            [group["name"] for group in groups],
+            ["fields", "scalars", "0D", "2D"],
+        )
+        self.assertEqual(groups[0]["variables"][0]["id"], "fields/P")
+        self.assertEqual(
+            groups[1]["variables"][0]["id"],
+            "scalars/toroidal_current",
         )
 
     def test_only_visualized_preserves_current_catalog_behavior(self):
