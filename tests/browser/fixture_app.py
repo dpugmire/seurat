@@ -141,6 +141,7 @@ def build_fixture_server(mode):
     }
     state.gridRows = 1
     state.gridCols = 3
+    state.gridSizingMode = "static"
     state.gridColumnSizes = [280, 280, 280]
     state.gridRowSizes = [352]
     state.gridColumnWeights = [1.0, 1.0, 1.0]
@@ -157,6 +158,25 @@ def build_fixture_server(mode):
         collapsed = dict(state.variableGroupCollapsed or {})
         collapsed[str(group_name)] = not bool(collapsed.get(str(group_name), False))
         state.variableGroupCollapsed = collapsed
+
+    def pick_var(variable_id):
+        picked = str(variable_id or "")
+        if str(state.selectedVar or "") == picked:
+            state.selectedVar = ""
+            state.draggedVar = ""
+            state.detailsSelectedVar = ""
+            return
+        state.selectedVar = picked
+        state.draggedVar = picked
+        state.detailsSelectedVar = picked
+        state.detailsNumSources = 2
+        state.detailsGlobalMin = "8"
+        state.detailsGlobalMax = "32"
+        state.detailsMedianMin = "10"
+        state.detailsMedianMax = "30"
+        state.detailsMeanMin = "11"
+        state.detailsMeanMax = "29"
+        state.queryViewLabel = "Variables"
 
     def set_active_grid_cell(cell_index, _ignored=0, _extend_selection=0):
         state.activeGridCell = int(cell_index)
@@ -256,6 +276,13 @@ def build_fixture_server(mode):
         state.contextMenuY = int(float(y))
         state.contextMenuVisible = True
 
+    def open_cell_context_menu(cell_index, x, y):
+        show_cell_context_menu(
+            cell_index,
+            max(8, int(float(x)) - 216),
+            max(8, int(float(y)) + 12),
+        )
+
     def show_item_context_menu(item, x, y):
         state.contextMenuKind = "item"
         state.contextMenuItem = str(item)
@@ -333,8 +360,10 @@ def build_fixture_server(mode):
         state.workspaceStateStatus = f"Loaded: {state.workspaceStatePath}"
 
     server.controller.add("toggle_variable_group")(toggle_variable_group)
+    server.controller.add("pick_var")(pick_var)
     server.controller.add("set_active_grid_cell")(set_active_grid_cell)
     server.controller.add("set_grid_layout_size")(set_grid_layout_size)
+    server.controller.add("open_cell_context_menu")(open_cell_context_menu)
     server.controller.trigger("assign_var_to_grid_cell_trigger")(
         assign_var_to_grid_cell
     )

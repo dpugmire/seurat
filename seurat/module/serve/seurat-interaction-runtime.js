@@ -253,6 +253,11 @@
     }
 
     function onClick(event) {
+      if (
+        closestWithinRoot(event && event.target, ".seurat-cell-menu", root)
+      ) {
+        return;
+      }
       if (!closestWithinRoot(event && event.target, "#seurat-context-menu", root)) {
         trameTrigger("hide_context_menu_trigger", []);
       }

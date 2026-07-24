@@ -76,7 +76,10 @@ class SeuratAppTests(unittest.TestCase):
         )
         self.assertEqual(
             server.state.trame__styles,
-            [f"{seurat_module.BASE_URL}/seurat.css"],
+            [
+                f"{seurat_module.BASE_URL}/seurat.css",
+                f"{seurat_module.BASE_URL}/seurat-modern.css",
+            ],
         )
         self.assertEqual(
             server.serve[seurat_module.BASE_URL],

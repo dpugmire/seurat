@@ -21,5 +21,6 @@ scripts = [
 ]
 styles = [
     f"{BASE_URL}/seurat.css",
+    f"{BASE_URL}/seurat-modern.css",
 ]
 vue_use = ["seuratGridRuntime", "seuratInteractionRuntime", "seuratResizeRuntime"]

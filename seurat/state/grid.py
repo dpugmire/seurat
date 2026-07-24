@@ -3,8 +3,8 @@
 from seurat.models.grid import empty_grid_cell
 
 
-GRID_ROWS = 3
-GRID_COLS = 3
+GRID_ROWS = 2
+GRID_COLS = 2
 GRID_CELL_SIZE = 300
 GRID_HEADER_HEIGHT = 32
 GRID_FIT_MIN_CELL_SIZE = 180
@@ -27,7 +27,7 @@ def defaults():
         "gridMaxRows": 8,
         "gridMaxCols": 8,
         "gridLayoutMode": "uniform",
-        "gridSizingMode": "static",
+        "gridSizingMode": "fit",
         "gridCellSize": GRID_CELL_SIZE,
         "gridMinCellSize": 80,
         "gridMaxCellSize": 5000,

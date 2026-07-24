@@ -218,15 +218,15 @@ def _build_grid_settings_popover(ctrl):
 def _build_grid_layout_controls(ctrl):
     with html.Div(classes="seurat-grid-layout-controls"):
         with html.Div(classes="seurat-toolbar-menu"):
-            html.Button(
-                "⚙",
+            with html.Button(
                 classes="seurat-toolbar-menu-btn seurat-toolbar-icon-btn",
                 raw_attrs=[
                     'type="button"',
                     'aria-label="Settings"',
                 ],
                 title="Settings",
-            )
+            ):
+                vuetify.VIcon("mdi-cog-outline", size=18)
             with vuetify.VMenu(
                 activator="parent",
                 location="bottom end",
@@ -251,20 +251,14 @@ class GridWorkspace(TrameComponent):
         ctrl = self.ctrl
         with vuetify.VCol(
             classes="seurat-content-column",
-            style="display:flex; flex-direction:column; height:80vh;",
+            style="display:flex; flex-direction:column;",
         ):
             with vuetify.VCard(
-                variant="outlined",
-                style="flex:1 1 auto; min-height:0; display:flex; flex-direction:column;",
+                variant="flat",
+                classes="seurat-workspace-card",
             ):
                 with vuetify.VCardText(
-                    style=(
-                        "height:100%;"
-                        "min-height:0;"
-                        "display:flex;"
-                        "flex-direction:column;"
-                        "overflow:hidden;"
-                    ),
+                    classes="seurat-workspace-card-content",
                 ):
                     self.runtime = GridRuntime()
                     html.Div(
@@ -276,61 +270,67 @@ class GridWorkspace(TrameComponent):
                         ],
                     )
                     with html.Div(classes="seurat-vcr-bar seurat-grid-controls-header"):
+                        with html.Div(classes="seurat-workspace-meta"):
+                            html.Div("Workspace", classes="seurat-workspace-name")
+                            html.Div(
+                                "{{ gridRows + ' × ' + gridCols }}",
+                                classes="seurat-workspace-dimensions",
+                            )
                         with html.Div(classes="seurat-vcr-controls"):
-                            html.Button(
-                                "|<",
+                            with html.Button(
                                 classes="seurat-vcr-btn",
                                 raw_attrs=[
                                     'type="button"',
                                     'data-vcr-action="start"',
                                 ],
                                 title="Jump to start",
-                            )
-                            html.Button(
-                                "<<",
+                            ):
+                                vuetify.VIcon("mdi-skip-previous", size=17)
+                            with html.Button(
                                 classes="seurat-vcr-btn",
                                 raw_attrs=[
                                     'type="button"',
                                     'data-vcr-action="back"',
                                 ],
                                 title="Back step",
-                            )
-                            html.Button(
-                                "▶",
+                            ):
+                                vuetify.VIcon("mdi-step-backward", size=17)
+                            with html.Button(
                                 classes="seurat-vcr-btn",
                                 raw_attrs=[
                                     'type="button"',
                                     'data-vcr-action="play"',
                                 ],
                                 title="Play all",
-                            )
-                            html.Button(
-                                "⏸",
+                            ):
+                                vuetify.VIcon("mdi-play", size=17)
+                            with html.Button(
                                 classes="seurat-vcr-btn",
                                 raw_attrs=[
                                     'type="button"',
                                     'data-vcr-action="pause"',
                                 ],
                                 title="Pause all",
-                            )
-                            html.Button(
-                                ">>",
+                            ):
+                                vuetify.VIcon("mdi-pause", size=17)
+                            with html.Button(
                                 classes="seurat-vcr-btn",
                                 raw_attrs=[
                                     'type="button"',
                                     'data-vcr-action="forward"',
                                 ],
                                 title="Forward step",
-                            )
-                            html.Button(
-                                ">|",
+                            ):
+                                vuetify.VIcon("mdi-step-forward", size=17)
+                            with html.Button(
                                 classes="seurat-vcr-btn",
                                 raw_attrs=[
                                     'type="button"',
                                     'data-vcr-action="end"',
                                 ],
                                 title="Jump to end",
-                            )
+                            ):
+                                vuetify.VIcon("mdi-skip-next", size=17)
                         html.Span(
                             "Step = 0",
                             id="seurat-vcr-time-value",
@@ -387,15 +387,18 @@ class GridWorkspace(TrameComponent):
                             " + 'overflow:auto;'"
                             " + 'width:100%;'"
                             " + 'box-sizing:border-box;'"
-                            " + 'margin:4px 0 0 0;'"
-                            " + 'border:1px solid #cfcfcf;')",
+                            " + 'gap:var(--seurat-space-3);'"
+                            " + 'padding:var(--seurat-space-3);'"
+                            " + 'background:var(--seurat-workspace-bg);'"
+                            " + 'border:1px solid var(--seurat-border);'"
+                            " + 'border-radius:var(--seurat-radius-lg);')",
                         ),
                     ):
                         with vuetify.Template(v_for="(tile, i) in gridCells", key="i"):
                             with html.Div(
                                 click=(
                                     ctrl.set_active_grid_cell,
-                                    "[i, (($event && $event.target && $event.target.closest && $event.target.closest('.seurat-cell-close, .seurat-timeline-driver-btn, .seurat-grid-track-resize-handle')) ? 1 : 0), (($event && $event.shiftKey) ? 1 : 0)]",
+                                    "[i, (($event && $event.target && $event.target.closest && $event.target.closest('.seurat-cell-menu, .seurat-timeline-driver-btn, .seurat-grid-track-resize-handle')) ? 1 : 0), (($event && $event.shiftKey) ? 1 : 0)]",
                                 ),
                                 classes="seurat-dropcell",
                                 raw_attrs=[
@@ -416,10 +419,8 @@ class GridWorkspace(TrameComponent):
                                     " ? ('width:100%; height:100%; min-width:' + Number(gridFitMinCellSize || 180) + 'px; min-height:' + (Number(gridFitMinCellSize || 180) + 32) + 'px;')"
                                     " : 'width:100%; height:100%; min-width:0; min-height:0;'))"
                                     " + 'overflow:hidden; cursor:pointer; display:flex; flex-direction:column; position:relative; box-sizing:border-box;'"
-                                    " + ((gridLayoutMode === 'spanning') ? 'border:1px solid #cfcfcf;' : ('border-left:1px solid #cfcfcf; border-top:1px solid #cfcfcf;'"
-                                    " + (((i % gridCols) === (gridCols - 1)) ? 'border-right:1px solid #cfcfcf;' : '')"
-                                    " + ((i >= ((gridRows - 1) * gridCols)) ? 'border-bottom:1px solid #cfcfcf;' : '')))"
-                                    " + ((activeGridCell === i) ? 'background:#e7f0ff; outline:3px solid #0d47a1; outline-offset:-3px; z-index:2;' : '')"
+                                    " + 'border:1px solid var(--seurat-border); border-radius:var(--seurat-radius-lg); background:var(--seurat-surface);'"
+                                    " + ((activeGridCell === i) ? 'outline:2px solid var(--seurat-accent); outline-offset:1px; z-index:2;' : '')"
                                     " + ((gridLayoutMode === 'spanning' && tile && tile.grid_hidden) ? 'display:none;' : '')",
                                 ),
                             ):
@@ -529,19 +530,17 @@ class GridWorkspace(TrameComponent):
                                 )
                                 with vuetify.Template(v_if="tile && tile.variable_name"):
                                     with html.Div(
-                                        style=(
-                                            "'display:flex;'"
-                                            " + 'align-items:center;'"
-                                            " + 'gap:8px;'"
-                                            " + 'width:100%;'"
-                                            " + 'height:32px;'"
-                                            " + 'padding:4px 6px;'"
-                                            " + (((selectedGridCellMap || {})[String(i)]) ? 'background:#ef6c00; color:#fff; border-bottom:1px solid #b53d00;' : ((activeGridCell === i) ? 'background:#1565c0; color:#fff; border-bottom:1px solid #0d47a1;' : 'background:#7bd0ef; color:#111; border-bottom:1px solid #3ca7c9;'))",
-                                        ),
+                                        classes="seurat-panel-header",
+                                        raw_attrs=[
+                                            ":class=\"{ 'is-active': activeGridCell === i, 'is-selected': (selectedGridCellMap || {})[String(i)] }\"",
+                                        ],
                                     ):
                                         html.Div(
                                             "{{ tile.display_title || tile.variable_name || 'variable' }}",
-                                            style="flex:1 1 auto; min-width:0; font-size:0.9rem; font-weight:400; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;",
+                                            classes="seurat-panel-title",
+                                            raw_attrs=[
+                                                ':title="tile.display_title || tile.variable_name || \'variable\'"',
+                                            ],
                                         )
                                         with html.Button(
                                             v_if=(
@@ -555,6 +554,7 @@ class GridWorkspace(TrameComponent):
                                             raw_attrs=[
                                                 'type="button"',
                                                 ':aria-pressed="timelineDriverCell === i ? \'true\' : \'false\'"',
+                                                'aria-label="Use as timeline driver"',
                                             ],
                                             title="Use as timeline driver",
                                         ):
@@ -562,29 +562,26 @@ class GridWorkspace(TrameComponent):
                                                 classes="seurat-timeline-clock-icon",
                                                 raw_attrs=['aria-hidden="true"'],
                                             )
-                                        html.Button(
-                                            "x",
-                                            classes="seurat-cell-close",
-                                            click=(ctrl.clear_grid_cell, "[i]"),
-                                            style=(
-                                                "margin-left:auto;"
-                                                "flex:0 0 auto;"
-                                                "width:18px;"
-                                                "height:18px;"
-                                                "line-height:16px;"
-                                                "padding:0;"
-                                                "font-size:11px;"
-                                                "border:1px solid #2c7c97;"
-                                                "border-radius:2px;"
-                                                "background:#fff;"
-                                                "color:#222;"
-                                                "cursor:pointer;"
+                                        with html.Button(
+                                            classes="seurat-cell-menu",
+                                            click=(
+                                                ctrl.open_cell_context_menu,
+                                                "[i, $event.clientX, $event.clientY]",
                                             ),
-                                            title="Remove",
+                                            raw_attrs=[
+                                                'type="button"',
+                                                'aria-label="Panel menu"',
+                                            ],
+                                            title="Panel menu",
+                                    ):
+                                            vuetify.VIcon("mdi-dots-vertical", size=19)
+                                        html.Span(
+                                            "{{ tile.media_type === 'plot1d' ? 'Trace' : (String(tile.media_type || '').includes('image') ? 'Image' : ((String(tile.media_type || '').includes('movie') || String(tile.media_type || '').includes('video')) ? 'Movie' : 'View')) }}",
+                                            classes="seurat-panel-kind",
                                         )
 
                                     with html.Div(
-                                        style="width:100%; flex:1 1 auto; min-height:0; background:#111; position:relative; overflow:hidden;",
+                                        classes="seurat-panel-content",
                                     ):
                                         with vuetify.Template(v_if="tile.media_type === 'plot1d'"):
                                             html.Div(
@@ -790,40 +787,74 @@ class GridWorkspace(TrameComponent):
                                                 )
                                 with vuetify.Template(v_if="!(tile && tile.variable_name)"):
                                     with html.Div(classes="seurat-empty-cell"):
-                                        html.Div("+", classes="seurat-empty-plus")
-                                        html.Div("Drop variable here", classes="seurat-empty-hover-label")
+                                        vuetify.VIcon(
+                                            "mdi-cursor-move",
+                                            size=28,
+                                            classes="seurat-empty-icon",
+                                        )
+                                        html.Div(
+                                            "Drag a variable here",
+                                            classes="seurat-empty-title",
+                                        )
+                                        html.Div(
+                                            "Select a variable, then drag it into this panel",
+                                            classes="seurat-empty-hint",
+                                        )
 
-            html.Div(style="height: 8px; flex:0 0 auto;")
-
-            with vuetify.VCard(variant="outlined", style="flex:0 0 auto;"):
-                with vuetify.VCardText(class_="py-2"):
-                    with vuetify.Template(v_if="detailsSelectedVar"):
-                        with html.Div(style="display:flex; align-items:center; gap:12px; width:100%;"):
-                            html.Div("{{ 'Details: ' + detailsSelectedVar }}", class_="text-body-2")
+            with vuetify.Template(v_if="detailsSelectedVar"):
+                with vuetify.VCard(
+                    variant="flat",
+                    classes="seurat-inspector-card",
+                ):
+                    with vuetify.VCardText(classes="seurat-inspector-content"):
+                        with html.Div(classes="seurat-inspector-row"):
+                            with html.Div(classes="seurat-inspector-identity"):
+                                html.Div("Selected variable", classes="seurat-inspector-label")
+                                html.Div(
+                                    "{{ detailsSelectedVar }}",
+                                    classes="seurat-inspector-value seurat-inspector-variable",
+                                )
                             vuetify.VBtn(
-                                "{{ 'SOURCES(' + detailsNumSources + ')' }}",
+                                "{{ detailsNumSources + ' sources' }}",
+                                prepend_icon="mdi-database-outline",
                                 variant="tonal",
                                 size="small",
                                 click=ctrl.toggle_sources,
+                                classes="seurat-inspector-sources",
                             )
-                            with html.Div(
-                                class_="text-caption",
-                                style="display:flex; align-items:center; gap:12px; white-space:nowrap;",
-                            ):
-                                html.Span("Min/Max")
-                                with html.Span():
-                                    html.Strong("Global ")
-                                    html.Span("{{ detailsGlobalMin + ' / ' + detailsGlobalMax }}")
-                                with html.Span():
-                                    html.Strong("Median ")
-                                    html.Span("{{ detailsMedianMin + ' / ' + detailsMedianMax }}")
-                                with html.Span():
-                                    html.Strong("Mean ")
-                                    html.Span("{{ detailsMeanMin + ' / ' + detailsMeanMax }}")
-                            vuetify.VSpacer()
-                            html.Div("{{ 'QueryView: ' + queryViewLabel }}", class_="text-caption")
-                    with vuetify.Template(v_if="!detailsSelectedVar"):
-                        html.Div("Select a variable", class_="text-caption")
+                            with html.Div(classes="seurat-inspector-stat"):
+                                html.Div("Global", classes="seurat-inspector-label")
+                                html.Div(
+                                    "{{ detailsGlobalMin + ' / ' + detailsGlobalMax }}",
+                                    classes="seurat-inspector-value",
+                                )
+                            with html.Div(classes="seurat-inspector-stat"):
+                                html.Div("Median", classes="seurat-inspector-label")
+                                html.Div(
+                                    "{{ detailsMedianMin + ' / ' + detailsMedianMax }}",
+                                    classes="seurat-inspector-value",
+                                )
+                            with html.Div(classes="seurat-inspector-stat"):
+                                html.Div("Mean", classes="seurat-inspector-label")
+                                html.Div(
+                                    "{{ detailsMeanMin + ' / ' + detailsMeanMax }}",
+                                    classes="seurat-inspector-value",
+                                )
+                            with html.Div(classes="seurat-inspector-query"):
+                                html.Div("Query view", classes="seurat-inspector-label")
+                                html.Div(
+                                    "{{ queryViewLabel }}",
+                                    classes="seurat-inspector-value",
+                                    title=("queryViewLabel",),
+                                )
+                            vuetify.VBtn(
+                                icon="mdi-close",
+                                variant="text",
+                                size="x-small",
+                                click=(ctrl.pick_var, "[detailsSelectedVar]"),
+                                title="Close inspector",
+                                classes="seurat-inspector-close",
+                            )
             self.source_dialog.build()
             self.scalar_plot_dialog.build()
             self.plot_settings_panel.build()

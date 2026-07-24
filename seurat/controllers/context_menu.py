@@ -12,6 +12,7 @@ from seurat.models.grid import (
 class ContextMenuControllerMixin:
     ACTION_BINDINGS = (
         ("hide_context_menu", "hide_context_menu"),
+        ("open_cell_context_menu", "open_cell_context_menu"),
         ("context_menu_item_add", "context_menu_item_add"),
         ("context_menu_item_select", "context_menu_item_select"),
         ("context_menu_cell_clear", "context_menu_cell_clear"),
@@ -62,6 +63,17 @@ class ContextMenuControllerMixin:
 
     def hide_context_menu_trigger(self, **_):
         self.hide_context_menu()
+
+    def open_cell_context_menu(self, cell_index, x=0, y=0, **_):
+        try:
+            px = max(8, int(float(x)) - 216)
+        except Exception:
+            px = 8
+        try:
+            py = max(8, int(float(y)) + 12)
+        except Exception:
+            py = 8
+        self.show_cell_context_menu(cell_index, px, py)
 
     def show_item_context_menu(self, item_name, x, y, **_):
         item = str(item_name or "").strip()

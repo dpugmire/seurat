@@ -9,6 +9,8 @@ def defaults():
         "variablePaneView": "variables",
         "variableGroupCollapsed": {},
         "variableGroupCollapsedByView": {"variables": {}, "files": {}},
+        "variableSearchText": "",
+        "variableTypeFilter": "all",
         "showOnlyVisualizedVars": False,
         "selectedVar": "",
         "queryText": "",

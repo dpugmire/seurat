@@ -208,19 +208,48 @@ def test_workspace_save_and_load_restore_live_grid_track_sizes(
 def test_variable_group_expands_and_collapses(page, seurat_server):
     _open_app(page, seurat_server)
 
-    group = page.get_by_role("button", name="▾0D", exact=True)
+    group = page.locator('.seurat-var-group[data-kind="0d"] > button')
     variable = page.locator('[title="fixture/scalars.bp/internal_energy"]')
     assert variable.is_visible()
 
     group.click()
     variable.wait_for(state="hidden")
-    collapsed_group = page.get_by_role("button", name="▸0D", exact=True)
-    assert collapsed_group.get_attribute("aria-expanded") == "false"
+    assert group.get_attribute("aria-expanded") == "false"
 
-    collapsed_group.click()
+    group.click()
     variable.wait_for(state="visible")
-    expanded_group = page.get_by_role("button", name="▾0D", exact=True)
-    assert expanded_group.get_attribute("aria-expanded") == "true"
+    assert group.get_attribute("aria-expanded") == "true"
+
+
+def test_variable_search_and_type_filters(page, seurat_server):
+    _open_app(page, seurat_server)
+
+    search = page.get_by_placeholder("Search variables", exact=True)
+    internal_energy = page.locator('[data-item="internal_energy"]')
+    current_z = page.locator('[data-item="current_z"]')
+
+    search.fill("current")
+    internal_energy.wait_for(state="hidden")
+    assert current_z.is_visible()
+
+    search.fill("")
+    page.get_by_role("button", name="0D", exact=True).click()
+    current_z.wait_for(state="hidden")
+    assert internal_energy.is_visible()
+
+
+def test_variable_selection_opens_contextual_inspector(page, seurat_server):
+    _open_app(page, seurat_server)
+
+    page.locator('[data-item="internal_energy"]').click()
+
+    inspector = page.locator(".seurat-inspector-card")
+    inspector.wait_for(state="visible")
+    assert inspector.get_by_text("internal_energy", exact=True).is_visible()
+    assert inspector.get_by_text("2 sources", exact=True).is_visible()
+
+    inspector.get_by_role("button", name="Close inspector", exact=True).click()
+    inspector.wait_for(state="detached")
 
 
 def test_grid_selection_assignment_and_layout_controls(page, seurat_server):
@@ -256,7 +285,21 @@ def test_cell_context_menu_opens(page, seurat_server):
     menu = page.locator("#seurat-context-menu")
     menu.wait_for(state="visible")
     assert menu.get_by_text("internal_energy", exact=True).is_visible()
-    assert menu.get_by_text("Select Cell", exact=True).is_visible()
+    assert menu.get_by_text("Sources…", exact=True).is_visible()
+    assert menu.get_by_text("Clear panel", exact=True).is_visible()
+
+
+def test_persistent_panel_menu_opens(page, seurat_server):
+    _open_app(page, seurat_server)
+
+    page.locator(
+        '.seurat-dropcell[data-cell-index="0"] .seurat-cell-menu'
+    ).click()
+
+    menu = page.locator("#seurat-context-menu")
+    menu.wait_for(state="visible")
+    assert menu.get_by_text("internal_energy", exact=True).is_visible()
+    assert menu.get_by_text("Clear panel", exact=True).is_visible()
 
 
 def test_variable_context_menu_opens(page, seurat_server):
@@ -268,8 +311,8 @@ def test_variable_context_menu_opens(page, seurat_server):
     menu = page.locator("#seurat-context-menu")
     menu.wait_for(state="visible")
     assert menu.get_by_text("internal_energy", exact=True).is_visible()
-    assert menu.get_by_text("Add To Grid", exact=True).is_visible()
-    assert menu.get_by_text("Select Variable", exact=True).is_visible()
+    assert menu.get_by_text("Add to workspace", exact=True).is_visible()
+    assert menu.get_by_text("Select variable", exact=True).is_visible()
 
 
 def test_grid_cell_drag_moves_content(page, seurat_server):

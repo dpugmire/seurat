@@ -270,6 +270,7 @@ class CampaignDbNavigationTests(unittest.TestCase):
                 "hide_context_menu",
                 "move_grid_cell",
                 "load_workspace_state",
+                "open_cell_context_menu",
                 "open_plot_settings_plugin_options",
                 "pick_grid_cell_visualization",
                 "pick_tile_visualization",
@@ -498,6 +499,7 @@ class CampaignDbNavigationTests(unittest.TestCase):
 
     def test_workspace_fit_sizing_round_trip_restores_track_weights(self):
         state, controller = self.make_controller()
+        controller.actions["set_grid_layout_size"](3, 3)
         owner = controller.actions["save_workspace_state"].__self__
         owner._apply_live_grid_sizing(
             {
@@ -1063,21 +1065,21 @@ class CampaignDbNavigationTests(unittest.TestCase):
         controller.actions["toggle_timeline_driver_cell"](0)
         self.assertEqual(state.timelineDriverCell, 0)
 
-        controller.actions["move_grid_cell"](0, 4)
+        controller.actions["move_grid_cell"](0, 3)
 
         self.assertEqual(state.timelineDriverCell, -1)
         self.assertEqual(state.gridCells[0]["variable_id"], "")
-        self.assertEqual(state.gridCells[4]["variable_id"], "density")
-        self.assertEqual(state.activeGridCell, 4)
-        self.assertEqual(state.selectedGridCellIndices, [4])
-        self.assertEqual(state.selectedGridCellMap, {"4": True})
+        self.assertEqual(state.gridCells[3]["variable_id"], "density")
+        self.assertEqual(state.activeGridCell, 3)
+        self.assertEqual(state.selectedGridCellIndices, [3])
+        self.assertEqual(state.selectedGridCellMap, {"3": True})
 
-        controller.actions["toggle_timeline_driver_cell"](4)
-        self.assertEqual(state.timelineDriverCell, 4)
+        controller.actions["toggle_timeline_driver_cell"](3)
+        self.assertEqual(state.timelineDriverCell, 3)
 
-        controller.actions["clear_grid_cell"](4)
+        controller.actions["clear_grid_cell"](3)
         self.assertEqual(state.timelineDriverCell, -1)
-        self.assertEqual(state.gridCells[4]["variable_id"], "")
+        self.assertEqual(state.gridCells[3]["variable_id"], "")
         self.assertEqual(state.selectedGridCellIndices, [])
         self.assertEqual(state.selectedGridCellMap, {})
 
@@ -1105,7 +1107,7 @@ class CampaignDbNavigationTests(unittest.TestCase):
 
     def test_shift_selection_includes_contiguous_selectable_cells(self):
         state, controller = self.make_controller()
-        for index in range(5):
+        for index in range(4):
             state.gridCells[index].update(
                 {
                     "variable_id": "density",
@@ -1117,13 +1119,13 @@ class CampaignDbNavigationTests(unittest.TestCase):
         state.selectedGridCellIndices = [0]
         state.selectedGridCellMap = {"0": True}
 
-        controller.actions["set_active_grid_cell"](4, multi=1)
+        controller.actions["set_active_grid_cell"](3, multi=1)
 
-        self.assertEqual(state.activeGridCell, 4)
-        self.assertEqual(state.selectedGridCellIndices, [0, 1, 2, 3, 4])
+        self.assertEqual(state.activeGridCell, 3)
+        self.assertEqual(state.selectedGridCellIndices, [0, 1, 2, 3])
         self.assertEqual(
             state.selectedGridCellMap,
-            {str(index): True for index in range(5)},
+            {str(index): True for index in range(4)},
         )
 
     def test_unimplemented_navigation_views_fail_explicitly(self):

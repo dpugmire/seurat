@@ -30,15 +30,21 @@ class SeuratUI(TrameComponent):
     def build(self, campaign_name=""):
         with SinglePageLayout(self.server) as layout:
             layout.title.set_text(campaign_name or "Seurat")
+            layout.toolbar.classes = "seurat-app-bar"
+            layout.title.classes = "seurat-campaign-title"
+            layout.title.title = campaign_name or "Seurat"
+            layout.content.classes = "seurat-app-content"
             layout.icon.click = (
                 "workspaceDrawerOpen = !workspaceDrawerOpen"
             )
+            layout.icon.title = "Workspace menu"
             with vuetify.VNavigationDrawer(
                 v_model=("workspaceDrawerOpen",),
                 v_if=("workspaceDrawerOpen",),
                 location="left",
                 temporary=True,
                 width=320,
+                classes="seurat-workspace-drawer",
             ) as drawer:
                 self.workspace_menu.build()
             layout.drawer = drawer
@@ -50,7 +56,10 @@ class SeuratUI(TrameComponent):
                 self.interaction_runtime = InteractionRuntime()
                 self.resize_runtime = ResizeRuntime()
                 self.help_dialog.build()
-                with vuetify.VContainer(fluid=True, class_="pa-2"):
+                with vuetify.VContainer(
+                    fluid=True,
+                    classes="seurat-shell-container",
+                ):
                     with vuetify.VRow(classes="seurat-main-row", no_gutters=True):
                         self.variable_panel.build()
                         self.grid_workspace.build()
