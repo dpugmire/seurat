@@ -9,6 +9,7 @@ from seurat.widgets import InteractionRuntime, ResizeRuntime
 from .context_menu import ContextMenu
 from .dialogs import HelpDialog
 from .grid import GridWorkspace
+from .query_assistant import QueryAssistantDialog
 from .toolbar import QueryToolbar
 from .variables import VariablePanel
 from .workspace import WorkspaceMenu
@@ -18,6 +19,7 @@ class SeuratUI(TrameComponent):
     def __init__(self, server, campaign_name=""):
         super().__init__(server)
         self.query_toolbar = QueryToolbar(server)
+        self.query_assistant = QueryAssistantDialog(server)
         self.help_dialog = HelpDialog(server)
         self.workspace_menu = WorkspaceMenu(server)
         self.variable_panel = VariablePanel(server)
@@ -50,6 +52,7 @@ class SeuratUI(TrameComponent):
                 self.interaction_runtime = InteractionRuntime()
                 self.resize_runtime = ResizeRuntime()
                 self.help_dialog.build()
+                self.query_assistant.build()
                 with vuetify.VContainer(fluid=True, class_="pa-2"):
                     with vuetify.VRow(classes="seurat-main-row", no_gutters=True):
                         self.variable_panel.build()

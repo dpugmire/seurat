@@ -8,6 +8,10 @@ NavigationView = Literal["variables", "files", "objects", "campaign"]
 CatalogFilter = Dict[str, Any]
 
 
+class QueryExecutionError(RuntimeError):
+    """Raised when a backend cannot evaluate a syntactically valid query."""
+
+
 class NavigationResource(TypedDict, total=False):
     file_count: int
     variable_id: str

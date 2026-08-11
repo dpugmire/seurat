@@ -9,3 +9,12 @@ SOURCE_FIELDS = ["source_dataset", "producer", "casename", "file", "min", "max"]
 
 MOVIE_FPS = int(os.getenv("MOVIE_FPS", "2"))
 MAX_MOVIE_FRAMES = int(os.getenv("MAX_MOVIE_FRAMES", "240"))
+
+SEURAT_LLM_MODEL = os.getenv("SEURAT_LLM_MODEL", "").strip()
+SEURAT_LLM_API_KEY = os.getenv("SEURAT_LLM_API_KEY", "ollama").strip()
+SEURAT_LLM_BASE_URL = os.getenv(
+    "SEURAT_LLM_BASE_URL", "http://localhost:11434/v1"
+).strip()
+SEURAT_LLM_TIMEOUT_SECONDS = float(
+    os.getenv("SEURAT_LLM_TIMEOUT_SECONDS", "30")
+)

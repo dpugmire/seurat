@@ -10,6 +10,8 @@ flowchart LR
   Client["Trame Vue client<br/>Renders toolbar, catalog, grid, dialogs, plots, and media<br/>Widgets bind state; JS runtimes own browser interactions"]
   State["Trame state<br/>Serializable UI state shared by Python and the browser<br/>Catalog, sources, grid, timeline, settings, and menus"]
   Controllers["Domain controllers<br/>Receive UI actions and state changes<br/>Call domain logic and application operations<br/>Write normalized results back to Trame state"]
+  QueryAssistant["Optional Query Assistant<br/>Natural language to schema-v1 action proposal<br/>Capped catalog context · no viewer invocation<br/>Explicit review and Apply"]
+  ViewerActions["Viewer Action contracts<br/>Allowlisted, validated operations<br/>Phase 1: catalog.query · deterministic source ranking<br/>Extensible to additional viewer capabilities"]
   Models["Pure domain logic<br/>Deterministic grid, source, timeline, plot, and plugin rules<br/>No Trame, database, ACA, or Phobos dependencies<br/>Directly unit-testable"]
   Facade["SeuratApplication facade<br/>Backend-neutral operations used by controllers<br/>Hides local documents, ACA paths, Django objects,<br/>and REST response formats"]
   Capabilities["Backend capabilities<br/>Catalog: navigation and availability · Sources: descriptors and statistics<br/>Query: paused for redesign · Media and jobs: planned<br/>Contracts return normalized Seurat data-transfer objects"]
@@ -30,6 +32,9 @@ flowchart LR
 
   Client <--> State
   State <--> Controllers
+  Controllers --> QueryAssistant
+  QueryAssistant --> ViewerActions
+  Controllers --> ViewerActions
   Controllers --> Models
   Controllers --> Facade
   Facade --> Capabilities
@@ -61,6 +66,24 @@ flowchart LR
   background execution, and artifact persistence.
 - Tokens remain on the Python server and must never be serialized into Trame
   state or browser-visible media attributes.
+- The Query Assistant is a proposal adapter, not an autonomous control path. It
+  can see only the user's request and bounded catalog metadata, and it emits a
+  schema-v1 Viewer Action envelope. Phase 1 accepts one validated
+  `catalog.query` action.
+- Source ranking is deterministic application logic. The model identifies the
+  variable, statistic, and ordering; Seurat reads local per-source metadata and
+  resolves the winning value. Numeric source statistics are not sent to the
+  provider.
+- The resolved action must pass the existing parser and backend preview before
+  the user can apply it. The generated Python-like query is a temporary local
+  compatibility representation, not model-authored code.
+- An assistant request carries an explicit UI target. The catalog target updates
+  the global query; the source-filter target previews and filters only the open
+  Sources dialog for its selected variable. Both produce a validated
+  `catalog.query` proposal and retain explicit review and Apply steps.
+- The Viewer Action contract is the extension point for future non-query
+  interface operations. New action types require explicit schemas, validation,
+  preview semantics, and authorization; Phase 1 does not expose them.
 
 ## Current And Planned Capability Boundary
 
@@ -68,7 +91,7 @@ flowchart LR
 | --- | --- | --- |
 | Catalog | Backend-neutral navigation and status | Implement against Phobos campaigns, forays, and variables. |
 | Sources | Backend-neutral descriptors, statistics, lookup, and compatibility restriction resolution | Preserve stable source identity and remove the legacy query document after redesign. |
-| Query | Python-like parser plus local filter documents | Redesign semantics first, then add a versioned backend-neutral query capability. |
+| Query | Schema-v1 `catalog.query` Viewer Actions with deterministic local source ranking; actions currently compile to Python-like local filter documents after validation | Move execution behind a backend-neutral query capability while retaining the Viewer Action contract and explicit review/apply flow. |
 | Stored visualization/media | Controllers still call local data/rendering paths | Add descriptors, explicit timeline metadata, and authorized media transport in Phase 5C. |
 | Generated visualization/plugins | Local synchronous generation and plugin paths | Add job, progress, cancellation, error, and result contracts in Phase 5D. |
 | Phobos | Design and gap analysis only | Add authenticated adapter after capability contracts are stable. |

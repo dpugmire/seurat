@@ -208,6 +208,15 @@ class WorkspaceControllerMixin:
                 f"Saved query is not valid: {self.state.queryError}"
             )
         self.refresh_variable_list()
+        viewer_action = catalog.get("viewer_action", {})
+        self.state.activeViewerActionPlan = (
+            dict(viewer_action) if isinstance(viewer_action, dict) else {}
+        )
+        self.state.activeNaturalLanguageQuery = str(
+            catalog.get("natural_language_query", "") or ""
+        )
+        if self.state.activeNaturalLanguageQuery:
+            self.state.queryViewLabel = self.state.activeNaturalLanguageQuery
 
         self.state.scalarPlotPolicy = str(
             visualization.get("scalar_plot_policy", "always") or "always"

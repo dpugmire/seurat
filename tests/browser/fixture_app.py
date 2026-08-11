@@ -189,6 +189,36 @@ def build_fixture_server(mode):
         "internal_energy": "internal_energy",
         "current_z": "current_z",
     }
+    state.detailsSelectedVar = "internal_energy"
+    state.detailsSelectedVarId = "internal_energy"
+    state.detailsNumSources = 2
+    state.sourceRowsAll = [
+        {
+            "_key": "source-128",
+            "variable_id": "internal_energy",
+            "source_dataset": "run-128/output.bp",
+            "sourceName": "run-128/output.bp",
+            "min": "1",
+            "max": "9",
+            "min_value": 1.0,
+            "max_value": 9.0,
+        },
+        {
+            "_key": "source-64",
+            "variable_id": "internal_energy",
+            "source_dataset": "run-64/output.bp",
+            "sourceName": "run-64/output.bp",
+            "min": "2",
+            "max": "4",
+            "min_value": 2.0,
+            "max_value": 4.0,
+        },
+    ]
+    state.sourceRows = list(state.sourceRowsAll)
+    state.selectedSourceKeys = ["source-128"]
+    state.selectedSourceLabel = "run-128/output.bp"
+    state.queryAssistantAvailable = True
+    state.queryAssistantProvider = "Deterministic browser fixture"
     state.variableGroupCollapsed = {"0D": False, "2D": False}
     state.variableGroupCollapsedByView = {
         "variables": dict(state.variableGroupCollapsed),
@@ -435,6 +465,86 @@ def build_fixture_server(mode):
     def update_scalar_field_contour_color(color):
         state.scalarFieldSettingsContourColor = str(color or "#ffffff")
 
+    def reset_query_assistant_proposal():
+        state.queryAssistantProposalText = ""
+        state.queryAssistantProposalSummary = ""
+        state.queryAssistantActionPlan = {}
+        state.queryAssistantExplanation = ""
+        state.queryAssistantStatus = ""
+        state.queryAssistantError = ""
+
+    def open_query_assistant():
+        previous_target = state.queryAssistantTarget
+        reset_query_assistant_proposal()
+        state.queryAssistantTarget = "catalog"
+        if previous_target != "catalog":
+            state.queryAssistantRequestText = ""
+        state.showQueryAssistant = True
+
+    def open_source_query_assistant():
+        reset_query_assistant_proposal()
+        state.queryAssistantTarget = "source_filter"
+        state.queryAssistantRequestText = state.sourceFilterDraftText
+        state.showQueryAssistant = True
+
+    def close_query_assistant():
+        state.showQueryAssistant = False
+
+    def translate_query_request():
+        if state.queryAssistantTarget == "source_filter":
+            state.queryAssistantProposalText = (
+                'max > 5.0 and contains(source_dataset, "128")'
+            )
+            state.queryAssistantProposalSummary = (
+                "Select sources for internal_energy with 2 conditions."
+            )
+            state.queryAssistantStatus = "Valid · 1 source row"
+            state.queryAssistantVariableCount = 1
+            state.queryAssistantSourceCount = 1
+        else:
+            state.queryAssistantProposalText = "var == 'internal_energy'"
+            state.queryAssistantProposalSummary = (
+                "Select variables for internal_energy."
+            )
+            state.queryAssistantStatus = "Valid · 1 variable"
+            state.queryAssistantVariableCount = 1
+            state.queryAssistantSourceCount = 0
+        state.queryAssistantActionPlan = {
+            "version": 1,
+            "actions": [
+                {
+                    "type": "catalog.query",
+                    "arguments": {
+                        "select": "variables",
+                        "result_variable_id": "internal_energy",
+                    },
+                }
+            ],
+        }
+        state.queryAssistantExplanation = (
+            "Select the exact internal_energy variable."
+        )
+
+    def validate_query_proposal():
+        state.queryAssistantStatus = (
+            "Valid · 1 source row"
+            if state.queryAssistantTarget == "source_filter"
+            else "Valid · 1 variable"
+        )
+
+    def apply_query_proposal():
+        if state.queryAssistantTarget == "source_filter":
+            state.sourceFilterDraftText = state.queryAssistantProposalText
+            state.sourceFilterText = state.queryAssistantProposalText
+            state.sourceRows = [dict(state.sourceRowsAll[0])]
+        else:
+            state.queryText = state.queryAssistantProposalText
+        state.showQueryAssistant = False
+
+    def toggle_sources():
+        state.sourceDialogTitle = "Sources: internal_energy"
+        state.showSourcesModal = not bool(state.showSourcesModal)
+
     server.controller.add("toggle_variable_group")(toggle_variable_group)
     server.controller.add("set_active_grid_cell")(set_active_grid_cell)
     server.controller.add("set_grid_layout_size")(set_grid_layout_size)
@@ -456,6 +566,15 @@ def build_fixture_server(mode):
     server.controller.add("update_scalar_field_contour_color")(
         update_scalar_field_contour_color
     )
+    server.controller.add("toggle_sources")(toggle_sources)
+    server.controller.add("open_query_assistant")(open_query_assistant)
+    server.controller.add("open_source_query_assistant")(
+        open_source_query_assistant
+    )
+    server.controller.add("close_query_assistant")(close_query_assistant)
+    server.controller.add("translate_query_request")(translate_query_request)
+    server.controller.add("validate_query_proposal")(validate_query_proposal)
+    server.controller.add("apply_query_proposal")(apply_query_proposal)
     build_ui(server, campaign_name=f"browser-{mode}.aca")
     return server
 

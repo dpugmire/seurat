@@ -64,12 +64,23 @@ class SourceDialog(TrameComponent):
                             )
                             vuetify.VTextField(
                                 v_model=("sourceFilterDraftText",),
-                                placeholder="e.g. contains(producer, 'F0.03968') and min > 0.32",
+                                placeholder=(
+                                    "Natural language + Ask, or Advanced Query + Filter"
+                                ),
                                 density="compact",
                                 hide_details=True,
                                 variant="outlined",
                                 style="max-width:620px; min-width:360px;",
                             )
+                            with vuetify.Template(v_if="queryAssistantAvailable"):
+                                vuetify.VBtn(
+                                    "Ask",
+                                    color="primary",
+                                    variant="tonal",
+                                    size="small",
+                                    title="Interpret as natural language",
+                                    click=ctrl.open_source_query_assistant,
+                                )
                             vuetify.VBtn(
                                 "Filter",
                                 variant="tonal",

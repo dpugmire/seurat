@@ -272,6 +272,11 @@ class RecordingController:
 
         return register
 
+    def set(self, name, clear=False):
+        if clear:
+            self.actions.pop(name, None)
+        return self.add(name)
+
     def trigger(self, name):
         def register(callback):
             self.triggers[name] = callback
@@ -582,6 +587,43 @@ class BackendInjectionTests(unittest.TestCase):
         self.assertEqual(state.querySourceRestrictionFilter, {"producer": "run"})
         self.assertEqual(state.querySourceRestrictionCount, 2)
         self.assertEqual(state.queryStatus, "Query OK · 2 source runs")
+
+    def test_invalid_query_preserves_the_previous_active_filter(self):
+        backend = FakeCatalogBackend(VARIABLE_NAVIGATION)
+        state = RecordingState()
+        db = SimpleNamespace(ok=True, last_error="")
+        init_state(state, db)
+        state.queryText = "var == 'energy'"
+        server = SimpleNamespace(state=state, controller=RecordingController())
+        attach_controllers(
+            server=server,
+            backend=backend,
+            db=db,
+            collection=SimpleNamespace(),
+            parse_campaign=lambda *_args, **_kwargs: None,
+            campaign_path="/campaign/example.aca",
+        )
+
+        self.assertTrue(server.controller.actions["run_query"]())
+        self.assertEqual(state.queryFilter, {"variable_name": "energy"})
+        self.assertEqual(state.queryViewLabel, "var == 'energy'")
+        state.activeViewerActionPlan = {"type": "catalog.query"}
+        state.activeNaturalLanguageQuery = "show energy"
+
+        state.queryText = "var =="
+        self.assertFalse(server.controller.actions["run_query"]())
+
+        self.assertEqual(state.queryFilter, {"variable_name": "energy"})
+        self.assertEqual(state.queryViewLabel, "var == 'energy'")
+        self.assertEqual(
+            state.activeViewerActionPlan,
+            {"type": "catalog.query"},
+        )
+        self.assertEqual(state.activeNaturalLanguageQuery, "show energy")
+        self.assertEqual(
+            state.queryStatus,
+            "Query ERROR · active query unchanged",
+        )
 
 
 if __name__ == "__main__":

@@ -8,7 +8,7 @@ from trame.widgets import vuetify3 as vuetify
 class QueryToolbar(TrameComponent):
     def build(self):
         ctrl = self.ctrl
-        html.Span("Query:", class_="text-caption ml-4")
+        html.Span("Advanced Query:", class_="text-caption ml-4")
         vuetify.VBtn(
             "?",
             click=ctrl.show_query_help,
@@ -27,6 +27,15 @@ class QueryToolbar(TrameComponent):
             class_="mx-2",
         )
         vuetify.VBtn("Query", click=ctrl.run_query, variant="outlined", size="small")
+        with vuetify.Template(v_if="queryAssistantAvailable"):
+            vuetify.VBtn(
+                "Ask",
+                click=ctrl.open_query_assistant,
+                variant="tonal",
+                size="small",
+                class_="ml-1",
+                title="Translate natural language into a query",
+            )
         vuetify.VBtn(
             "Clear",
             click=ctrl.clear_query,

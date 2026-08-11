@@ -121,6 +121,13 @@ def workspace_document(state, campaign_path: str) -> Dict[str, Any]:
                     _state_value(state, "selectedVar", "") or ""
                 ),
                 "query_text": str(_state_value(state, "queryText", "") or ""),
+                "viewer_action": _json_copy(
+                    _state_value(state, "activeViewerActionPlan", {}),
+                    "Active viewer action",
+                ),
+                "natural_language_query": str(
+                    _state_value(state, "activeNaturalLanguageQuery", "") or ""
+                ),
             },
             "grid": {
                 "rows": _state_value(state, "gridRows", 3),

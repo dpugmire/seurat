@@ -27,5 +27,10 @@ class ControllerBase:
         self.campaign_path = context.campaign_path
         self.image_association_schema_path = context.image_association_schema_path
         self.campaign_schema_path = context.campaign_schema_path
+        self.query_translator = context.query_translator
+        self.state.queryAssistantAvailable = self.query_translator is not None
+        self.state.queryAssistantProvider = (
+            self.query_translator.description if self.query_translator else ""
+        )
         self.application = SeuratApplication(backend=context.backend)
         self.plugin_source_variables_cache = {}

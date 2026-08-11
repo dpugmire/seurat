@@ -150,6 +150,15 @@ class CatalogControllerMixin:
             return and_filter(query_filter, source_restriction)
         return query_filter or source_restriction or None
 
+    @staticmethod
+    def combined_query_filter(
+        query_filter: Dict[str, Any],
+        source_restriction: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        if query_filter and source_restriction:
+            return and_filter(query_filter, source_restriction)
+        return query_filter or source_restriction or None
+
     def variable_pane_view(self) -> str:
         view = str(getattr(self.state, "variablePaneView", "variables") or "variables")
         return "files" if view == "files" else "variables"
@@ -540,43 +549,87 @@ Notes:
             return True
 
         try:
-            query_filter, source_filters = python_query_to_filters(q)
-            source_summary = self.application.resolve_source_restriction(
-                {"queries": source_filters}
-            )
-            source_count = int(source_summary.get("count", 0) or 0)
-            self.state.queryFilter = query_filter
-            self.state.querySourceFilters = source_filters
-            self.state.querySourceRestrictionFilter = (
-                dict(source_summary.get("query", {}) or {}) if source_filters else {}
-            )
-            self.state.querySourceRestrictionCount = (
-                source_count if source_filters else 0
-            )
+            evaluation = self.evaluate_query_text(q)
+            self.state.queryFilter = evaluation["query_filter"]
+            self.state.querySourceFilters = evaluation["source_filters"]
+            self.state.querySourceRestrictionFilter = evaluation[
+                "source_restriction"
+            ]
+            self.state.querySourceRestrictionCount = evaluation["source_count"]
             self.state.queryError = ""
             self.state.queryStatus = (
-                f"Query OK · {source_count} source run{'s' if source_count != 1 else ''}"
-                if source_filters
+                f"Query OK · {evaluation['source_count']} source "
+                f"run{'s' if evaluation['source_count'] != 1 else ''}"
+                if evaluation["source_filters"]
                 else "Query OK"
             )
             self.state.queryViewLabel = q
         except Exception as e:
-            self.state.queryFilter = {}
-            self.state.querySourceFilters = []
-            self.state.querySourceRestrictionFilter = {}
-            self.state.querySourceRestrictionCount = 0
             self.state.queryError = f"{type(e).__name__}: {e}"
-            self.state.queryStatus = "Query ERROR"
-            self.state.queryViewLabel = "ALL"
+            self.state.queryStatus = "Query ERROR · active query unchanged"
             return False
 
         return True
 
+    def evaluate_query_text(self, query_text: str) -> Dict[str, Any]:
+        q = str(query_text or "").strip()
+        if not q:
+            return {
+                "query_filter": {},
+                "source_filters": [],
+                "source_restriction": {},
+                "source_count": 0,
+                "variable_count": 0,
+            }
+
+        query_filter, source_filters = python_query_to_filters(q)
+        source_restriction: Dict[str, Any] = {}
+        source_count = 0
+        if source_filters:
+            source_summary = self.application.resolve_source_restriction(
+                {"queries": source_filters}
+            )
+            source_restriction = dict(source_summary.get("query", {}) or {})
+            source_count = int(source_summary.get("count", 0) or 0)
+
+        active_filter = self.combined_query_filter(
+            query_filter,
+            source_restriction,
+        )
+        navigation = self.application.get_navigation(
+            {
+                "view": self.variable_pane_view(),
+                "query": active_filter or {},
+                "only_visualized": bool(self.state.showOnlyVisualizedVars),
+                "parent_id": None,
+            }
+        )
+        variable_ids = {
+            str((child.get("resource") or {}).get("variable_id", "") or "")
+            for node in navigation
+            for child in (node.get("children", []) or [])
+            if child.get("kind") == "variable"
+        }
+        variable_ids.discard("")
+        return {
+            "query_filter": query_filter,
+            "source_filters": source_filters,
+            "source_restriction": source_restriction,
+            "source_count": source_count,
+            "variable_count": len(variable_ids),
+        }
+
     def run_query(self, **_):
         if self.update_query_state():
+            self.state.activeViewerActionPlan = {}
+            self.state.activeNaturalLanguageQuery = ""
             self.refresh_after_variable_catalog_change()
+            return True
+        return False
 
     def clear_query(self, **_):
+        self.state.activeViewerActionPlan = {}
+        self.state.activeNaturalLanguageQuery = ""
         self.state.queryText = ""
         self.update_query_state()
         self.refresh_after_variable_catalog_change()
