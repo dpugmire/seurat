@@ -20,6 +20,16 @@ class WorkspaceStateTests(unittest.TestCase):
         state = SimpleNamespace()
         init_state(state, SimpleNamespace(ok=True, last_error=""))
         state.queryText = "var == 'density'"
+        state.activeViewerActionPlan = {
+            "version": 1,
+            "actions": [
+                {
+                    "type": "catalog.query",
+                    "arguments": {"result_variable_id": "density"},
+                }
+            ],
+        }
+        state.activeNaturalLanguageQuery = "show density"
         state.variablePaneView = "files"
         state.showOnlyVisualizedVars = True
         state.gridCells[0].update(
@@ -71,6 +81,18 @@ class WorkspaceStateTests(unittest.TestCase):
         self.assertEqual(
             document["state"]["catalog"]["query_text"],
             "var == 'density'",
+        )
+        self.assertEqual(
+            document["state"]["catalog"]["viewer_action"]["actions"][0]["type"],
+            "catalog.query",
+        )
+        self.assertEqual(
+            document["state"]["catalog"]["viewer_action"]["version"],
+            1,
+        )
+        self.assertEqual(
+            document["state"]["catalog"]["natural_language_query"],
+            "show density",
         )
 
         cell = document["state"]["grid"]["cells"][0]

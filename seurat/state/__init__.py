@@ -1,10 +1,19 @@
 """Explicit ownership and initialization of Seurat's client state."""
 
-from . import catalog, context_menu, grid, sources, visualization, workspace
+from . import (
+    catalog,
+    context_menu,
+    grid,
+    query_assistant,
+    sources,
+    visualization,
+    workspace,
+)
 
 
 STATE_SECTIONS = (
     ("catalog", catalog.defaults),
+    ("query_assistant", query_assistant.defaults),
     ("sources", sources.defaults),
     ("visualization", visualization.defaults),
     ("grid", grid.defaults),

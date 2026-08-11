@@ -165,6 +165,18 @@ def _float_value(value: Any) -> Optional[float]:
             return None
 
 
+def _sqlite_regexp(pattern: Any, value: Any) -> int:
+    if pattern is None or value is None:
+        return 0
+    text_pattern = str(pattern)
+    if len(text_pattern) > 2048:
+        return 0
+    try:
+        return int(re.search(text_pattern, str(value)) is not None)
+    except re.error:
+        return 0
+
+
 class _SQLiteAdmin:
     def command(self, name: str):
         if str(name).lower() != "ping":
@@ -229,6 +241,12 @@ class SQLiteCampaignCollection:
         self.database = _SQLiteDatabase()
         self._con = sqlite3.connect(str(self.path))
         self._con.row_factory = sqlite3.Row
+        self._con.create_function(
+            "regexp",
+            2,
+            _sqlite_regexp,
+            deterministic=True,
+        )
         self.ok = True
         self.last_error = ""
         self._init_schema()
@@ -554,6 +572,8 @@ class SQLiteCampaignCollection:
             return (f"{column} < ?", [value])
         if op == "$lte":
             return (f"{column} <= ?", [value])
+        if op == "$regex":
+            return (f"regexp(?, {column})", [str(value)])
         if op == "$exists":
             return (f"{column} is {'not ' if bool(value) else ''}null", [])
         raise ValueError(f"Unsupported SQLite query operator: {op}")

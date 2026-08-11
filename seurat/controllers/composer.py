@@ -1,5 +1,6 @@
 """Composition and Trame registration for Seurat's domain controllers."""
 
+import inspect
 from typing import Optional
 
 from seurat.backends import LocalCampaignBackend, SeuratBackend
@@ -10,6 +11,7 @@ from .context import ControllerContext
 from .context_menu import ContextMenuControllerMixin
 from .grid import GridControllerMixin
 from .lifecycle import LifecycleControllerMixin
+from .query_assistant import QueryAssistantControllerMixin
 from .sources import SourcesControllerMixin
 from .visualization import VisualizationControllerMixin
 from .workspace import WorkspaceControllerMixin
@@ -17,6 +19,7 @@ from .workspace import WorkspaceControllerMixin
 
 CONTROLLER_TYPES = (
     CatalogControllerMixin,
+    QueryAssistantControllerMixin,
     SourcesControllerMixin,
     GridControllerMixin,
     VisualizationControllerMixin,
@@ -28,6 +31,7 @@ CONTROLLER_TYPES = (
 
 class SeuratController(
     CatalogControllerMixin,
+    QueryAssistantControllerMixin,
     SourcesControllerMixin,
     GridControllerMixin,
     VisualizationControllerMixin,
@@ -39,7 +43,11 @@ class SeuratController(
     def register(self):
         for controller_type in CONTROLLER_TYPES:
             for action_name, method_name in controller_type.ACTION_BINDINGS:
-                self.ctrl.add(action_name)(getattr(self, method_name))
+                method = getattr(self, method_name)
+                if inspect.iscoroutinefunction(method):
+                    self.ctrl.set(action_name, clear=True)(method)
+                else:
+                    self.ctrl.add(action_name)(method)
             for trigger_name, method_name in controller_type.TRIGGER_BINDINGS:
                 self.ctrl.trigger(trigger_name)(getattr(self, method_name))
             for state_names, method_name in controller_type.STATE_CHANGE_BINDINGS:
@@ -57,6 +65,7 @@ def attach_controllers(
     image_association_schema_path: str = "",
     campaign_schema_path: str = "",
     backend: Optional[SeuratBackend] = None,
+    query_translator=None,
 ):
     catalog_backend = backend if backend is not None else LocalCampaignBackend(db)
     context = ControllerContext(
@@ -68,6 +77,7 @@ def attach_controllers(
         campaign_path=campaign_path,
         image_association_schema_path=image_association_schema_path,
         campaign_schema_path=campaign_schema_path,
+        query_translator=query_translator,
     )
     controller = SeuratController(context).register()
     return controller.refresh_variable_list

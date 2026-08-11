@@ -18,6 +18,7 @@ except ModuleNotFoundError:
 from application import SeuratApplication
 from controllers import _variable_groups_from_navigation, attach_controllers
 from db import CampaignDb
+from query_parser import python_query_to_filters, python_query_to_mongo
 from seurat.controllers.catalog import _filter_variable_groups
 from seurat.models.workspace_state import parse_workspace_document, workspace_json
 from sqlite_store import SQLiteCampaignCollection
@@ -44,6 +45,11 @@ class RecordingController:
             return callback
 
         return register
+
+    def set(self, name, clear=False):
+        if clear:
+            self.actions.pop(name, None)
+        return self.add(name)
 
     def trigger(self, name):
         def register(callback):
@@ -331,6 +337,7 @@ class CampaignDbNavigationTests(unittest.TestCase):
                 "add_var_to_grid",
                 "apply_plot_settings",
                 "apply_plugin_options",
+                "apply_query_proposal",
                 "apply_scalar_field_settings",
                 "apply_source_dialog",
                 "apply_source_dialog_filter",
@@ -344,6 +351,7 @@ class CampaignDbNavigationTests(unittest.TestCase):
                 "clear_grid_cell",
                 "clear_query",
                 "clear_source_filter",
+                "close_query_assistant",
                 "close_help_modal",
                 "confirm_scalar_plot_generation",
                 "context_menu_cell_add_source",
@@ -368,6 +376,8 @@ class CampaignDbNavigationTests(unittest.TestCase):
                 "move_grid_cell",
                 "load_workspace_state",
                 "open_plot_settings_plugin_options",
+                "open_query_assistant",
+                "open_source_query_assistant",
                 "pick_grid_cell_visualization",
                 "pick_tile_visualization",
                 "pick_var",
@@ -404,6 +414,7 @@ class CampaignDbNavigationTests(unittest.TestCase):
                 "toggle_sources",
                 "toggle_timeline_driver_cell",
                 "toggle_variable_group",
+                "translate_query_request",
                 "update_plot_background_color",
                 "update_plot_cursor_color",
                 "update_plot_grid_color",
@@ -411,6 +422,7 @@ class CampaignDbNavigationTests(unittest.TestCase):
                 "update_plot_series_line_style",
                 "update_plugin_option_value",
                 "update_scalar_field_contour_color",
+                "validate_query_proposal",
             },
         )
         self.assertEqual(
@@ -916,6 +928,66 @@ class CampaignDbNavigationTests(unittest.TestCase):
         self.assertEqual(
             groups[0]["variables"][0]["source_dataset"],
             "run-b/output.bp",
+        )
+
+    def test_literal_contains_query_executes_in_sqlite(self):
+        application = SeuratApplication(self.db)
+
+        navigation = application.get_navigation(
+            {
+                "view": "variables",
+                "query": python_query_to_mongo(
+                    "contains(source, 'run-a/scalars')"
+                ),
+                "only_visualized": False,
+            }
+        )
+
+        self.assertEqual(
+            [
+                child["resource"]["variable_id"]
+                for node in navigation
+                for child in node["children"]
+            ],
+            ["temperature"],
+        )
+
+    def test_source_restriction_combines_maximum_and_dataset_substring(self):
+        self.collection.insert_one(
+            {
+                "campaign_path": "/campaign/example.aca",
+                "variable_id": "pressure",
+                "variable_name": "pressure",
+                "variable_type": "variable",
+                "source_dataset": "run-128/output.bp",
+                "variable_path": "run-128/output.bp/pressure",
+                "min": 1.0,
+                "max": 9.0,
+            }
+        )
+        self.collection.insert_one(
+            {
+                "campaign_path": "/campaign/example.aca",
+                "variable_id": "pressure",
+                "variable_name": "pressure",
+                "variable_type": "variable",
+                "source_dataset": "run-64/output.bp",
+                "variable_path": "run-64/output.bp/pressure",
+                "min": 1.0,
+                "max": 12.0,
+            }
+        )
+        _query_filter, source_filters = python_query_to_filters(
+            'source(id == "pressure" and max > 5.0 and '
+            'contains(source_dataset, "128"))'
+        )
+
+        summary = self.db.source_restriction_summary(source_filters)
+
+        self.assertEqual(summary["count"], 1)
+        self.assertEqual(
+            summary["filter"],
+            {"source_dataset": {"$in": ["run-128/output.bp"]}},
         )
 
     def test_application_file_navigation_uses_file_nodes(self):

@@ -527,32 +527,37 @@ class SourcesControllerMixin:
             reverse=(not asc),
         )
 
-    def apply_source_filter_and_sort(self):
+    def source_rows_matching_filter(self, expression: str) -> List[Dict[str, Any]]:
         rows = self.all_source_rows()
+        expr = str(expression or "").strip()
+        if not expr:
+            return rows
+
+        row_filter, source_filters = python_query_to_filters(expr)
+        source_restriction = {}
+        if source_filters:
+            source_summary = self.application.resolve_source_restriction(
+                {"queries": source_filters}
+            )
+            source_restriction = dict(source_summary.get("query", {}) or {})
+
+        matched_rows = []
+        for row in rows:
+            values = self.source_filter_values(row)
+            if mongo_filter_matches(
+                row_filter, values
+            ) and mongo_filter_matches(source_restriction, values):
+                matched_rows.append(row)
+        return matched_rows
+
+    def apply_source_filter_and_sort(self):
         expr = str(self.state.sourceFilterText or "").strip()
-        if expr:
-            try:
-                row_filter, source_filters = python_query_to_filters(expr)
-                source_restriction = {}
-                if source_filters:
-                    source_summary = self.application.resolve_source_restriction(
-                        {"queries": source_filters}
-                    )
-                    source_restriction = dict(source_summary.get("query", {}) or {})
-                matched_rows = []
-                for row in rows:
-                    values = self.source_filter_values(row)
-                    if mongo_filter_matches(
-                        row_filter, values
-                    ) and mongo_filter_matches(source_restriction, values):
-                        matched_rows.append(row)
-                rows = matched_rows
-                self.state.sourceFilterError = ""
-            except Exception as e:
-                self.state.sourceFilterError = f"{type(e).__name__}: {e}"
-                rows = self.all_source_rows()
-        else:
+        try:
+            rows = self.source_rows_matching_filter(expr)
             self.state.sourceFilterError = ""
+        except Exception as e:
+            self.state.sourceFilterError = f"{type(e).__name__}: {e}"
+            rows = self.all_source_rows()
 
         self.state.sourceRows = self.sorted_source_rows(rows)
         self.update_selected_source_label()

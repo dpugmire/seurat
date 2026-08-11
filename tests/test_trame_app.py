@@ -10,6 +10,7 @@ from seurat.app import SeuratApp, build_parser
 from seurat.backends import LocalCampaignBackend
 from seurat import module as seurat_module
 from seurat.components import SeuratUI
+from seurat.components.query_assistant import QueryAssistantDialog
 from seurat.widgets import GridRuntime, InteractionRuntime, ResizeRuntime
 from ui import build_ui
 
@@ -129,6 +130,7 @@ class SeuratAppTests(unittest.TestCase):
         self.assertIsInstance(ui, SeuratUI)
         for component in (
             ui.query_toolbar,
+            ui.query_assistant,
             ui.help_dialog,
             ui.workspace_menu,
             ui.variable_panel,
@@ -151,6 +153,16 @@ class SeuratAppTests(unittest.TestCase):
         self.assertIn('id="seurat-variable-column"', ui.layout.html)
         self.assertIn("Search variables", ui.layout.html)
         self.assertIn("variableSearchText", ui.layout.html)
+        self.assertIsInstance(ui.query_assistant, QueryAssistantDialog)
+        self.assertIn("Query Assistant", ui.layout.html)
+        self.assertIn("Source Filter Assistant", ui.layout.html)
+        self.assertIn("Natural language + Ask", ui.layout.html)
+        self.assertIn("Apply to Source Filter", ui.layout.html)
+        self.assertIn("queryAssistantRequestText", ui.layout.html)
+        self.assertIn("queryAssistantProposalText", ui.layout.html)
+        self.assertIn("queryAssistantProposalSummary", ui.layout.html)
+        self.assertIn("Resolved Advanced Query", ui.layout.html)
+        self.assertIn("Translate natural language into a query", ui.layout.html)
         self.assertIn('id="seurat-context-menu"', ui.layout.html)
         self.assertIn("scalarFieldSettingsBackground", ui.layout.html)
         self.assertIn("scalarFieldSettingsShowHeatmap", ui.layout.html)

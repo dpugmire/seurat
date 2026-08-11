@@ -1,9 +1,10 @@
 """Explicit runtime dependencies shared by Seurat controller adapters."""
 
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 
 from seurat.backends import SeuratBackend
+from seurat.query_assistant import QueryTranslator
 
 
 @dataclass(frozen=True)
@@ -16,3 +17,4 @@ class ControllerContext:
     campaign_path: str
     image_association_schema_path: str = ""
     campaign_schema_path: str = ""
+    query_translator: Optional[QueryTranslator] = None

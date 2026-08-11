@@ -21,6 +21,8 @@ def defaults():
         "querySourceRestrictionFilter": {},
         "querySourceRestrictionCount": 0,
         "queryViewLabel": "ALL",
+        "activeViewerActionPlan": {},
+        "activeNaturalLanguageQuery": "",
         "showHelpModal": False,
         "helpModalTitle": "",
         "helpModalText": "",

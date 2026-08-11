@@ -10,6 +10,7 @@ from .contracts import (
     NavigationNode,
     NavigationRequest,
     NavigationResource,
+    QueryExecutionError,
     RepresentationSummary,
     SourceDescriptor,
     SourceLookupRequest,
@@ -32,6 +33,12 @@ class LocalCampaignBackend:
             error=str(getattr(self._campaign_db, "last_error", "") or ""),
         )
 
+    def _raise_if_unavailable(self, operation: str) -> None:
+        status = self.get_status()
+        if not status.ok:
+            detail = status.error or "backend unavailable"
+            raise QueryExecutionError(f"{operation} failed: {detail}")
+
     def get_navigation(self, request: NavigationRequest) -> List[NavigationNode]:
         view = str(request.get("view", "variables") or "variables")
         query = request.get("query") or None
@@ -41,12 +48,14 @@ class LocalCampaignBackend:
                 extra_filter=query,
                 only_visualized=only_visualized,
             )
+            self._raise_if_unavailable("Catalog query")
             return self._variable_navigation(groups)
         if view == "files":
             groups = self._campaign_db.grouped_variables_by_source_dataset(
                 extra_filter=query,
                 only_visualized=only_visualized,
             )
+            self._raise_if_unavailable("Catalog query")
             return self._file_navigation(groups)
         raise ValueError(f"Unsupported navigation view: {view}")
 
@@ -57,6 +66,7 @@ class LocalCampaignBackend:
             variable_id,
             extra_filter=query,
         )
+        self._raise_if_unavailable("Source query")
         result: SourceSummary = {
             "variable_id": str(raw.get("variable", "") or variable_id),
             "num_sources": int(raw.get("num_sources", 0) or 0),
@@ -121,6 +131,7 @@ class LocalCampaignBackend:
             visualization_name,
             extra_filter=request.get("query") or None,
         )
+        self._raise_if_unavailable("Source lookup")
         return (
             self._source_descriptor(source, variable_id)
             if isinstance(source, dict) and source
@@ -133,6 +144,7 @@ class LocalCampaignBackend:
         raw = self._campaign_db.source_restriction_summary(
             list(request.get("queries", []) or [])
         )
+        self._raise_if_unavailable("Source restriction query")
         return {
             "query": dict(raw.get("filter", {}) or {}),
             "count": int(raw.get("count", 0) or 0),

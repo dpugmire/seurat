@@ -5,6 +5,12 @@ from pathlib import Path
 
 from trame.app import TrameApp
 
+from config import (
+    SEURAT_LLM_API_KEY,
+    SEURAT_LLM_BASE_URL,
+    SEURAT_LLM_MODEL,
+    SEURAT_LLM_TIMEOUT_SECONDS,
+)
 from controllers import attach_controllers
 from db import CampaignDb
 from ingest_campaign import parse_campaign
@@ -13,6 +19,7 @@ from ui import build_ui
 
 from . import module as seurat_module
 from .backends import LocalCampaignBackend
+from .query_assistant import make_chat_completions_query_translator
 from .state import init_state
 
 
@@ -31,6 +38,7 @@ class SeuratApp(TrameApp):
         server=None,
         collection=None,
         db=None,
+        query_translator=None,
         controller_attacher=attach_controllers,
         ui_builder=build_ui,
     ):
@@ -48,6 +56,15 @@ class SeuratApp(TrameApp):
 
         self.db = db or CampaignDb(self.collection)
         self.backend = LocalCampaignBackend(self.db)
+        self.query_translator = (
+            query_translator
+            or make_chat_completions_query_translator(
+                model=SEURAT_LLM_MODEL,
+                base_url=SEURAT_LLM_BASE_URL,
+                api_key=SEURAT_LLM_API_KEY,
+                timeout_seconds=SEURAT_LLM_TIMEOUT_SECONDS,
+            )
+        )
         init_state(self.state, self.db)
 
         self.refresh_variable_list = controller_attacher(
@@ -59,6 +76,7 @@ class SeuratApp(TrameApp):
             campaign_path=self.campaign_path,
             image_association_schema_path=self.image_association_schema_path,
             campaign_schema_path=self.campaign_schema_path,
+            query_translator=self.query_translator,
         )
         self.ui = ui_builder(
             self.server,

@@ -127,6 +127,79 @@ def test_app_mounts_and_renders_structural_ui(page, seurat_server):
     assert console_errors == [], response_errors
 
 
+def test_query_assistant_reviews_before_applying(page, seurat_server):
+    console_errors, page_errors, response_errors = _open_app(page, seurat_server)
+
+    page.get_by_role("button", name="Ask").click()
+    page.get_by_text("Query Assistant", exact=True).wait_for(state="visible")
+    page.get_by_label("Request").fill("Show internal energy")
+    page.get_by_role("button", name="Translate").click()
+
+    proposal = page.get_by_label("Resolved Advanced Query")
+    proposal.wait_for(state="visible")
+    assert proposal.input_value() == "var == 'internal_energy'"
+    assert page.get_by_text(
+        "Select variables for internal_energy.", exact=True
+    ).is_visible()
+    assert page.get_by_text("Valid · 1 variable", exact=True).is_visible()
+
+    page.get_by_role("button", name="Apply").click()
+    page.get_by_text("Query Assistant", exact=True).wait_for(state="hidden")
+    assert page.locator(
+        'input[placeholder^="e.g. var =="]'
+    ).input_value() == "var == 'internal_energy'"
+
+    assert page_errors == []
+    assert console_errors == [], response_errors
+
+
+def test_source_filter_uses_query_assistant_without_changing_global_query(
+    page, seurat_server
+):
+    console_errors, page_errors, response_errors = _open_app(page, seurat_server)
+
+    global_query = page.locator('input[placeholder^="e.g. var =="]')
+    initial_global_query = global_query.input_value()
+    page.get_by_role("button", name="SOURCES(2)").click()
+    page.get_by_text("Sources: internal_energy", exact=True).wait_for(
+        state="visible"
+    )
+    source_request = page.get_by_placeholder(
+        "Natural language + Ask, or Advanced Query + Filter"
+    )
+    source_request.fill(
+        'max > 5.0 and source dataset name contains "128"'
+    )
+    page.get_by_title("Interpret as natural language").click()
+
+    page.get_by_text("Source Filter Assistant", exact=True).wait_for(
+        state="visible"
+    )
+    assert page.get_by_label("Request").input_value() == (
+        'max > 5.0 and source dataset name contains "128"'
+    )
+    page.get_by_role("button", name="Translate").click()
+    page.get_by_text("Valid · 1 source row", exact=True).wait_for(
+        state="visible"
+    )
+
+    assert global_query.input_value() == initial_global_query
+    page.get_by_role("button", name="Apply to Source Filter").click()
+
+    page.get_by_text("Source Filter Assistant", exact=True).wait_for(
+        state="hidden"
+    )
+    assert source_request.input_value() == (
+        'max > 5.0 and contains(source_dataset, "128")'
+    )
+    assert page.get_by_text("run-128/output.bp", exact=True).count() >= 1
+    assert page.get_by_text("run-64/output.bp", exact=True).count() == 0
+    assert global_query.input_value() == initial_global_query
+
+    assert page_errors == []
+    assert console_errors == [], response_errors
+
+
 def test_scalar_field_axes_and_backgrounds_use_automatic_contrast(
     page,
     seurat_server,
