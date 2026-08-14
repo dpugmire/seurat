@@ -125,6 +125,58 @@ class WorkspaceStateTests(unittest.TestCase):
         self.assertEqual(document, json.loads(content))
         validate_workspace_campaign(document, "/copy/example.aca")
 
+    def test_workspace_layout_round_trip_retains_panes_tabs_and_grids(self):
+        state = self.make_state()
+        second_grid = dict(state.workspaceLayout["panes"][0]["tabs"][0]["grid"])
+        second_grid["cells"] = [dict(cell) for cell in second_grid["cells"]]
+        second_grid["cells"][0]["variable_id"] = "temperature"
+        state.workspaceLayout = {
+            "split_direction": "horizontal",
+            "split_ratio": 0.5,
+            "active_pane_id": "pane-1",
+            "active_tab_id": "tab-1",
+            "panes": [
+                state.workspaceLayout["panes"][0],
+                {
+                    "id": "pane-2",
+                    "active_tab_id": "tab-2",
+                    "tabs": [
+                        {
+                            "id": "tab-2",
+                            "title": "2D Fields",
+                            "grid": second_grid,
+                        }
+                    ],
+                },
+            ],
+        }
+
+        document = parse_workspace_document(
+            workspace_json(state, "/campaign/example.aca")
+        )
+        workspace = document["state"]["workspace"]
+
+        self.assertEqual(workspace["split_direction"], "horizontal")
+        self.assertEqual(len(workspace["panes"]), 2)
+        self.assertEqual(workspace["panes"][1]["tabs"][0]["title"], "2D Fields")
+        self.assertEqual(
+            workspace["panes"][1]["tabs"][0]["grid"]["cells"][0][
+                "variable_id"
+            ],
+            "temperature",
+        )
+
+    def test_legacy_single_grid_document_without_workspace_is_accepted(self):
+        document = workspace_document(
+            self.make_state(),
+            "/campaign/example.aca",
+        )
+        del document["state"]["workspace"]
+
+        parsed = parse_workspace_document(json.dumps(document))
+
+        self.assertNotIn("workspace", parsed["state"])
+
     def test_rejects_wrong_format_version_and_campaign(self):
         document = workspace_document(
             self.make_state(),

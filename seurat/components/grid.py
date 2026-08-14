@@ -237,6 +237,232 @@ def _build_grid_layout_controls(ctrl):
                         _build_grid_settings_popover(ctrl)
 
 
+def _build_workspace_tab_bars(ctrl):
+    with vuetify.Template(v_for="(pane, paneIndex) in workspacePanes", key="pane.id"):
+        with html.Div(
+            classes="seurat-workspace-tab-bar",
+            raw_attrs=[
+                ":class=\"["
+                "paneIndex === 0 ? 'seurat-workspace-slot-first' : 'seurat-workspace-slot-second',"
+                "pane.id === workspaceActivePaneId ? 'is-active-pane' : ''"
+                "]\"",
+            ],
+        ):
+            with html.Div(classes="seurat-workspace-tabs-viewport"):
+                with html.Div(
+                    classes="seurat-workspace-tabs",
+                    role="tablist",
+                    raw_attrs=[':data-pane-id="pane.id"'],
+                ):
+                    with vuetify.Template(v_for="tab in pane.tabs", key="tab.id"):
+                        with html.Div(
+                            classes="seurat-workspace-tab-shell",
+                            raw_attrs=[
+                                ':class="{ \'is-pane-tab-active\': pane.active_tab_id === tab.id, \'is-workspace-active\': workspaceActiveTabId === tab.id }"',
+                            ],
+                        ):
+                            html.Button(
+                                "{{ tab.title }}",
+                                classes="seurat-workspace-tab",
+                                click=(ctrl.activate_workspace_tab, "[pane.id, tab.id]"),
+                                raw_attrs=[
+                                    'type="button"',
+                                    'role="tab"',
+                                    ':aria-selected="pane.active_tab_id === tab.id ? \'true\' : \'false\'"',
+                                    ':class="{ \'is-pane-tab-active\': pane.active_tab_id === tab.id, \'is-workspace-active\': workspaceActiveTabId === tab.id }"',
+                                    ':title="tab.title"',
+                                    ':data-pane-id="pane.id"',
+                                    ':data-tab-id="tab.id"',
+                                    'aria-haspopup="menu"',
+                                    'draggable="true"',
+                                ],
+                            )
+                            html.Button(
+                                "×",
+                                v_if="workspacePanes.reduce((count, item) => count + ((item.tabs || []).length), 0) > 1",
+                                classes="seurat-workspace-tab-close",
+                                click=(
+                                    ctrl.close_workspace_tab,
+                                    "[pane.id, tab.id, window.confirm('Close this tab and remove its visualizations?')]",
+                                ),
+                                raw_attrs=[
+                                    'type="button"',
+                                    ':aria-label="\'Close \' + tab.title"',
+                                    ':title="\'Close \' + tab.title"',
+                                ],
+                            )
+            html.Button(
+                "+",
+                classes="seurat-workspace-tab-add",
+                click=(ctrl.add_workspace_tab, "[pane.id]"),
+                raw_attrs=['type="button"', 'aria-label="New tab"'],
+                title="New tab",
+            )
+            with html.Div(classes="seurat-toolbar-menu"):
+                html.Button(
+                    "⋯",
+                    classes="seurat-workspace-pane-menu-button",
+                    raw_attrs=[
+                        'type="button"',
+                        'aria-label="Pane and tab actions"',
+                    ],
+                    title="Pane and tab actions",
+                )
+                with vuetify.VMenu(
+                    activator="parent",
+                    location="bottom end",
+                    close_on_content_click=True,
+                ):
+                    with vuetify.VList(density="compact", min_width=210):
+                        vuetify.VListItem(
+                            title="Rename active tab…",
+                            prepend_icon="mdi-pencil-outline",
+                            click=(
+                                ctrl.rename_workspace_tab,
+                                "[pane.id, pane.active_tab_id, window.prompt('Tab name', ((pane.tabs || []).find(tab => tab.id === pane.active_tab_id) || {}).title || 'View')]",
+                            ),
+                        )
+                        vuetify.VListItem(
+                            title="Move tab to other pane",
+                            prepend_icon="mdi-tab-move",
+                            v_if="workspacePanes.length === 2",
+                            click=(
+                                ctrl.move_workspace_tab,
+                                "[pane.id, pane.active_tab_id]",
+                            ),
+                        )
+                        vuetify.VListItem(
+                            title="Close active tab",
+                            prepend_icon="mdi-close",
+                            v_if="workspacePanes.reduce((count, item) => count + ((item.tabs || []).length), 0) > 1",
+                            click=(
+                                ctrl.close_workspace_tab,
+                                "[pane.id, pane.active_tab_id, window.confirm('Close this tab and remove its visualizations?')]",
+                            ),
+                        )
+                        vuetify.VDivider()
+                        vuetify.VListItem(
+                            title="Split right",
+                            prepend_icon="mdi-view-split-vertical",
+                            disabled=("workspacePanes.length >= 2",),
+                            click=(ctrl.split_workspace_pane, "['horizontal']"),
+                        )
+                        vuetify.VListItem(
+                            title="Split down",
+                            prepend_icon="mdi-view-split-horizontal",
+                            disabled=("workspacePanes.length >= 2",),
+                            click=(ctrl.split_workspace_pane, "['vertical']"),
+                        )
+                        vuetify.VListItem(
+                            title="Close split pane",
+                            prepend_icon="mdi-dock-window",
+                            v_if="workspacePanes.length === 2",
+                            click=(
+                                ctrl.close_workspace_pane,
+                                "[pane.id, window.confirm('Close this pane? Its tabs will move to the other pane.')]",
+                            ),
+                        )
+
+
+def _build_inactive_workspace_grids(ctrl):
+    with vuetify.Template(v_for="(pane, paneIndex) in workspacePanes", key="pane.id"):
+        with vuetify.Template(v_if="pane.id !== workspaceActivePaneId"):
+            with vuetify.Template(v_for="tab in pane.tabs", key="tab.id"):
+                with vuetify.Template(v_if="tab.id === pane.active_tab_id"):
+                    with html.Div(
+                        classes="seurat-main-grid seurat-workspace-grid-preview",
+                        click=(ctrl.activate_workspace_tab, "[pane.id, tab.id]"),
+                        raw_attrs=[
+                            ":class=\"paneIndex === 0 ? 'seurat-workspace-slot-first' : 'seurat-workspace-slot-second'\"",
+                            ':data-grid-cols="tab.grid.columns"',
+                            ':data-grid-rows="tab.grid.rows"',
+                            'role="button"',
+                            'tabindex="0"',
+                            ':aria-label="\'Activate \' + tab.title + \' pane\'"',
+                            ":style=\"('display:grid;'"
+                            " + ((tab.grid.sizing_mode === 'fit')"
+                            " ? ('grid-template-columns:' + String(tab.grid.fit_column_template || ('repeat(' + tab.grid.columns + ', minmax(' + Number(tab.grid.fit_minimum_cell_size || 180) + 'px, 1fr))')) + ';'"
+                            " + 'grid-template-rows:' + String(tab.grid.fit_row_template || ('repeat(' + tab.grid.rows + ', minmax(' + (Number(tab.grid.fit_minimum_cell_size || 180) + 32) + 'px, 1fr))')) + ';'"
+                            " + 'justify-content:stretch;align-content:stretch;')"
+                            " : ('grid-template-columns:' + String(tab.grid.column_template || ('repeat(' + tab.grid.columns + ', ' + Number(tab.grid.cell_size || 300) + 'px)')) + ';'"
+                            " + 'grid-template-rows:' + String(tab.grid.row_template || ('repeat(' + tab.grid.rows + ', ' + (Number(tab.grid.cell_size || 300) + 32) + 'px)')) + ';'"
+                            " + 'justify-content:center;align-content:start;'))"
+                            " + 'min-height:0;overflow:auto;width:100%;height:100%;box-sizing:border-box;border:1px solid #cfcfcf;')\"",
+                        ],
+                    ):
+                        with vuetify.Template(
+                            v_for="(tile, i) in tab.grid.cells", key="i"
+                        ):
+                            with html.Div(
+                                classes="seurat-dropcell seurat-workspace-preview-cell",
+                                raw_attrs=[
+                                    ':data-cell-index="i"',
+                                    ':data-cell-filled="((tile && tile.variable_name) ? 1 : 0)"',
+                                    ":style=\"((tab.grid.layout_mode === 'spanning')"
+                                    " ? ('grid-row:' + Number((tile && tile.grid_row) || (Math.floor(i / tab.grid.columns) + 1)) + ' / span ' + Number((tile && tile.row_span) || 1) + ';grid-column:' + Number((tile && tile.grid_col) || ((i % tab.grid.columns) + 1)) + ' / span ' + Number((tile && tile.col_span) || 1) + ';')"
+                                    " : '')"
+                                    " + 'overflow:hidden;display:flex;flex-direction:column;position:relative;box-sizing:border-box;border:1px solid #cfcfcf;'"
+                                    " + ((tab.grid.layout_mode === 'spanning' && tile && tile.grid_hidden) ? 'display:none;' : '')\"",
+                                ],
+                            ):
+                                with vuetify.Template(v_if="tile && tile.variable_name"):
+                                    html.Div(
+                                        "{{ tile.display_title || tile.variable_name || 'variable' }}",
+                                        classes="seurat-workspace-preview-title",
+                                    )
+                                    with html.Div(classes="seurat-workspace-preview-media"):
+                                        with vuetify.Template(v_if="tile.media_type === 'plot1d'"):
+                                            html.Div(
+                                                classes="seurat-plot1d",
+                                                raw_attrs=[
+                                                    ':data-plot="JSON.stringify(tile.plot || {})"',
+                                                    ':data-plot-settings="JSON.stringify(tile.plot_settings || {})"',
+                                                ],
+                                            )
+                                        with vuetify.Template(
+                                            v_if="tile.media_type !== 'plot1d' && tile.src"
+                                        ):
+                                            with vuetify.Template(
+                                                v_if="tile.media_type === 'image' || tile.media_type === 'image_sequence'"
+                                            ):
+                                                html.Img(
+                                                    src=("tile.src",),
+                                                    class_="seurat-workspace-preview-image",
+                                                    raw_attrs=[
+                                                        ':class="{ \'seurat-grid-image-sequence\': tile.media_type === \'image_sequence\' }"',
+                                                        ':data-grid-image-sequence="tile.media_type === \'image_sequence\' ? \'1\' : null"',
+                                                        ':data-fps="tile.fps || 2"',
+                                                        ':data-frame-count="tile.frame_count || 0"',
+                                                        ':data-frame-indices="(tile.frame_indices || []).join(\',\')"',
+                                                        ':data-frame-sources="JSON.stringify(tile.frame_sources || [])"',
+                                                        ':data-time-values="(tile.time_values || []).join(\',\')"',
+                                                        ':data-time-mode="tile.time_mode || \'timestep\'"',
+                                                        'data-current-frame="0"',
+                                                        'draggable="false"',
+                                                    ],
+                                                )
+                                            with vuetify.Template(
+                                                v_if="tile.media_type !== 'image' && tile.media_type !== 'image_sequence'"
+                                            ):
+                                                html.Video(
+                                                    src=("tile.src",),
+                                                    class_="seurat-workspace-preview-image seurat-grid-video",
+                                                    muted=True,
+                                                    raw_attrs=[
+                                                        'data-grid-video="1"',
+                                                        ':data-fps="tile.fps || 2"',
+                                                        ':data-frame-count="tile.frame_count || 0"',
+                                                        ':data-frame-indices="(tile.frame_indices || []).join(\',\')"',
+                                                        ':data-time-values="(tile.time_values || []).join(\',\')"',
+                                                        ':data-time-mode="tile.time_mode || \'timestep\'"',
+                                                        "playsinline",
+                                                    ],
+                                                )
+                                with vuetify.Template(v_if="!(tile && tile.variable_name)"):
+                                    with html.Div(classes="seurat-empty-cell"):
+                                        html.Div("+", classes="seurat-empty-plus")
+
+
 class GridWorkspace(TrameComponent):
     def __init__(self, server):
         super().__init__(server)
@@ -258,11 +484,16 @@ class GridWorkspace(TrameComponent):
                 style="flex:1 1 auto; min-height:0; display:flex; flex-direction:column;",
             ):
                 with vuetify.VCardText(
+                    classes="seurat-workspace-card-content",
+                    raw_attrs=[
+                        ":class=\"["
+                        "workspacePanes.length === 2 ? 'has-workspace-split' : '',"
+                        "workspacePanes.length === 2 && workspaceSplitDirection === 'vertical' ? 'is-split-vertical' : 'is-split-horizontal'"
+                        "]\"",
+                    ],
                     style=(
                         "height:100%;"
                         "min-height:0;"
-                        "display:flex;"
-                        "flex-direction:column;"
                         "overflow:hidden;"
                     ),
                 ):
@@ -351,10 +582,17 @@ class GridWorkspace(TrameComponent):
                         )
                         _build_grid_layout_controls(ctrl)
                     with vuetify.Template(v_if="scalarPlotStatus"):
-                        html.Div("{{ scalarPlotStatus }}", class_="text-caption mb-2", style="color:#8a4b00;")
+                        html.Div(
+                            "{{ scalarPlotStatus }}",
+                            class_="text-caption seurat-workspace-grid-status",
+                            style="color:#8a4b00;",
+                        )
+                    _build_workspace_tab_bars(ctrl)
                     with html.Div(
-                        classes="seurat-main-grid",
+                        classes="seurat-main-grid seurat-workspace-active-grid",
                         raw_attrs=[
+                            ':key="workspaceActiveTabId"',
+                            ":class=\"workspaceActivePaneId === ((workspacePanes[0] || {}).id) ? 'seurat-workspace-slot-first' : 'seurat-workspace-slot-second'\"",
                             ':data-grid-sizing-mode="gridSizingMode"',
                             ':data-grid-cols="gridCols"',
                             ':data-grid-rows="gridRows"',
@@ -865,6 +1103,7 @@ class GridWorkspace(TrameComponent):
                                     with html.Div(classes="seurat-empty-cell"):
                                         html.Div("+", classes="seurat-empty-plus")
                                         html.Div("Drop variable here", classes="seurat-empty-hover-label")
+                    _build_inactive_workspace_grids(ctrl)
 
             html.Div(style="height: 8px; flex:0 0 auto;")
 

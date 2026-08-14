@@ -5,11 +5,15 @@ from seurat.viewer_actions import (
     CatalogCondition,
     CatalogQueryAction,
     SourceRank,
+    VisualizationAddAction,
     ViewerActionValidationError,
     compile_catalog_query,
     compile_source_filter_query,
     parse_catalog_query_action,
+    parse_viewer_action,
+    parse_visualization_add_action,
     summarize_catalog_query,
+    summarize_visualization_add,
     viewer_action_plan_to_dict,
 )
 
@@ -219,6 +223,68 @@ class ViewerActionTests(unittest.TestCase):
             plan["actions"][0]["arguments"]["result_variable_id"],
             "pressure",
         )
+
+    def test_visualization_add_action_is_validated_and_serialized(self):
+        action = parse_visualization_add_action(
+            {
+                "type": "visualization.add",
+                "arguments": {
+                    "variable_id": "pressure",
+                    "target": "active_cell",
+                },
+            }
+        )
+
+        self.assertEqual(
+            action,
+            VisualizationAddAction(
+                action_type="visualization.add",
+                variable_id="pressure",
+                target="active_cell",
+            ),
+        )
+        self.assertEqual(
+            parse_viewer_action(viewer_action_plan_to_dict((action,))["actions"][0]),
+            action,
+        )
+        self.assertIn(
+            "grid cell 2",
+            summarize_visualization_add(
+                action,
+                cell_index=1,
+                visualization_name="heatmap",
+            ),
+        )
+
+    def test_visualization_add_rejects_unsupported_arguments_and_targets(self):
+        with self.assertRaisesRegex(
+            ViewerActionValidationError,
+            "unsupported fields: visualization_name",
+        ):
+            parse_visualization_add_action(
+                {
+                    "type": "visualization.add",
+                    "arguments": {
+                        "variable_id": "pressure",
+                        "target": "active_cell",
+                        "visualization_name": "heatmap",
+                    },
+                }
+            )
+
+        with self.assertRaisesRegex(
+            ViewerActionValidationError,
+            "Unsupported visualization target",
+        ):
+            parse_visualization_add_action(
+                {
+                    "type": "visualization.add",
+                    "arguments": {
+                        "variable_id": "pressure",
+                        "target": "cell_3",
+                    },
+                }
+            )
 
 
 if __name__ == "__main__":

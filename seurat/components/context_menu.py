@@ -21,6 +21,38 @@ class ContextMenu(TrameComponent):
                 html.Div("Add To Grid", classes="menu-item", click=ctrl.context_menu_item_add)
                 html.Div("Select Variable", classes="menu-item", click=ctrl.context_menu_item_select)
 
+            with html.Div(v_if="contextMenuKind === 'tab'"):
+                with html.Div(
+                    classes="menu-item menu-item-with-icon",
+                    click=(
+                        ctrl.context_menu_tab_rename,
+                        "[window.prompt('Tab name', contextMenuItemLabel || 'View')]",
+                    ),
+                ):
+                    vuetify.VIcon(
+                        "mdi-pencil-outline",
+                        size="small",
+                        classes="menu-item-icon",
+                    )
+                    html.Span("Rename…")
+                with html.Div(
+                    classes="menu-item menu-item-with-icon danger",
+                    click=(
+                        ctrl.context_menu_tab_close,
+                        "[window.confirm('Close this tab and remove its visualizations?')]",
+                    ),
+                    raw_attrs=[
+                        ":class=\"{ 'is-disabled': !contextMenuTabCanClose }\"",
+                        ":aria-disabled=\"!contextMenuTabCanClose ? 'true' : 'false'\"",
+                    ],
+                ):
+                    vuetify.VIcon(
+                        "mdi-close",
+                        size="small",
+                        classes="menu-item-icon",
+                    )
+                    html.Span("Close")
+
             with html.Div(v_if="contextMenuKind === 'cell'"):
                 html.Div("Select Cell", classes="menu-item", click=ctrl.context_menu_cell_select)
                 with vuetify.Template(v_if="contextMenuCellCanResetView"):

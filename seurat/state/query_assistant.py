@@ -22,4 +22,6 @@ def defaults():
         "queryAssistantRankValue": None,
         "queryAssistantTieCount": 0,
         "queryAssistantValidatedText": "",
+        "queryAssistantTargetCellIndex": -1,
+        "queryAssistantVisualizationName": "",
     }

@@ -81,6 +81,19 @@ combined reset/cursor behavior. Internal runtime objects are collected under
 `window.seurat.runtimes`; existing top-level aliases remain for Trame Vue plugin
 registration compatibility.
 
+### Workspace tabs
+
+Each workspace tab owns its grid dimensions, track sizes, cell contents,
+selection, timeline-driver cell, and per-cell visualization settings. A split
+pane owns which of its tabs is visible. Campaign selection, the query and
+variable catalog, and the current timestep remain shared across the workspace.
+
+Closing a tab removes that tab's grid after confirmation. Tabs can be renamed
+or closed from their context menu, and the visible close button provides the
+same close action. Drag tabs to reorder them within a pane. Tab strips remain
+on one line and show edge fades when more tabs are available by horizontal
+scrolling.
+
 ## Run
 
 Requirements (at minimum):
@@ -134,15 +147,14 @@ python app.py campaign.aca --campaign-schema schema.yaml
 python app.py campaign.aca --image-association-schema image_variable_map.yaml
 ```
 
-## Natural-Language Query Assistant
+## Natural-Language Viewer Assistant
 
 The optional Query Assistant translates a natural-language request into a
-versioned, structured Viewer Action proposal. Phase 1 accepts one
-`catalog.query` action with allowlisted fields and operators. Seurat validates
-the proposal, resolves any campaign statistics locally, previews its
-variable/source match counts, and changes the active query only after **Apply**
-is selected. The model proposes an action; it cannot invoke viewer operations,
-read array values, or bypass server-side validation.
+versioned, structured Viewer Action proposal. The current action types are
+`catalog.query` and `visualization.add`. Seurat validates and previews every
+proposal and changes viewer state only after explicit confirmation. The model
+proposes an action; it cannot invoke viewer operations, read array values, or
+bypass server-side validation.
 
 Source ranking uses the campaign's stored per-source `minimum` and `maximum`
 metadata. For example, select `pressure` in the catalog and ask `largest max`.
@@ -162,6 +174,21 @@ a source-filter proposal for the currently selected variable. **Apply to Source
 Filter** updates only the visible source rows. The existing **Filter** button
 continues to accept manually authored Advanced Query expressions.
 
+To add a visualization, first select a grid cell and choose **Visualize** in the
+toolbar. Requests such as `Show pressure`, `Plot rho in the selected cell`, or
+`Add temperature to the active cell` propose one `visualization.add` action.
+The review dialog identifies the variable, destination cell, and visualization
+that the viewer will use. **Add to Grid** applies the action through the same
+assignment path used by the GUI.
+
+The first visualization increment accepts one exact variable and the active
+cell. Seurat applies the active catalog query, current source selection, default
+visualization choice, plugin availability, and scalar-plot generation policy.
+Explicit visualization types, sources, multiple variables or cells, overlays,
+and visualization settings are not yet accepted. If raw scalar data requires
+generation and the session policy is **Ask**, the existing scalar-plot
+confirmation dialog still appears.
+
 Seurat talks to an OpenAI-compatible Chat Completions endpoint using Python's
 standard library, so no additional Python package is required. For a local
 Ollama `gpt-oss:20b` server:
@@ -176,11 +203,11 @@ export SEURAT_LLM_API_KEY="ollama"
 python app.py campaign.aca
 ```
 
-`SEURAT_LLM_MODEL` enables the **Ask** button. The base URL defaults to the
-Ollama endpoint above, the API key defaults to Ollama's dummy `ollama` value,
-and `SEURAT_LLM_TIMEOUT_SECONDS` defaults to 30. A `llama.cpp` server or another
-provider can be used by setting its OpenAI-compatible `/v1` base URL, model
-name, and API key.
+`SEURAT_LLM_MODEL` enables the **Ask** and **Visualize** buttons. The base URL
+defaults to the Ollama endpoint above, the API key defaults to Ollama's dummy
+`ollama` value, and `SEURAT_LLM_TIMEOUT_SECONDS` defaults to 30. A `llama.cpp`
+server or another provider can be used by setting its OpenAI-compatible `/v1`
+base URL, model name, and API key.
 
 For each translation, Seurat sends the request, at most 200 variable catalog
 entries (IDs, names, labels, paths, and source-dataset names), and at most 200

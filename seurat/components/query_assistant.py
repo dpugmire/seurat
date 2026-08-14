@@ -22,7 +22,9 @@ class QueryAssistantDialog(TrameComponent):
                     ):
                         html.Div(
                             "{{ queryAssistantTarget === 'source_filter' "
-                            "? 'Source Filter Assistant' : 'Query Assistant' }}"
+                            "? 'Source Filter Assistant' "
+                            ": (queryAssistantTarget === 'visualization' "
+                            "? 'Visualization Assistant' : 'Query Assistant') }}"
                         )
                         vuetify.VSpacer()
                         vuetify.VBtn(
@@ -43,7 +45,7 @@ class QueryAssistantDialog(TrameComponent):
                             class_="text-body-2 mb-2",
                         )
                     with vuetify.Template(
-                        v_if="queryAssistantTarget !== 'source_filter'"
+                        v_if="queryAssistantTarget === 'catalog'"
                     ):
                         html.Div(
                             "Describe the variables or sources you want. The "
@@ -51,6 +53,16 @@ class QueryAssistantDialog(TrameComponent):
                             "resolve campaign metadata locally, and preview the "
                             "result. It will not apply anything until you choose "
                             "Apply.",
+                            class_="text-body-2 mb-2",
+                        )
+                    with vuetify.Template(
+                        v_if="queryAssistantTarget === 'visualization'"
+                    ):
+                        html.Div(
+                            "Describe the variable to add to the active grid cell. "
+                            "The viewer will use the active query, current source "
+                            "selection, and its default visualization. The grid will "
+                            "not change until you choose Add to Grid.",
                             class_="text-body-2 mb-2",
                         )
                     html.Div(
@@ -70,7 +82,9 @@ class QueryAssistantDialog(TrameComponent):
                         placeholder=(
                             "queryAssistantTarget === 'source_filter' "
                             "? 'e.g. max > 5 and dataset contains 128' "
-                            ": 'e.g. Show temperature from runs where valid equals 1'",
+                            ": (queryAssistantTarget === 'visualization' "
+                            "? 'e.g. Add pressure to the selected cell' "
+                            ": 'e.g. Show temperature from runs where valid equals 1')",
                         ),
                         rows=3,
                         auto_grow=True,
@@ -190,5 +204,7 @@ class QueryAssistantDialog(TrameComponent):
                     ):
                         html.Span(
                             "{{ queryAssistantTarget === 'source_filter' "
-                            "? 'Apply to Source Filter' : 'Apply' }}"
+                            "? 'Apply to Source Filter' "
+                            ": (queryAssistantTarget === 'visualization' "
+                            "? 'Add to Grid' : 'Apply') }}"
                         )
