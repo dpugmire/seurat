@@ -20,10 +20,13 @@ from seurat.models.workspace_layout import (
     grid_snapshot,
     initial_workspace_layout,
     move_workspace_tab as move_workspace_tab_model,
+    normalized_workspace_root,
     normalized_tab_title,
     pane_and_tab,
     reorder_workspace_tab as reorder_workspace_tab_model,
+    resize_workspace_split as resize_workspace_split_model,
     split_workspace as split_workspace_model,
+    workspace_geometry,
 )
 from seurat.models.workspace_state import (
     WorkspaceStateError,
@@ -53,6 +56,7 @@ class WorkspaceControllerMixin:
     )
     TRIGGER_BINDINGS = (
         ("reorder_workspace_tab_trigger", "reorder_workspace_tab"),
+        ("resize_workspace_split_trigger", "resize_workspace_split"),
     )
     STATE_CHANGE_BINDINGS = ()
 
@@ -62,8 +66,19 @@ class WorkspaceControllerMixin:
 
     def _publish_workspace_layout(self, layout: Mapping[str, Any]) -> None:
         published = deepcopy(dict(layout))
+        root = normalized_workspace_root(published)
+        published["root"] = root
+        published["split_direction"] = (
+            root.get("direction", "none") if root.get("kind") == "split" else "none"
+        )
+        published["split_ratio"] = (
+            float(root.get("ratio", 0.5)) if root.get("kind") == "split" else 0.5
+        )
+        frames, splitters = workspace_geometry(published)
         self.state.workspaceLayout = published
         self.state.workspacePanes = deepcopy(list(published.get("panes", []) or []))
+        self.state.workspacePaneFrames = deepcopy(frames)
+        self.state.workspaceSplitters = deepcopy(list(splitters))
         self.state.workspaceSplitDirection = str(
             published.get("split_direction", "none") or "none"
         )
@@ -265,6 +280,9 @@ class WorkspaceControllerMixin:
             "active_tab_id": active_tab_id,
             "panes": panes,
         }
+        if isinstance(saved_workspace.get("root"), Mapping):
+            layout["root"] = deepcopy(dict(saved_workspace["root"]))
+        layout["root"] = normalized_workspace_root(layout)
         self._publish_workspace_layout(layout)
 
     def _activate_workspace_target(
@@ -323,10 +341,18 @@ class WorkspaceControllerMixin:
             stash=False,
         )
 
-    def split_workspace_pane(self, direction: str = "horizontal", **_):
+    def split_workspace_pane(
+        self,
+        direction: str = "horizontal",
+        pane_id: str = "",
+        **_,
+    ):
         layout = self._stash_active_workspace_grid()
         layout, _pane_id = split_workspace_model(
-            layout, direction, grid_snapshot(self.state)
+            layout,
+            direction,
+            grid_snapshot(self.state),
+            pane_id=str(pane_id or layout.get("active_pane_id", "")),
         )
         self._publish_workspace_layout(layout)
         self._activate_workspace_target(
@@ -366,6 +392,11 @@ class WorkspaceControllerMixin:
         layout = reorder_workspace_tab_model(
             layout, pane_id, tab_id, insertion_index
         )
+        self._publish_workspace_layout(layout)
+
+    def resize_workspace_split(self, split_id: str, ratio: float, **_):
+        layout = self._stash_active_workspace_grid()
+        layout = resize_workspace_split_model(layout, split_id, ratio)
         self._publish_workspace_layout(layout)
 
     def _set_workspace_error(self, message: str) -> None:

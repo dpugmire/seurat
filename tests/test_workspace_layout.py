@@ -2,6 +2,9 @@ import unittest
 from types import SimpleNamespace
 
 from seurat.models.workspace_layout import (
+    MAX_SPLIT_RATIO,
+    MAX_WORKSPACE_PANES,
+    MIN_SPLIT_RATIO,
     active_pane_and_tab,
     add_workspace_tab,
     apply_grid_snapshot,
@@ -11,7 +14,10 @@ from seurat.models.workspace_layout import (
     initial_workspace_layout,
     move_workspace_tab,
     reorder_workspace_tab,
+    resize_workspace_split,
     split_workspace,
+    workspace_geometry,
+    workspace_pane_ids,
 )
 from seurat.state import init_state
 
@@ -52,18 +58,66 @@ class WorkspaceLayoutTests(unittest.TestCase):
             all(not cell.get("variable_id") for cell in tab["grid"]["cells"])
         )
 
-    def test_workspace_splits_into_at_most_two_panes(self):
+    def test_workspace_splits_active_panes_into_at_most_four_leaves(self):
         state = self.make_state()
         snapshot = grid_snapshot(state)
         layout = initial_workspace_layout(snapshot)
 
         layout, pane_id = split_workspace(layout, "vertical", snapshot)
+        layout, third_pane_id = split_workspace(layout, "horizontal", snapshot)
+        layout, fourth_pane_id = split_workspace(layout, "vertical", snapshot)
         layout, extra_pane_id = split_workspace(layout, "horizontal", snapshot)
 
         self.assertEqual(pane_id, "pane-2")
+        self.assertEqual(third_pane_id, "pane-3")
+        self.assertEqual(fourth_pane_id, "pane-4")
         self.assertIsNone(extra_pane_id)
-        self.assertEqual(len(layout["panes"]), 2)
-        self.assertEqual(layout["split_direction"], "horizontal")
+        self.assertEqual(len(layout["panes"]), MAX_WORKSPACE_PANES)
+        self.assertEqual(workspace_pane_ids(layout), tuple(
+            f"pane-{index}" for index in range(1, 5)
+        ))
+        self.assertEqual(layout["split_direction"], "vertical")
+
+    def test_workspace_can_split_a_specific_existing_pane(self):
+        state = self.make_state()
+        snapshot = grid_snapshot(state)
+        layout = initial_workspace_layout(snapshot)
+        layout, _ = split_workspace(layout, "horizontal", snapshot)
+
+        layout, new_pane_id = split_workspace(
+            layout, "vertical", snapshot, pane_id="pane-1"
+        )
+
+        self.assertEqual(new_pane_id, "pane-3")
+        self.assertEqual(
+            workspace_pane_ids(layout), ("pane-1", "pane-3", "pane-2")
+        )
+        frames, splitters = workspace_geometry(layout)
+        self.assertEqual(set(frames), {"pane-1", "pane-2", "pane-3"})
+        self.assertEqual(len(splitters), 2)
+        self.assertAlmostEqual(frames["pane-1"]["height"], 50.0)
+        self.assertAlmostEqual(frames["pane-3"]["top"], 50.0)
+
+    def test_split_ratios_are_resized_and_clamped(self):
+        state = self.make_state()
+        snapshot = grid_snapshot(state)
+        layout = initial_workspace_layout(snapshot)
+        layout, _ = split_workspace(layout, "horizontal", snapshot)
+
+        layout = resize_workspace_split(layout, "split-1", 0.7)
+        frames, splitters = workspace_geometry(layout)
+
+        self.assertAlmostEqual(layout["root"]["ratio"], 0.7)
+        self.assertAlmostEqual(frames["pane-1"]["width"], 70.0)
+        self.assertAlmostEqual(splitters[0]["left"], 70.0)
+        self.assertEqual(
+            resize_workspace_split(layout, "split-1", 0)["root"]["ratio"],
+            MIN_SPLIT_RATIO,
+        )
+        self.assertEqual(
+            resize_workspace_split(layout, "split-1", 1)["root"]["ratio"],
+            MAX_SPLIT_RATIO,
+        )
 
     def test_tabs_move_between_panes_without_losing_their_grid(self):
         state = self.make_state()
@@ -112,6 +166,25 @@ class WorkspaceLayoutTests(unittest.TestCase):
         self.assertEqual(len(layout["panes"]), 1)
         self.assertEqual(len(layout["panes"][0]["tabs"]), 2)
         self.assertEqual(layout["split_direction"], "none")
+
+    def test_closing_nested_pane_promotes_its_sibling_subtree(self):
+        state = self.make_state()
+        snapshot = grid_snapshot(state)
+        layout = initial_workspace_layout(snapshot)
+        layout, _ = split_workspace(layout, "horizontal", snapshot)
+        layout, _ = split_workspace(
+            layout, "vertical", snapshot, pane_id="pane-1"
+        )
+
+        layout = close_workspace_pane(layout, "pane-1")
+
+        self.assertEqual(workspace_pane_ids(layout), ("pane-3", "pane-2"))
+        self.assertEqual(len(layout["panes"]), 2)
+        self.assertEqual(layout["root"]["direction"], "horizontal")
+        pane_three = next(
+            pane for pane in layout["panes"] if pane["id"] == "pane-3"
+        )
+        self.assertEqual(len(pane_three["tabs"]), 2)
 
     def test_at_least_one_tab_is_always_retained(self):
         state = self.make_state()

@@ -15,6 +15,7 @@
 
   function createHandlers(root) {
     let floatingDrag = null;
+    let workspaceSplitDrag = null;
     let workspaceTabDrag = null;
     let tabOverflowFrame = 0;
     let tabOverflowMutationObserver = null;
@@ -26,6 +27,7 @@
 
     function updateWorkspaceTabOverflow() {
       tabOverflowFrame = 0;
+      syncWorkspaceLayoutGeometry();
       for (const viewport of root.querySelectorAll(
         ".seurat-workspace-tabs-viewport"
       )) {
@@ -109,8 +111,179 @@
       releasePointerCapture(current);
     }
 
+    function workspaceLayoutTree() {
+      const surface = root.querySelector(".seurat-workspace-layout-surface");
+      if (!surface) return null;
+      try {
+        return {
+          surface,
+          tree: JSON.parse(surface.getAttribute("data-layout-tree") || "{}"),
+        };
+      } catch (_) {
+        return null;
+      }
+    }
+
+    function workspaceFrameElements(attribute, value) {
+      return Array.from(root.querySelectorAll("[" + attribute + "]")).filter(
+        (element) => element.getAttribute(attribute) === value
+      );
+    }
+
+    function applyWorkspaceLayoutGeometry(tree) {
+      const surface = root.querySelector(".seurat-workspace-layout-surface");
+      if (!surface) return;
+      const surfaceBounds = surface.getBoundingClientRect();
+
+      function visit(node, left, top, width, height) {
+        if (!node || node.kind !== "split") {
+          const paneId = String((node && node.pane_id) || "");
+          for (const element of workspaceFrameElements(
+            "data-pane-frame-id",
+            paneId
+          )) {
+            element.style.setProperty(
+              "--pane-left",
+              (surfaceBounds.width * left) / 100 + "px"
+            );
+            element.style.setProperty(
+              "--pane-top",
+              (surfaceBounds.height * top) / 100 + "px"
+            );
+            element.style.setProperty(
+              "--pane-width",
+              (surfaceBounds.width * width) / 100 + "px"
+            );
+            element.style.setProperty(
+              "--pane-height",
+              (surfaceBounds.height * height) / 100 + "px"
+            );
+          }
+          return;
+        }
+        const ratio = Math.max(0.15, Math.min(0.85, Number(node.ratio) || 0.5));
+        const splitId = String(node.id || "");
+        const horizontal = node.direction !== "vertical";
+        const boundary = horizontal
+          ? left + width * ratio
+          : top + height * ratio;
+        for (const handle of workspaceFrameElements(
+          "data-split-frame-id",
+          splitId
+        )) {
+          handle.style.setProperty(
+            "--split-left",
+            (surfaceBounds.width * (horizontal ? boundary : left)) / 100 +
+              "px"
+          );
+          handle.style.setProperty(
+            "--split-top",
+            (surfaceBounds.height * (horizontal ? top : boundary)) / 100 +
+              "px"
+          );
+          handle.style.setProperty(
+            "--split-span",
+            ((horizontal ? surfaceBounds.height : surfaceBounds.width) *
+              (horizontal ? height : width)) /
+              100 +
+              "px"
+          );
+          handle.setAttribute("data-split-ratio", String(ratio));
+          handle.setAttribute("data-container-left", String(left));
+          handle.setAttribute("data-container-top", String(top));
+          handle.setAttribute("data-container-width", String(width));
+          handle.setAttribute("data-container-height", String(height));
+          handle.setAttribute("aria-valuenow", String(Math.round(ratio * 100)));
+        }
+        if (horizontal) {
+          visit(node.first, left, top, width * ratio, height);
+          visit(node.second, boundary, top, width * (1 - ratio), height);
+        } else {
+          visit(node.first, left, top, width, height * ratio);
+          visit(node.second, left, boundary, width, height * (1 - ratio));
+        }
+      }
+
+      visit(tree, 0, 0, 100, 100);
+    }
+
+    function syncWorkspaceLayoutGeometry() {
+      const layout = workspaceLayoutTree();
+      if (layout) applyWorkspaceLayoutGeometry(layout.tree);
+    }
+
+    function findWorkspaceSplit(node, splitId) {
+      if (!node || node.kind !== "split") return null;
+      if (String(node.id || "") === splitId) return node;
+      return (
+        findWorkspaceSplit(node.first, splitId) ||
+        findWorkspaceSplit(node.second, splitId)
+      );
+    }
+
+    function finishWorkspaceSplitDrag(commit) {
+      if (!workspaceSplitDrag) return;
+      const current = workspaceSplitDrag;
+      workspaceSplitDrag = null;
+      current.handle.classList.remove("is-resizing");
+      document.body.classList.remove(
+        "seurat-pane-resizing-horizontal",
+        "seurat-pane-resizing-vertical"
+      );
+      releasePointerCapture(current);
+      if (commit) {
+        trameTrigger("resize_workspace_split_trigger", [
+          current.splitId,
+          current.ratio,
+        ]);
+      } else {
+        applyWorkspaceLayoutGeometry(current.originalTree);
+      }
+    }
+
     function onPointerDown(event) {
       if (event.button !== undefined && event.button !== 0) return;
+      const splitHandle = closestWithinRoot(
+        event && event.target,
+        ".seurat-workspace-splitter",
+        root
+      );
+      if (splitHandle) {
+        const layout = workspaceLayoutTree();
+        const splitId = splitHandle.getAttribute("data-split-id") || "";
+        const split = layout && findWorkspaceSplit(layout.tree, splitId);
+        if (!layout || !split) return;
+        finishFloatingDrag();
+        finishWorkspaceSplitDrag(false);
+        workspaceSplitDrag = {
+          handle: splitHandle,
+          pointerId: event.pointerId,
+          surface: layout.surface,
+          tree: layout.tree,
+          originalTree: JSON.parse(JSON.stringify(layout.tree)),
+          split,
+          splitId,
+          direction: split.direction === "vertical" ? "vertical" : "horizontal",
+          ratio: Math.max(0.15, Math.min(0.85, Number(split.ratio) || 0.5)),
+          containerLeft: Number(splitHandle.getAttribute("data-container-left")) || 0,
+          containerTop: Number(splitHandle.getAttribute("data-container-top")) || 0,
+          containerWidth: Number(splitHandle.getAttribute("data-container-width")) || 100,
+          containerHeight: Number(splitHandle.getAttribute("data-container-height")) || 100,
+        };
+        splitHandle.classList.add("is-resizing");
+        document.body.classList.add(
+          workspaceSplitDrag.direction === "vertical"
+            ? "seurat-pane-resizing-horizontal"
+            : "seurat-pane-resizing-vertical"
+        );
+        try {
+          splitHandle.setPointerCapture(event.pointerId);
+        } catch (_) {
+          // Pointer capture is best-effort for older browser implementations.
+        }
+        event.preventDefault();
+        return;
+      }
       const handle = closestWithinRoot(
         event && event.target,
         ".seurat-floating-panel-drag-handle",
@@ -140,6 +313,42 @@
     }
 
     function onPointerMove(event) {
+      if (workspaceSplitDrag) {
+        if (
+          workspaceSplitDrag.pointerId !== undefined &&
+          event.pointerId !== workspaceSplitDrag.pointerId
+        ) {
+          return;
+        }
+        const bounds = workspaceSplitDrag.surface.getBoundingClientRect();
+        const horizontal = workspaceSplitDrag.direction === "horizontal";
+        const fullSize = horizontal ? bounds.width : bounds.height;
+        const containerStartPercent = horizontal
+          ? workspaceSplitDrag.containerLeft
+          : workspaceSplitDrag.containerTop;
+        const containerPercent = horizontal
+          ? workspaceSplitDrag.containerWidth
+          : workspaceSplitDrag.containerHeight;
+        const containerSize = Math.max(1, (fullSize * containerPercent) / 100);
+        const coordinate = horizontal
+          ? (Number(event.clientX) || 0) - bounds.left
+          : (Number(event.clientY) || 0) - bounds.top;
+        const containerStart = (fullSize * containerStartPercent) / 100;
+        const minimumPixels = horizontal ? 240 : 180;
+        const minimumRatio = Math.min(
+          0.45,
+          Math.max(0.15, minimumPixels / containerSize)
+        );
+        const ratio = Math.max(
+          minimumRatio,
+          Math.min(1 - minimumRatio, (coordinate - containerStart) / containerSize)
+        );
+        workspaceSplitDrag.ratio = ratio;
+        workspaceSplitDrag.split.ratio = ratio;
+        applyWorkspaceLayoutGeometry(workspaceSplitDrag.tree);
+        event.preventDefault();
+        return;
+      }
       if (!floatingDrag) return;
       if (
         floatingDrag.pointerId !== undefined &&
@@ -161,6 +370,14 @@
 
     function onPointerEnd(event) {
       if (
+        workspaceSplitDrag &&
+        (workspaceSplitDrag.pointerId === undefined ||
+          event.pointerId === workspaceSplitDrag.pointerId)
+      ) {
+        finishWorkspaceSplitDrag(event.type !== "pointercancel");
+        return;
+      }
+      if (
         floatingDrag &&
         (floatingDrag.pointerId === undefined ||
           event.pointerId === floatingDrag.pointerId)
@@ -170,6 +387,10 @@
     }
 
     function onLostPointerCapture(event) {
+      if (workspaceSplitDrag && event.target === workspaceSplitDrag.handle) {
+        finishWorkspaceSplitDrag(true);
+        return;
+      }
       if (floatingDrag && event.target === floatingDrag.handle) {
         finishFloatingDrag();
       }
@@ -182,6 +403,7 @@
         panel.style.left = position.left + "px";
         panel.style.top = position.top + "px";
       }
+      syncWorkspaceLayoutGeometry();
       scheduleWorkspaceTabOverflowUpdate();
     }
 
@@ -456,6 +678,19 @@
       }
     }
 
+    function onDoubleClick(event) {
+      const handle = closestWithinRoot(
+        event && event.target,
+        ".seurat-workspace-splitter",
+        root
+      );
+      if (!handle) return;
+      const splitId = handle.getAttribute("data-split-id") || "";
+      if (!splitId) return;
+      trameTrigger("resize_workspace_split_trigger", [splitId, 0.5]);
+      event.preventDefault();
+    }
+
     const handlers = {
       root: {
         dragstart: onDragStart,
@@ -465,6 +700,7 @@
         drop: onDrop,
         contextmenu: onContextMenu,
         click: onClick,
+        dblclick: onDoubleClick,
       },
       capture: {
         pointerdown: onPointerDown,
@@ -479,6 +715,7 @@
       },
       cleanup() {
         finishFloatingDrag();
+        finishWorkspaceSplitDrag(false);
         finishWorkspaceTabDrag();
         if (tabOverflowFrame) {
           window.cancelAnimationFrame(tabOverflowFrame);

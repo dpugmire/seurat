@@ -56,6 +56,10 @@ flowchart LR
   objects, or transport-specific query syntax.
 - Pure domain logic contains testable workspace, timeline, plot, and
   source-selection policy without Trame dependencies.
+- Workspace geometry is a bounded binary split tree whose leaves reference
+  pane records. Pane records own tabs; tabs own grid snapshots. Split ratios
+  are durable semantic state, while percentage frames and divider geometry are
+  derived for the browser and are not persisted as independent authority.
 - `SeuratApplication` is the facade through which controllers consume backend
   capabilities.
 - Backend contracts return normalized Seurat DTOs. Local and Phobos adapters

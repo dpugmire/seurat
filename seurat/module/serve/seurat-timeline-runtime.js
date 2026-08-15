@@ -342,19 +342,24 @@
     return ordinal;
   }
 
-  function imageSequenceFrameLabel(rawOrdinal, sequences) {
+  function imageSequenceFrameTimelineValue(rawOrdinal, sequences) {
     const ordinal = clampImageSequenceFrame(rawOrdinal, sequences);
     const firstSequence = (sequences || [])[0];
     const timeValues = parseImageSequenceTimeValues(firstSequence);
     if (ordinal < timeValues.length) {
-      return formatTimelineValue(timeValues[ordinal]);
+      return timeValues[ordinal];
     }
     const indices = parseImageSequenceFrameIndices(firstSequence);
     if (ordinal < indices.length) {
-      const value = indices[ordinal];
-      return formatTimelineValue(value);
+      return indices[ordinal];
     }
-    return String(ordinal);
+    return ordinal;
+  }
+
+  function imageSequenceFrameLabel(rawOrdinal, sequences) {
+    return formatTimelineValue(
+      imageSequenceFrameTimelineValue(rawOrdinal, sequences)
+    );
   }
 
   function inferFpsForImageSequences(sequences) {
@@ -607,15 +612,21 @@
     if (!plot) return;
     const plots = plot.getPlots();
     if (!plots.length) return;
+    const sequences = getGridImageSequencesSafe();
     const bounds = getMediaTimelineBounds(videos || [], plots);
     const t = clampTimeForMedia(rawTime, videos || [], plots);
+    const cursorValue = sequences.length && !getPhysicalTimeline(sequences, plots).length
+      ? imageSequenceFrameTimelineValue(t, sequences)
+      : t;
     const denom = Math.max(1e-12, bounds.end - bounds.start);
-    // Step and physical timelines already use plot x coordinates. Only
-    // elapsed video time needs to be normalized onto each plot's domain.
+    // Step and physical timelines use declared plot coordinates. For
+    // sequence-driven timelines, the frame's declared value is the plot
+    // coordinate even when the sequence itself is indexed by ordinal.
+    // Only elapsed video time needs normalization onto each plot's domain.
     const progress = bounds.usesVideos
       ? ((t - bounds.start) / denom)
       : null;
-    plot.updateCursors(t, progress);
+    plot.updateCursors(cursorValue, progress);
   }
 
 

@@ -29,7 +29,7 @@ The main architectural boundaries are:
   owns pan/zoom and reset-view observation. The plot runtime owns plot-data
   parsing, SVG rendering, cursor drawing, hover/pan/zoom interactions, and
   render observation. The interaction runtime owns app-scoped variable/grid
-  drag-and-drop, context menus, and floating-panel movement. The resize runtime
+  and tab drag-and-drop, pane-divider resizing, context menus, and floating-panel movement. The resize runtime
   owns variable-panel and grid-track resizing, including pointer capture. All
   runtimes release their listeners, observers, timers, pointer state, and
   transient styling on unmount.
@@ -69,7 +69,7 @@ resolved before Phase 5B.2 resumes.
 
 Client-side event and observer ownership is lifecycle-scoped rather than
 document-global. The registered runtimes own grid timeline/VCR behavior,
-variable/grid drag-and-drop, context menus, floating-panel movement,
+variable/grid/tab drag-and-drop, pane-divider resizing, context menus, floating-panel movement,
 variable-panel and grid-track resizing, media pan/zoom, plot interaction, and
 plot rendering observation. Timeline/VCR policy lives in
 `seurat/module/serve/seurat-timeline-runtime.js`; media pan/zoom and its reset
@@ -81,12 +81,19 @@ combined reset/cursor behavior. Internal runtime objects are collected under
 `window.seurat.runtimes`; existing top-level aliases remain for Trame Vue plugin
 registration compatibility.
 
-### Workspace tabs
+### Workspace panes and tabs
 
 Each workspace tab owns its grid dimensions, track sizes, cell contents,
 selection, timeline-driver cell, and per-cell visualization settings. A split
 pane owns which of its tabs is visible. Campaign selection, the query and
 variable catalog, and the current timestep remain shared across the workspace.
+
+The workspace layout is a binary split tree with pane leaves. Any pane can be
+split right or down until the four-pane limit is reached. Drag a divider to
+resize its two child regions; double-click it to restore an even split. Split
+ratios are stored proportionally in workspace JSON so they survive window-size
+changes and save/load cycles. Older one- and two-pane workspace files are
+migrated to the tree representation when loaded.
 
 Closing a tab removes that tab's grid after confirmation. Tabs can be renamed
 or closed from their context menu, and the visible close button provides the

@@ -442,6 +442,7 @@ class CampaignDbNavigationTests(unittest.TestCase):
                 "hide_context_menu_trigger",
                 "move_grid_cell_trigger",
                 "reorder_workspace_tab_trigger",
+                "resize_workspace_split_trigger",
                 "set_grid_track_sizes_trigger",
                 "set_grid_track_weights_trigger",
                 "show_cell_context_menu",
@@ -527,6 +528,24 @@ class CampaignDbNavigationTests(unittest.TestCase):
 
         controller.actions["close_workspace_pane"]("pane-2", False)
         self.assertEqual(len(state.workspacePanes), 2)
+
+    def test_workspace_supports_nested_splits_and_resizing(self):
+        state, controller = self.make_controller()
+        controller.actions["split_workspace_pane"]("horizontal", "pane-1")
+        controller.actions["split_workspace_pane"]("vertical", "pane-1")
+        controller.actions["split_workspace_pane"]("vertical", "pane-2")
+
+        self.assertEqual(len(state.workspacePanes), 4)
+        self.assertEqual(len(state.workspaceSplitters), 3)
+        self.assertEqual(
+            set(state.workspacePaneFrames),
+            {"pane-1", "pane-2", "pane-3", "pane-4"},
+        )
+
+        controller.triggers["resize_workspace_split_trigger"]("split-1", 0.7)
+
+        self.assertAlmostEqual(state.workspaceLayout["root"]["ratio"], 0.7)
+        self.assertAlmostEqual(state.workspacePaneFrames["pane-2"]["left"], 70.0)
 
     def test_workspace_tab_reorder_trigger_preserves_active_tab(self):
         state, controller = self.make_controller()
@@ -753,6 +772,7 @@ class CampaignDbNavigationTests(unittest.TestCase):
             "pane-1", "tab-2", "1D Trends"
         )
         controller.actions["split_workspace_pane"]("horizontal")
+        controller.triggers["resize_workspace_split_trigger"]("split-1", 0.68)
         serialized = parse_workspace_document(
             workspace_json(state, "/campaign/example.aca")
         )
@@ -763,6 +783,7 @@ class CampaignDbNavigationTests(unittest.TestCase):
         owner.restore_workspace_state(serialized)
 
         self.assertEqual(state.workspaceSplitDirection, "horizontal")
+        self.assertAlmostEqual(state.workspaceLayout["root"]["ratio"], 0.68)
         self.assertEqual(len(state.workspacePanes), 2)
         self.assertEqual(
             [

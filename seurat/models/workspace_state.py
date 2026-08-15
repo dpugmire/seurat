@@ -6,7 +6,14 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict
 
-from seurat.models.workspace_layout import active_pane_and_tab, grid_snapshot
+from seurat.models.workspace_layout import (
+    MAX_SPLIT_RATIO,
+    MAX_WORKSPACE_PANES,
+    MIN_SPLIT_RATIO,
+    active_pane_and_tab,
+    grid_snapshot,
+    normalized_workspace_root,
+)
 
 
 WORKSPACE_FORMAT = "seurat-workspace"
@@ -140,6 +147,7 @@ def _workspace_document(state) -> Dict[str, Any]:
             }
         )
     return {
+        "root": normalized_workspace_root(layout),
         "split_direction": str(
             layout.get("split_direction", "none") or "none"
         ),
@@ -304,9 +312,9 @@ def _validate_grid_document(grid: Any, description: str) -> None:
 def _validate_workspace_layout(value: Any) -> None:
     workspace = _require_mapping(value, "state.workspace")
     panes = workspace.get("panes")
-    if not isinstance(panes, list) or not 1 <= len(panes) <= 2:
+    if not isinstance(panes, list) or not 1 <= len(panes) <= MAX_WORKSPACE_PANES:
         raise WorkspaceStateError(
-            "state.workspace.panes must contain one or two panes"
+            f"state.workspace.panes must contain one to {MAX_WORKSPACE_PANES} panes"
         )
     pane_ids = set()
     tab_ids = set()
@@ -359,6 +367,67 @@ def _validate_workspace_layout(value: Any) -> None:
         raise WorkspaceStateError(
             "state.workspace.active_tab_id must belong to the active pane"
         )
+
+    root = workspace.get("root")
+    if root is None and len(panes) > 2:
+        raise WorkspaceStateError(
+            "state.workspace.root is required for more than two panes"
+        )
+    if root is not None:
+        split_ids = set()
+        leaf_ids = []
+
+        def validate_node(node_value: Any, description: str) -> None:
+            node = _require_mapping(node_value, description)
+            kind = node.get("kind")
+            if kind == "pane":
+                pane_id = node.get("pane_id")
+                if not isinstance(pane_id, str) or not pane_id:
+                    raise WorkspaceStateError(
+                        f"{description}.pane_id must be a non-empty string"
+                    )
+                leaf_ids.append(pane_id)
+                return
+            if kind != "split":
+                raise WorkspaceStateError(
+                    f"{description}.kind must be pane or split"
+                )
+            split_id = node.get("id")
+            if (
+                not isinstance(split_id, str)
+                or not split_id
+                or split_id in split_ids
+            ):
+                raise WorkspaceStateError(
+                    "Workspace split IDs must be unique strings"
+                )
+            split_ids.add(split_id)
+            if len(split_ids) >= MAX_WORKSPACE_PANES:
+                raise WorkspaceStateError(
+                    "state.workspace.root exceeds the split limit"
+                )
+            if node.get("direction") not in {"horizontal", "vertical"}:
+                raise WorkspaceStateError(
+                    f"{description}.direction must be horizontal or vertical"
+                )
+            ratio = node.get("ratio")
+            if (
+                isinstance(ratio, bool)
+                or not isinstance(ratio, (int, float))
+                or not MIN_SPLIT_RATIO <= float(ratio) <= MAX_SPLIT_RATIO
+            ):
+                raise WorkspaceStateError(
+                    f"{description}.ratio must be between "
+                    f"{MIN_SPLIT_RATIO:g} and {MAX_SPLIT_RATIO:g}"
+                )
+            validate_node(node.get("first"), f"{description}.first")
+            validate_node(node.get("second"), f"{description}.second")
+
+        validate_node(root, "state.workspace.root")
+        if len(leaf_ids) != len(set(leaf_ids)) or set(leaf_ids) != pane_ids:
+            raise WorkspaceStateError(
+                "state.workspace.root must reference each pane exactly once"
+            )
 
 
 def validate_workspace_campaign(
