@@ -25,6 +25,7 @@ class SeuratAppTests(unittest.TestCase):
             ui_calls = []
             refresh_variable_list = object()
             built_ui = object()
+            interaction_log = SimpleNamespace(enabled=False)
 
             def attach(**kwargs):
                 controller_calls.append(kwargs)
@@ -45,6 +46,7 @@ class SeuratAppTests(unittest.TestCase):
                 server=server,
                 collection=collection,
                 db=db,
+                interaction_log=interaction_log,
                 controller_attacher=attach,
                 ui_builder=build,
             )
@@ -52,6 +54,7 @@ class SeuratAppTests(unittest.TestCase):
         self.assertIs(app.server, server)
         self.assertIs(app.collection, collection)
         self.assertIs(app.db, db)
+        self.assertIs(app.interaction_log, interaction_log)
         self.assertIsInstance(app.backend, LocalCampaignBackend)
         self.assertIs(app.refresh_variable_list, refresh_variable_list)
         self.assertIs(app.ui, built_ui)
@@ -96,6 +99,7 @@ class SeuratAppTests(unittest.TestCase):
         self.assertIs(controller_calls[0]["backend"], app.backend)
         self.assertIs(controller_calls[0]["db"], db)
         self.assertIs(controller_calls[0]["collection"], collection)
+        self.assertIs(controller_calls[0]["interaction_log"], interaction_log)
         self.assertEqual(controller_calls[0]["campaign_path"], str(campaign_path))
         self.assertEqual(
             ui_calls,

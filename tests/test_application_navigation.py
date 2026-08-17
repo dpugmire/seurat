@@ -73,6 +73,21 @@ class RecordingState(SimpleNamespace):
         return register
 
 
+class RecordingInteractionLog:
+    enabled = True
+
+    def __init__(self):
+        self.events = []
+
+    def record(self, event_type, *, source, payload):
+        event_id = f"event:{len(self.events) + 1}"
+        self.events.append((event_type, source, payload))
+        return event_id
+
+    def checkpoint(self):
+        pass
+
+
 class VariableCatalogSearchTests(unittest.TestCase):
     def setUp(self):
         self.groups = [
@@ -309,7 +324,7 @@ class CampaignDbNavigationTests(unittest.TestCase):
         self.assertEqual(candidate["time_source"], "variable:time")
         self.assertEqual(candidate["time_values"], [0.0, 0.25, 1.0])
 
-    def make_controller(self):
+    def make_controller(self, interaction_log=None):
         state = RecordingState()
         init_state(state, self.db)
         state.variableLabelsById = {
@@ -323,8 +338,28 @@ class CampaignDbNavigationTests(unittest.TestCase):
             collection=self.collection,
             parse_campaign=lambda *_args, **_kwargs: None,
             campaign_path="/campaign/example.aca",
+            interaction_log=interaction_log,
         )
         return state, server.controller
+
+    def test_controller_records_normalized_query_and_workspace_events(self):
+        interaction_log = RecordingInteractionLog()
+        state, controller = self.make_controller(interaction_log)
+
+        state.queryText = 'id == "density"'
+        self.assertTrue(controller.actions["run_query"]())
+        controller.actions["add_workspace_tab"]("pane-1")
+
+        self.assertEqual(
+            [event_type for event_type, _source, _payload in interaction_log.events],
+            ["query.applied", "workspace.tab_created"],
+        )
+        query_payload = interaction_log.events[0][2]
+        self.assertEqual(query_payload["origin"], "manual")
+        self.assertEqual(query_payload["target"], "catalog")
+        self.assertEqual(query_payload["result_variable_count"], 1)
+        self.assertNotIn("queryText", query_payload)
+        self.assertNotIn('id == "density"', str(query_payload))
 
     def test_controller_registration_contract_is_complete(self):
         state, controller = self.make_controller()
@@ -441,7 +476,10 @@ class CampaignDbNavigationTests(unittest.TestCase):
                 "assign_var_to_grid_cell_trigger",
                 "hide_context_menu_trigger",
                 "move_grid_cell_trigger",
+                "move_workspace_grid_cell_trigger",
+                "move_workspace_tab_trigger",
                 "reorder_workspace_tab_trigger",
+                "resize_workspace_split_trigger",
                 "set_grid_track_sizes_trigger",
                 "set_grid_track_weights_trigger",
                 "show_cell_context_menu",
@@ -528,6 +566,24 @@ class CampaignDbNavigationTests(unittest.TestCase):
         controller.actions["close_workspace_pane"]("pane-2", False)
         self.assertEqual(len(state.workspacePanes), 2)
 
+    def test_workspace_supports_nested_splits_and_resizing(self):
+        state, controller = self.make_controller()
+        controller.actions["split_workspace_pane"]("horizontal", "pane-1")
+        controller.actions["split_workspace_pane"]("vertical", "pane-1")
+        controller.actions["split_workspace_pane"]("vertical", "pane-2")
+
+        self.assertEqual(len(state.workspacePanes), 4)
+        self.assertEqual(len(state.workspaceSplitters), 3)
+        self.assertEqual(
+            set(state.workspacePaneFrames),
+            {"pane-1", "pane-2", "pane-3", "pane-4"},
+        )
+
+        controller.triggers["resize_workspace_split_trigger"]("split-1", 0.7)
+
+        self.assertAlmostEqual(state.workspaceLayout["root"]["ratio"], 0.7)
+        self.assertAlmostEqual(state.workspacePaneFrames["pane-2"]["left"], 70.0)
+
     def test_workspace_tab_reorder_trigger_preserves_active_tab(self):
         state, controller = self.make_controller()
         controller.actions["add_workspace_tab"]("pane-1")
@@ -542,6 +598,56 @@ class CampaignDbNavigationTests(unittest.TestCase):
             ["tab-2", "tab-3", "tab-1"],
         )
         self.assertEqual(state.workspaceActiveTabId, "tab-3")
+
+    def test_workspace_tab_move_trigger_targets_a_pane_insertion_slot(self):
+        state, controller = self.make_controller()
+        controller.actions["add_workspace_tab"]("pane-1")
+        controller.actions["split_workspace_pane"]("horizontal", "pane-1")
+
+        controller.triggers["move_workspace_tab_trigger"](
+            "pane-1", "tab-1", "pane-2", 0
+        )
+
+        self.assertEqual(
+            [tab["id"] for tab in state.workspacePanes[0]["tabs"]],
+            ["tab-2"],
+        )
+        self.assertEqual(
+            [tab["id"] for tab in state.workspacePanes[1]["tabs"]],
+            ["tab-1", "tab-3"],
+        )
+        self.assertEqual(state.workspaceActivePaneId, "pane-2")
+        self.assertEqual(state.workspaceActiveTabId, "tab-1")
+
+    def test_workspace_grid_move_trigger_activates_the_destination_pane(self):
+        state, controller = self.make_controller()
+        state.gridCells[0].update(
+            {
+                "variable_id": "density",
+                "variable_name": "density",
+                "status": "ready",
+            }
+        )
+        state.timelineDriverCell = 0
+        controller.actions["split_workspace_pane"]("horizontal", "pane-1")
+
+        controller.triggers["move_workspace_grid_cell_trigger"](
+            "pane-1", "tab-1", 0, "pane-2", "tab-2", 4
+        )
+
+        self.assertEqual(state.workspaceActivePaneId, "pane-2")
+        self.assertEqual(state.workspaceActiveTabId, "tab-2")
+        self.assertEqual(state.gridCells[4]["variable_id"], "density")
+        self.assertEqual(state.gridCells[0]["variable_id"], "")
+        self.assertEqual(state.activeGridCell, 4)
+        self.assertEqual(state.selectedGridCellIndices, [4])
+        self.assertEqual(state.timelineDriverCell, -1)
+        self.assertEqual(
+            state.workspacePanes[0]["tabs"][0]["grid"]["cells"][0][
+                "variable_id"
+            ],
+            "",
+        )
 
     def test_server_ready_lifecycle_reingests_and_refreshes_catalog(self):
         state = RecordingState()
@@ -753,6 +859,7 @@ class CampaignDbNavigationTests(unittest.TestCase):
             "pane-1", "tab-2", "1D Trends"
         )
         controller.actions["split_workspace_pane"]("horizontal")
+        controller.triggers["resize_workspace_split_trigger"]("split-1", 0.68)
         serialized = parse_workspace_document(
             workspace_json(state, "/campaign/example.aca")
         )
@@ -763,6 +870,7 @@ class CampaignDbNavigationTests(unittest.TestCase):
         owner.restore_workspace_state(serialized)
 
         self.assertEqual(state.workspaceSplitDirection, "horizontal")
+        self.assertAlmostEqual(state.workspaceLayout["root"]["ratio"], 0.68)
         self.assertEqual(len(state.workspacePanes), 2)
         self.assertEqual(
             [
@@ -774,6 +882,66 @@ class CampaignDbNavigationTests(unittest.TestCase):
         )
         self.assertEqual(state.workspaceActivePaneId, "pane-2")
         self.assertEqual(state.workspaceActiveTabId, "tab-3")
+
+    def test_workspace_round_trip_retains_cross_pane_tab_order(self):
+        state, controller = self.make_controller()
+        owner = controller.actions["save_workspace_state"].__self__
+        controller.actions["add_workspace_tab"]("pane-1")
+        controller.actions["split_workspace_pane"]("horizontal", "pane-1")
+        controller.triggers["move_workspace_tab_trigger"](
+            "pane-1", "tab-1", "pane-2", 0
+        )
+        serialized = parse_workspace_document(
+            workspace_json(state, "/campaign/example.aca")
+        )
+
+        controller.actions["move_workspace_tab"]("pane-2", "tab-1")
+        owner.restore_workspace_state(serialized)
+
+        self.assertEqual(len(state.workspacePanes), 2)
+        self.assertEqual(
+            [tab["id"] for tab in state.workspacePanes[0]["tabs"]],
+            ["tab-2"],
+        )
+        self.assertEqual(
+            [tab["id"] for tab in state.workspacePanes[1]["tabs"]],
+            ["tab-1", "tab-3"],
+        )
+        self.assertEqual(state.workspaceActivePaneId, "pane-2")
+        self.assertEqual(state.workspaceActiveTabId, "tab-1")
+
+    def test_workspace_round_trip_retains_a_cross_pane_visualization_move(self):
+        state, controller = self.make_controller()
+        owner = controller.actions["save_workspace_state"].__self__
+        state.gridCells[0].update(
+            {
+                "variable_id": "density",
+                "variable_name": "density",
+                "status": "ready",
+            }
+        )
+        controller.actions["split_workspace_pane"]("horizontal", "pane-1")
+        controller.triggers["move_workspace_grid_cell_trigger"](
+            "pane-1", "tab-1", 0, "pane-2", "tab-2", 4
+        )
+        serialized = parse_workspace_document(
+            workspace_json(state, "/campaign/example.aca")
+        )
+
+        controller.triggers["move_workspace_grid_cell_trigger"](
+            "pane-2", "tab-2", 4, "pane-1", "tab-1", 0
+        )
+        owner.restore_workspace_state(serialized)
+
+        self.assertEqual(state.workspaceActivePaneId, "pane-2")
+        self.assertEqual(state.workspaceActiveTabId, "tab-2")
+        self.assertEqual(state.gridCells[4]["variable_id"], "density")
+        self.assertEqual(
+            state.workspacePanes[0]["tabs"][0]["grid"]["cells"][0][
+                "variable_id"
+            ],
+            "",
+        )
 
     def test_workspace_refresh_uses_source_plugin_rehydration(self):
         state, controller = self.make_controller()

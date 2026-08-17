@@ -300,6 +300,7 @@ class GridControllerMixin:
     def set_grid_layout(
         self, rows: int, cols: int, cells: List[Dict[str, Any]], active: int
     ) -> None:
+        previous_rows, previous_cols = self.grid_dimensions()
         rows = clamp_int(rows, 3, self.GRID_MIN_ROWS, self.GRID_MAX_ROWS)
         cols = clamp_int(cols, 3, self.GRID_MIN_COLS, self.GRID_MAX_COLS)
         cells = self.normalize_grid_cells(cells, rows, cols)
@@ -317,8 +318,22 @@ class GridControllerMixin:
             self.normalize_grid_selection(cells=list(self.state.gridCells or []))
         )
         self.clear_context_menu_state()
+        self.record_interaction(
+            "workspace.layout_changed",
+            source="grid_controls",
+            payload={
+                "change": "dimensions",
+                "previous_rows": previous_rows,
+                "previous_columns": previous_cols,
+                "rows": rows,
+                "columns": cols,
+                "workspace": self.interaction_workspace_location(),
+            },
+        )
+        self.clear_interaction_assignment()
 
     def set_grid_layout_mode(self, mode: str, **_):
+        previous = str(getattr(self.state, "gridLayoutMode", "uniform") or "uniform")
         self.state.gridLayoutMode = (
             "spanning" if str(mode or "").strip().lower() == "spanning" else "uniform"
         )
@@ -331,6 +346,18 @@ class GridControllerMixin:
         self.publish_grid_selection(
             self.normalize_grid_selection(cells=list(self.state.gridCells or []))
         )
+        current = str(self.state.gridLayoutMode or "uniform")
+        if current != previous:
+            self.record_interaction(
+                "workspace.layout_changed",
+                source="grid_controls",
+                payload={
+                    "change": "layout_mode",
+                    "previous": previous,
+                    "current": current,
+                    "workspace": self.interaction_workspace_location(),
+                },
+            )
 
     def set_grid_cell_size(self, size: int, **_):
         self.normalize_grid_sizing()
@@ -350,11 +377,24 @@ class GridControllerMixin:
         self.normalize_grid_track_sizes()
 
     def set_grid_sizing_mode(self, mode: str, **_):
+        previous = str(getattr(self.state, "gridSizingMode", "static") or "static")
         self.state.gridSizingMode = (
             "fit" if str(mode or "").strip().lower() == "fit" else "static"
         )
         self.normalize_grid_sizing()
         self.normalize_grid_track_sizes()
+        current = str(self.state.gridSizingMode or "static")
+        if current != previous:
+            self.record_interaction(
+                "workspace.layout_changed",
+                source="grid_controls",
+                payload={
+                    "change": "sizing_mode",
+                    "previous": previous,
+                    "current": current,
+                    "workspace": self.interaction_workspace_location(),
+                },
+            )
 
     def reset_grid_track_sizes_action(self, **_):
         self.reset_grid_track_sizes()
@@ -383,6 +423,16 @@ class GridControllerMixin:
             return
         self.state.gridSizingMode = "static"
         self.normalize_grid_track_sizes(rows, cols)
+        self.record_interaction(
+            "workspace.layout_changed",
+            source="grid_resize",
+            payload={
+                "change": f"{axis_name}_sizes",
+                "column_sizes": list(self.state.gridColumnSizes or []),
+                "row_sizes": list(self.state.gridRowSizes or []),
+                "workspace": self.interaction_workspace_location(),
+            },
+        )
 
     def set_grid_track_weights_trigger(self, axis: str, weights="", **_):
         axis_name = str(axis or "").strip().lower()
@@ -396,6 +446,16 @@ class GridControllerMixin:
             return
         self.state.gridSizingMode = "fit"
         self.normalize_grid_track_sizes(rows, cols)
+        self.record_interaction(
+            "workspace.layout_changed",
+            source="grid_resize",
+            payload={
+                "change": f"{axis_name}_weights",
+                "column_weights": list(self.state.gridColumnWeights or []),
+                "row_weights": list(self.state.gridRowWeights or []),
+                "workspace": self.interaction_workspace_location(),
+            },
+        )
 
     def set_grid_layout_size(self, rows: int, cols: int, **_):
         old_rows, old_cols = self.grid_dimensions()
@@ -482,6 +542,12 @@ class GridControllerMixin:
             sync_selection=True,
         ):
             self.set_grid_selection([target], active=target)
+            generated_cells = self.normalize_grid_cells(self.state.gridCells)
+            self.record_visualization_assignment(
+                target,
+                generated_cells[target],
+                source=self._interaction_assignment_source or "variable_add",
+            )
             return
 
         try:
@@ -503,6 +569,11 @@ class GridControllerMixin:
         self.set_grid_selection([target], active=target)
         self.state.selectedVar = var
         self.state.draggedVar = var
+        self.record_visualization_assignment(
+            target,
+            list(self.state.gridCells or [])[target],
+            source=self._interaction_assignment_source or "variable_add",
+        )
 
     def set_active_grid_cell(self, cell_index: int, ignore=0, multi=0, **_):
         try:
@@ -579,6 +650,12 @@ class GridControllerMixin:
             sync_selection=True,
         ):
             self.set_grid_selection([idx], active=idx)
+            generated_cells = self.normalize_grid_cells(self.state.gridCells)
+            self.record_visualization_assignment(
+                idx,
+                generated_cells[idx],
+                source=self._interaction_assignment_source or "empty_cell_selection",
+            )
             return
 
         try:
@@ -598,6 +675,11 @@ class GridControllerMixin:
             assign_cell(cells, idx, err_cell)
         self.state.gridCells = self.normalize_grid_cells(cells)
         self.set_grid_selection([idx], active=idx)
+        self.record_visualization_assignment(
+            idx,
+            list(self.state.gridCells or [])[idx],
+            source=self._interaction_assignment_source or "empty_cell_selection",
+        )
 
     def toggle_timeline_driver_cell(self, cell_index: int, **_):
         try:
@@ -612,6 +694,16 @@ class GridControllerMixin:
         except Exception:
             current = -1
         self.state.timelineDriverCell = toggle_timeline_driver(cells, current, idx)
+        if int(self.state.timelineDriverCell) != current:
+            self.record_interaction(
+                "workspace.timeline_driver_changed",
+                source="cell_controls",
+                payload={
+                    "previous_cell": current,
+                    "current_cell": int(self.state.timelineDriverCell),
+                    "workspace": self.interaction_workspace_location(idx),
+                },
+            )
 
     def clear_grid_cell(self, cell_index: int, **_):
         try:
@@ -623,6 +715,7 @@ class GridControllerMixin:
 
         self.clear_timeline_driver_if_cell(idx)
         cells = self.normalize_grid_cells(self.state.gridCells)
+        previous = dict(cells[idx] or {})
         assign_cell(cells, idx, empty_grid_cell())
         self.state.gridCells = self.normalize_grid_cells(cells)
         self.publish_grid_selection(
@@ -634,6 +727,29 @@ class GridControllerMixin:
                 if item != idx
             ]
         )
+        variable_id = str(
+            previous.get("variable_id", "")
+            or previous.get("variable_name", "")
+            or ""
+        )
+        if variable_id:
+            assignment = self.interaction_assignment_reference(idx)
+            self.record_interaction(
+                "visualization.removed",
+                source="cell_controls",
+                payload={
+                    "variable_id": variable_id,
+                    "visualization_id": str(
+                        previous.get("selected_visualization", "")
+                        or previous.get("visualization_name", "")
+                        or ""
+                    ),
+                    "query_id": self._interaction_query_id,
+                    "workspace": self.interaction_workspace_location(idx),
+                    **assignment,
+                },
+            )
+            self.clear_interaction_assignment(idx)
 
     def move_grid_cell(self, from_index: int, to_index: int, **_):
         try:
@@ -661,6 +777,26 @@ class GridControllerMixin:
         self.state.gridCells = self.normalize_grid_cells(cells)
         self.state.activeGridCell = dst
         self.set_grid_selection([dst], active=dst)
+        self.record_interaction(
+            "workspace.cell_moved",
+            source="grid_drag",
+            payload={
+                "source_cell": src,
+                "destination_cell": dst,
+                "variable_id": str(
+                    source.get("variable_id", "")
+                    or source.get("variable_name", "")
+                    or ""
+                ),
+                "visualization_id": str(
+                    source.get("selected_visualization", "")
+                    or source.get("visualization_name", "")
+                    or ""
+                ),
+                "workspace": self.interaction_workspace_location(dst),
+            },
+        )
+        self.clear_interaction_assignment()
 
     def move_grid_cell_trigger(self, from_index, to_index, **_):
         self.move_grid_cell(from_index, to_index)
@@ -979,6 +1115,16 @@ class GridControllerMixin:
         self.publish_grid_selection(
             self.normalize_grid_selection(cells=list(self.state.gridCells or []))
         )
+        self.record_interaction(
+            "workspace.cell_spanned",
+            source="cell_controls",
+            payload={
+                "cell_index": idx,
+                "row_span": new_row_span,
+                "column_span": new_col_span,
+                "workspace": self.interaction_workspace_location(idx),
+            },
+        )
         return True
 
     def span_grid_cell_right(self, cell_index: int, **_):
@@ -1071,6 +1217,13 @@ class GridControllerMixin:
             sync_selection=sync_selection,
         ):
             self.set_grid_selection([idx], active=idx)
+            generated_cells = self.normalize_grid_cells(self.state.gridCells)
+            self.record_visualization_assignment(
+                idx,
+                generated_cells[idx],
+                source=self._interaction_assignment_source
+                or ("grid_drop" if not sync_selection else "cell_assignment"),
+            )
             return
 
         try:
@@ -1092,6 +1245,12 @@ class GridControllerMixin:
         if sync_selection:
             self.state.selectedVar = var
             self.state.draggedVar = var
+        self.record_visualization_assignment(
+            idx,
+            list(self.state.gridCells or [])[idx],
+            source=self._interaction_assignment_source
+            or ("grid_drop" if not sync_selection else "cell_assignment"),
+        )
 
     def assign_var_to_grid_cell_trigger(self, var_name, cell_index, **_):
         self.assign_var_to_grid_cell(cell_index, var_name, sync_selection=False)
@@ -1108,6 +1267,7 @@ class GridControllerMixin:
             return
 
         cells = self.normalize_grid_cells(self.state.gridCells)
+        previous_cell = dict(cells[idx] or {})
         var = str(
             cells[idx].get("variable_id", "")
             or cells[idx].get("variable_name", "")
@@ -1153,3 +1313,35 @@ class GridControllerMixin:
         self.state.activeGridCell = idx
         self.set_grid_selection([idx], active=idx)
         self.state.selectedVar = var
+        current_cell = dict(list(self.state.gridCells or [])[idx] or {})
+        previous_visualization = str(
+            previous_cell.get("selected_visualization", "")
+            or previous_cell.get("visualization_name", "")
+            or ""
+        )
+        selected_visualization = str(
+            current_cell.get("selected_visualization", "")
+            or current_cell.get("visualization_name", "")
+            or ""
+        )
+        if (
+            str(current_cell.get("status", "") or "") != "error"
+            and selected_visualization
+            and selected_visualization != previous_visualization
+        ):
+            assignment = self.interaction_assignment_reference(idx)
+            self.record_interaction(
+                "visualization.changed",
+                source="grid_menu",
+                payload={
+                    "variable_id": var,
+                    "previous_visualization": previous_visualization,
+                    "selected_visualization": selected_visualization,
+                    "candidate_visualizations": list(
+                        current_cell.get("visualization_options", []) or []
+                    ),
+                    "query_id": self._interaction_query_id,
+                    "workspace": self.interaction_workspace_location(idx),
+                    **assignment,
+                },
+            )

@@ -21,11 +21,16 @@ from seurat.models.workspace_layout import (  # noqa: E402
     close_workspace_tab as close_workspace_tab_model,
     grid_snapshot,
     initial_workspace_layout,
+    move_workspace_grid_cell as move_workspace_grid_cell_model,
     move_workspace_tab as move_workspace_tab_model,
+    move_workspace_tab_to_pane as move_workspace_tab_to_pane_model,
+    normalized_workspace_root,
     normalized_tab_title,
     pane_and_tab,
     reorder_workspace_tab as reorder_workspace_tab_model,
+    resize_workspace_split as resize_workspace_split_model,
     split_workspace as split_workspace_model,
+    workspace_geometry,
 )
 from seurat.state import init_state  # noqa: E402
 from trame.app import get_server  # noqa: E402
@@ -47,7 +52,7 @@ def _image_source(color):
 
 
 def _plot_cell(mode):
-    physical = mode == "physical"
+    physical = mode in {"physical", "mixed"}
     x_values = [0.0, 0.25, 1.0] if physical else list(range(80))
     y_values = (
         [10.0, 20.0, 30.0]
@@ -90,7 +95,8 @@ def _plot_cell(mode):
 
 def _image_sequence_cell(mode):
     physical = mode == "physical"
-    frame_count = 3 if physical else 35
+    mixed = mode == "mixed"
+    frame_count = 3 if physical or mixed else 35
     colors = ("#c62828", "#2e7d32", "#1565c0")
     sources = [
         _image_source(colors[index % len(colors)]) for index in range(frame_count)
@@ -108,7 +114,11 @@ def _image_sequence_cell(mode):
             "frame_count": len(sources),
             "frame_indices": list(range(frame_count)),
             "frame_sources": sources,
-            "time_values": ([0.0, 0.25, 1.0] if physical else list(range(frame_count))),
+            "time_values": (
+                [0.0, 0.25, 1.0]
+                if physical or mixed
+                else list(range(frame_count))
+            ),
             "time_mode": "physical_time" if physical else "timestep",
         }
     )
@@ -265,6 +275,8 @@ def build_fixture_server(mode):
         ]
     state.workspaceLayout = initial_workspace_layout(grid_snapshot(state))
     state.workspacePanes = deepcopy(state.workspaceLayout["panes"])
+    state.workspacePaneFrames, splitters = workspace_geometry(state.workspaceLayout)
+    state.workspaceSplitters = list(splitters)
 
     if mode == "scalar-settings":
         state.showScalarFieldSettingsModal = True
@@ -290,8 +302,20 @@ def build_fixture_server(mode):
         state.variableGroupCollapsed = collapsed
 
     def publish_workspace_layout(layout):
+        layout = deepcopy(layout)
+        root = normalized_workspace_root(layout)
+        layout["root"] = root
+        layout["split_direction"] = (
+            root.get("direction", "none") if root.get("kind") == "split" else "none"
+        )
+        layout["split_ratio"] = (
+            float(root.get("ratio", 0.5)) if root.get("kind") == "split" else 0.5
+        )
+        pane_frames, splitters = workspace_geometry(layout)
         state.workspaceLayout = deepcopy(layout)
         state.workspacePanes = deepcopy(layout["panes"])
+        state.workspacePaneFrames = deepcopy(pane_frames)
+        state.workspaceSplitters = deepcopy(list(splitters))
         state.workspaceSplitDirection = layout["split_direction"]
         state.workspaceSplitRatio = layout["split_ratio"]
         state.workspaceActivePaneId = layout["active_pane_id"]
@@ -351,9 +375,12 @@ def build_fixture_server(mode):
                 )
             )
 
-    def split_workspace_pane(direction="horizontal"):
+    def split_workspace_pane(direction="horizontal", pane_id=""):
         layout, _pane_id = split_workspace_model(
-            stash_active_workspace_grid(), direction, grid_snapshot(state)
+            stash_active_workspace_grid(),
+            direction,
+            grid_snapshot(state),
+            pane_id=pane_id or state.workspaceActivePaneId,
         )
         load_active_workspace_grid(layout)
 
@@ -363,18 +390,57 @@ def build_fixture_server(mode):
                 close_workspace_pane_model(stash_active_workspace_grid(), pane_id)
             )
 
-    def move_workspace_tab(pane_id, tab_id):
-        load_active_workspace_grid(
-            move_workspace_tab_model(
-                stash_active_workspace_grid(), pane_id, tab_id
+    def move_workspace_tab(
+        pane_id,
+        tab_id,
+        destination_pane_id="",
+        insertion_index=None,
+    ):
+        layout = stash_active_workspace_grid()
+        if destination_pane_id:
+            layout = move_workspace_tab_to_pane_model(
+                layout,
+                pane_id,
+                tab_id,
+                destination_pane_id,
+                insertion_index,
             )
-        )
+        else:
+            layout = move_workspace_tab_model(layout, pane_id, tab_id)
+        load_active_workspace_grid(layout)
 
     def reorder_workspace_tab(pane_id, tab_id, insertion_index):
         layout = reorder_workspace_tab_model(
             stash_active_workspace_grid(), pane_id, tab_id, insertion_index
         )
         publish_workspace_layout(layout)
+
+    def move_workspace_grid_cell(
+        source_pane_id,
+        source_tab_id,
+        source_index,
+        destination_pane_id,
+        destination_tab_id,
+        destination_index,
+    ):
+        load_active_workspace_grid(
+            move_workspace_grid_cell_model(
+                stash_active_workspace_grid(),
+                source_pane_id,
+                source_tab_id,
+                source_index,
+                destination_pane_id,
+                destination_tab_id,
+                destination_index,
+            )
+        )
+
+    def resize_workspace_split(split_id, ratio):
+        publish_workspace_layout(
+            resize_workspace_split_model(
+                stash_active_workspace_grid(), split_id, ratio
+            )
+        )
 
     @state.change("variableSearchText")
     def filter_variable_groups(variableSearchText, **_):
@@ -745,8 +811,15 @@ def build_fixture_server(mode):
         assign_var_to_grid_cell
     )
     server.controller.trigger("move_grid_cell_trigger")(move_grid_cell)
+    server.controller.trigger("move_workspace_grid_cell_trigger")(
+        move_workspace_grid_cell
+    )
+    server.controller.trigger("move_workspace_tab_trigger")(move_workspace_tab)
     server.controller.trigger("reorder_workspace_tab_trigger")(
         reorder_workspace_tab
+    )
+    server.controller.trigger("resize_workspace_split_trigger")(
+        resize_workspace_split
     )
     server.controller.trigger("set_grid_track_sizes_trigger")(set_grid_track_sizes)
     server.controller.trigger("set_grid_track_weights_trigger")(set_grid_track_weights)
@@ -784,7 +857,7 @@ def main():
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument(
         "--mode",
-        choices=("step", "physical", "scalar", "scalar-settings"),
+        choices=("step", "physical", "mixed", "scalar", "scalar-settings"),
         default="step",
     )
     args = parser.parse_args()

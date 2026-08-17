@@ -12,6 +12,7 @@ __pycache__/
 *.png
 *.mp4
 runs/
+/logs/
 
 # Editor backups
 *~

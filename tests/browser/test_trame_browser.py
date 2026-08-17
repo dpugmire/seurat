@@ -168,6 +168,55 @@ def test_workspace_tabs_and_split_panes_preserve_grid_content(
     assert console_errors == [], response_errors
 
 
+def test_visualization_drop_on_inactive_pane_moves_and_activates_it(
+    page, seurat_server
+):
+    console_errors, page_errors, response_errors = _open_app(page, seurat_server)
+
+    pane_one_bar = page.locator(
+        '.seurat-workspace-tab-bar[data-pane-frame-id="pane-1"]'
+    )
+    pane_one_bar.get_by_role("button", name="Pane and tab actions").click()
+    page.get_by_text("Split right", exact=True).click()
+    page.get_by_role("tab", name="View 2").wait_for(state="visible")
+    page.get_by_role("tab", name="View 1").click()
+
+    source_grid = page.locator(
+        '.seurat-workspace-active-grid[data-pane-frame-id="pane-1"]'
+    )
+    source_grid.wait_for(state="visible")
+    source = source_grid.locator('.seurat-dropcell[data-cell-index="0"]')
+    destination = page.locator(
+        '.seurat-workspace-grid-preview[data-pane-frame-id="pane-2"] '
+        '.seurat-workspace-preview-cell[data-cell-index="2"]'
+    )
+    destination.wait_for(state="visible")
+
+    source.drag_to(destination)
+
+    destination_grid = page.locator(
+        '.seurat-workspace-active-grid[data-pane-frame-id="pane-2"]'
+    )
+    destination_grid.wait_for(state="visible")
+    destination_grid.locator(
+        '.seurat-dropcell[data-cell-index="2"]'
+    ).get_by_text("internal_energy", exact=True).wait_for(state="visible")
+    assert page.get_by_role("tab", name="View 2").get_attribute(
+        "aria-selected"
+    ) == "true"
+    assert page.locator(
+        '.seurat-workspace-grid-preview[data-pane-frame-id="pane-1"] '
+        '.seurat-workspace-preview-cell[data-cell-index="0"]'
+    ).get_attribute("data-cell-filled") == "0"
+    assert page.locator(
+        ".seurat-workspace-grid-preview.is-visualization-drop-target"
+    ).count() == 0
+    assert page.locator(".seurat-dropcell.seurat-drop-hover").count() == 0
+
+    assert page_errors == []
+    assert console_errors == [], response_errors
+
+
 def test_vertical_split_keeps_inactive_grid_backgrounds_visible(
     page, seurat_server
 ):
@@ -197,6 +246,214 @@ def test_vertical_split_keeps_inactive_grid_backgrounds_visible(
     assert upper_preview.locator(".seurat-plot1d").evaluate(
         "plot => getComputedStyle(plot).backgroundColor === 'rgb(255, 255, 255)'"
     )
+
+    assert page_errors == []
+    assert console_errors == [], response_errors
+
+
+def test_split_pane_slider_updates_inactive_1d_plot(page, seurat_server):
+    console_errors, page_errors, response_errors = _open_app(page, seurat_server)
+
+    first_bar = page.locator(
+        '.seurat-workspace-tab-bar[data-pane-frame-id="pane-1"]'
+    )
+    first_bar.get_by_role("button", name="Pane and tab actions").click()
+    page.get_by_text("Split right", exact=True).click()
+    page.get_by_role("tab", name="View 2").wait_for(state="visible")
+
+    preview = page.locator(
+        '.seurat-workspace-grid-preview[data-pane-frame-id="pane-1"]'
+    )
+    cursor = preview.locator(".seurat-plot1d-cursor-line")
+    cursor.wait_for(state="attached")
+    initial_x = float(cursor.get_attribute("x1"))
+
+    slider = page.locator("#seurat-vcr-step-slider")
+    slider_bounds = slider.bounding_box()
+    assert slider_bounds is not None
+    slider.click(
+        position={
+            "x": slider_bounds["width"] * 0.8,
+            "y": slider_bounds["height"] * 0.5,
+        }
+    )
+    selected_step = int(slider.input_value())
+    assert selected_step > 0
+    page.wait_for_function(
+        "step => document.querySelector('#seurat-vcr-time-value').textContent === 'Step = ' + step",
+        arg=selected_step,
+    )
+
+    split_x = float(cursor.get_attribute("x1"))
+    assert split_x > initial_x
+
+    page.get_by_role("tab", name="View 1").click()
+    active_cursor = page.locator(
+        '.seurat-workspace-active-grid[data-pane-frame-id="pane-1"] '
+        ".seurat-plot1d-cursor-line"
+    )
+    active_cursor.wait_for(state="attached")
+    page.wait_for_function(
+        "step => document.querySelector('#seurat-vcr-time-value').textContent === 'Step = ' + step",
+        arg=selected_step,
+    )
+    active_frame = page.locator(
+        '.seurat-workspace-active-grid[data-pane-frame-id="pane-1"] '
+        ".seurat-plot1d svg rect"
+    ).first
+    frame_x = float(active_frame.get_attribute("x"))
+    frame_width = float(active_frame.get_attribute("width"))
+    active_cursor_x = float(active_cursor.get_attribute("x1"))
+    assert (active_cursor_x - frame_x) / frame_width == pytest.approx(
+        selected_step / 79.0, abs=0.01
+    )
+    assert page_errors == []
+    assert console_errors == [], response_errors
+
+
+def test_split_pane_tab_switch_keeps_2d_image_fitted(page, seurat_server):
+    console_errors, page_errors, response_errors = _open_app(page, seurat_server)
+
+    first_bar = page.locator(
+        '.seurat-workspace-tab-bar[data-pane-frame-id="pane-1"]'
+    )
+    first_bar.get_by_role("button", name="New tab").click()
+    page.get_by_role("tab", name="View 2").wait_for(state="visible")
+    page.get_by_role("tab", name="View 1").click()
+    first_bar.get_by_role("button", name="Pane and tab actions").click()
+    page.get_by_text("Split right", exact=True).click()
+    page.get_by_role("tab", name="View 3").wait_for(state="visible")
+
+    preview_image = page.locator(
+        '.seurat-workspace-grid-preview[data-pane-frame-id="pane-1"] '
+        '.seurat-workspace-preview-media img[data-grid-image-sequence="1"]'
+    )
+    preview_image.wait_for(state="visible")
+    preview_geometry = preview_image.evaluate(
+        """image => {
+            const imageBounds = image.getBoundingClientRect();
+            const parentBounds = image.parentElement.getBoundingClientRect();
+            return {
+                className: image.className,
+                objectFit: getComputedStyle(image).objectFit,
+                width: imageBounds.width,
+                height: imageBounds.height,
+                parentWidth: parentBounds.width,
+                parentHeight: parentBounds.height,
+            };
+        }"""
+    )
+    assert "seurat-workspace-preview-image" in preview_geometry["className"]
+    assert preview_geometry["objectFit"] == "contain"
+    assert preview_geometry["width"] == pytest.approx(
+        preview_geometry["parentWidth"], abs=1
+    )
+    assert preview_geometry["height"] == pytest.approx(
+        preview_geometry["parentHeight"], abs=1
+    )
+
+    page.get_by_role("tab", name="View 2").click()
+    page.get_by_role("tab", name="View 1").click()
+    active_viewport = page.locator(
+        '.seurat-workspace-active-grid[data-pane-frame-id="pane-1"] '
+        ".seurat-panzoom-viewport"
+    )
+    active_viewport.wait_for(state="visible")
+    assert active_viewport.evaluate(
+        "viewport => ({ ...viewport.__seuratPanZoomState })"
+    ) == pytest.approx({"scale": 1, "tx": 0, "ty": 0})
+
+    page.get_by_role("tab", name="View 3").click()
+    preview_image.wait_for(state="visible")
+    page.get_by_role("tab", name="View 1").click()
+    active_viewport.wait_for(state="visible")
+    assert active_viewport.evaluate(
+        "viewport => ({ ...viewport.__seuratPanZoomState })"
+    ) == pytest.approx({"scale": 1, "tx": 0, "ty": 0})
+
+    assert page_errors == []
+    assert console_errors == [], response_errors
+
+
+def test_workspace_can_create_a_nested_three_pane_layout(page, seurat_server):
+    console_errors, page_errors, response_errors = _open_app(page, seurat_server)
+
+    pane_one = page.locator(
+        '.seurat-workspace-tab-bar[data-pane-frame-id="pane-1"]'
+    )
+    pane_one.get_by_role("button", name="Pane and tab actions").click()
+    page.get_by_text("Split right", exact=True).click()
+    page.get_by_role("tab", name="View 2").wait_for(state="visible")
+
+    page.get_by_role("tab", name="View 1").click()
+    pane_one.get_by_role("button", name="Pane and tab actions").click()
+    split_down = page.locator(".v-overlay--active").get_by_text(
+        "Split down", exact=True
+    )
+    split_down.wait_for(state="visible")
+    split_down.click()
+    page.get_by_role("tab", name="View 3").wait_for(state="visible")
+
+    pane_two = page.locator(
+        '.seurat-workspace-tab-bar[data-pane-frame-id="pane-2"]'
+    )
+    pane_three = page.locator(
+        '.seurat-workspace-tab-bar[data-pane-frame-id="pane-3"]'
+    )
+    pane_one_bounds = pane_one.bounding_box()
+    pane_two_bounds = pane_two.bounding_box()
+    pane_three_bounds = pane_three.bounding_box()
+    assert pane_one_bounds is not None
+    assert pane_two_bounds is not None
+    assert pane_three_bounds is not None
+
+    assert page.locator(".seurat-workspace-tab-bar").count() == 3
+    assert page.locator(".seurat-workspace-splitter").count() == 2
+    assert page.locator(".seurat-main-grid").count() == 3
+    assert pane_two_bounds["x"] > pane_one_bounds["x"] + pane_one_bounds["width"] - 2
+    assert pane_three_bounds["x"] == pytest.approx(pane_one_bounds["x"], abs=2)
+    assert pane_three_bounds["y"] > pane_one_bounds["y"]
+    assert pane_three_bounds["width"] == pytest.approx(
+        pane_one_bounds["width"], abs=2
+    )
+
+    assert page_errors == []
+    assert console_errors == [], response_errors
+
+
+def test_workspace_splitter_resizes_and_resets_panes(page, seurat_server):
+    console_errors, page_errors, response_errors = _open_app(page, seurat_server)
+
+    pane_one = page.locator(
+        '.seurat-workspace-tab-bar[data-pane-frame-id="pane-1"]'
+    )
+    pane_one.get_by_role("button", name="Pane and tab actions").click()
+    page.get_by_text("Split right", exact=True).click()
+    page.get_by_role("tab", name="View 2").wait_for(state="visible")
+
+    splitter = page.locator(
+        '.seurat-workspace-splitter[data-split-id="split-1"]'
+    )
+    splitter.wait_for(state="visible")
+    initial_width = pane_one.bounding_box()["width"]
+
+    _drag(page, splitter, delta_x=120)
+    page.wait_for_function(
+        "Number(document.querySelector('[data-split-id=\"split-1\"]')"
+        ".getAttribute('data-split-ratio')) > 0.55"
+    )
+    resized_width = pane_one.bounding_box()["width"]
+    assert resized_width > initial_width + 80
+    assert splitter.get_attribute("aria-valuenow") == str(
+        round(float(splitter.get_attribute("data-split-ratio")) * 100)
+    )
+
+    splitter.dblclick()
+    page.wait_for_function(
+        "Math.abs(Number(document.querySelector('[data-split-id=\"split-1\"]')"
+        ".getAttribute('data-split-ratio')) - 0.5) < 0.001"
+    )
+    assert pane_one.bounding_box()["width"] == pytest.approx(initial_width, abs=3)
 
     assert page_errors == []
     assert console_errors == [], response_errors
@@ -301,6 +558,81 @@ def test_workspace_tabs_drag_to_reorder_with_insertion_feedback(
     page.locator(".seurat-workspace-active-grid").get_by_text(
         "internal_energy", exact=True
     ).wait_for(state="visible")
+
+    assert page_errors == []
+    assert console_errors == [], response_errors
+
+
+def test_workspace_tabs_drag_between_panes_at_the_drop_position(
+    page, seurat_server
+):
+    console_errors, page_errors, response_errors = _open_app(page, seurat_server)
+
+    pane_one = page.locator(
+        '.seurat-workspace-tab-bar[data-pane-frame-id="pane-1"]'
+    )
+    pane_one.get_by_role("button", name="New tab").click()
+    page.get_by_role("tab", name="View 2").wait_for(state="visible")
+    pane_one.get_by_role("button", name="Pane and tab actions").click()
+    page.get_by_text("Split right", exact=True).click()
+    page.get_by_role("tab", name="View 3").wait_for(state="visible")
+    page.wait_for_function(
+        """() => {
+            const first = document.querySelector(
+              '.seurat-workspace-tab-bar[data-pane-frame-id="pane-1"]'
+            );
+            const second = document.querySelector(
+              '.seurat-workspace-tab-bar[data-pane-frame-id="pane-2"]'
+            );
+            if (!first || !second) return false;
+            const firstBounds = first.getBoundingClientRect();
+            const secondBounds = second.getBoundingClientRect();
+            return secondBounds.left >= firstBounds.right - 2;
+        }"""
+    )
+
+    source = page.get_by_role("tab", name="View 1")
+    destination = page.get_by_role("tab", name="View 3")
+    source_bounds = source.bounding_box()
+    destination_bounds = destination.bounding_box()
+    assert source_bounds is not None
+    assert destination_bounds is not None
+
+    source.drag_to(
+        destination,
+        target_position={
+            "x": destination_bounds["width"] * 0.2,
+            "y": destination_bounds["height"] / 2,
+        },
+    )
+
+    page.wait_for_function(
+        """() => {
+            const paneOne = document.querySelector(
+              '.seurat-workspace-tabs[data-pane-id="pane-1"]'
+            );
+            const paneTwo = document.querySelector(
+              '.seurat-workspace-tabs[data-pane-id="pane-2"]'
+            );
+            const titles = element => Array.from(
+              element.querySelectorAll('.seurat-workspace-tab')
+            ).map(tab => tab.textContent.trim()).join(',');
+            return paneOne && paneTwo
+              && titles(paneOne) === 'View 2'
+              && titles(paneTwo) === 'View 1,View 3';
+        }"""
+    )
+    assert page.get_by_role("tab", name="View 1").get_attribute(
+        "aria-selected"
+    ) == "true"
+    page.locator(".seurat-workspace-active-grid").get_by_text(
+        "internal_energy", exact=True
+    ).wait_for(state="visible")
+    assert page.locator(".seurat-workspace-tabs.is-tab-drop-target").count() == 0
+    assert page.locator(
+        ".seurat-workspace-tab-shell.is-tab-drop-before, "
+        ".seurat-workspace-tab-shell.is-tab-drop-after"
+    ).count() == 0
 
     assert page_errors == []
     assert console_errors == [], response_errors
@@ -1517,3 +1849,55 @@ def test_physical_timeline_uses_declared_time_values(page, seurat_server):
         "document.querySelector('#seurat-vcr-time-value').textContent === 'Time = 0.25'"
     )
     assert image.get_attribute("data-current-frame") == "1"
+
+
+def test_mixed_step_sequence_uses_declared_time_for_split_plot_cursor(
+    page, seurat_server
+):
+    _open_app(page, seurat_server, mode="mixed")
+
+    first_bar = page.locator(
+        '.seurat-workspace-tab-bar[data-pane-frame-id="pane-1"]'
+    )
+    first_bar.get_by_role("button", name="Pane and tab actions").click()
+    page.get_by_text("Split down", exact=True).click()
+    page.get_by_role("tab", name="View 2").wait_for(state="visible")
+
+    slider = page.locator("#seurat-vcr-step-slider")
+    image = page.locator(
+        '.seurat-workspace-grid-preview[data-pane-frame-id="pane-1"] '
+        'img[data-grid-image-sequence="1"]'
+    )
+    slider.evaluate(
+        """element => {
+            element.value = "1";
+            element.dispatchEvent(new Event("input", { bubbles: true }));
+        }"""
+    )
+    page.wait_for_function(
+        "document.querySelector('#seurat-vcr-time-value').textContent === 'Step = 0.25'"
+    )
+    assert image.get_attribute("data-current-frame") == "1"
+
+    preview = page.locator(
+        '.seurat-workspace-grid-preview[data-pane-frame-id="pane-1"]'
+    )
+    frame = preview.locator(".seurat-plot1d svg rect").first
+    cursor = preview.locator(".seurat-plot1d-cursor-line")
+    frame_x = float(frame.get_attribute("x"))
+    frame_width = float(frame.get_attribute("width"))
+    cursor_progress = (float(cursor.get_attribute("x1")) - frame_x) / frame_width
+    assert cursor_progress == pytest.approx(0.25, abs=0.01)
+
+    page.get_by_role("tab", name="View 1").click()
+    active = page.locator(
+        '.seurat-workspace-active-grid[data-pane-frame-id="pane-1"]'
+    )
+    active_cursor = active.locator(".seurat-plot1d-cursor-line")
+    active_cursor.wait_for(state="attached")
+    active_frame = active.locator(".seurat-plot1d svg rect").first
+    active_progress = (
+        float(active_cursor.get_attribute("x1"))
+        - float(active_frame.get_attribute("x"))
+    ) / float(active_frame.get_attribute("width"))
+    assert active_progress == pytest.approx(0.25, abs=0.01)

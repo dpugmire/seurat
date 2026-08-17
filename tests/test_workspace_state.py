@@ -132,7 +132,7 @@ class WorkspaceStateTests(unittest.TestCase):
         second_grid["cells"][0]["variable_id"] = "temperature"
         state.workspaceLayout = {
             "split_direction": "horizontal",
-            "split_ratio": 0.5,
+            "split_ratio": 0.67,
             "active_pane_id": "pane-1",
             "active_tab_id": "tab-1",
             "panes": [
@@ -157,6 +157,9 @@ class WorkspaceStateTests(unittest.TestCase):
         workspace = document["state"]["workspace"]
 
         self.assertEqual(workspace["split_direction"], "horizontal")
+        self.assertEqual(workspace["root"]["kind"], "split")
+        self.assertEqual(workspace["root"]["direction"], "horizontal")
+        self.assertAlmostEqual(workspace["root"]["ratio"], 0.67)
         self.assertEqual(len(workspace["panes"]), 2)
         self.assertEqual(workspace["panes"][1]["tabs"][0]["title"], "2D Fields")
         self.assertEqual(
@@ -176,6 +179,24 @@ class WorkspaceStateTests(unittest.TestCase):
         parsed = parse_workspace_document(json.dumps(document))
 
         self.assertNotIn("workspace", parsed["state"])
+
+    def test_legacy_two_pane_workspace_without_split_tree_is_accepted(self):
+        state = self.make_state()
+        document = workspace_document(state, "/campaign/example.aca")
+        workspace = document["state"]["workspace"]
+        second_pane = json.loads(json.dumps(workspace["panes"][0]))
+        second_pane["id"] = "pane-2"
+        second_pane["active_tab_id"] = "tab-2"
+        second_pane["tabs"][0]["id"] = "tab-2"
+        workspace["panes"].append(second_pane)
+        workspace["split_direction"] = "vertical"
+        workspace["active_pane_id"] = "pane-2"
+        workspace["active_tab_id"] = "tab-2"
+        del workspace["root"]
+
+        parsed = parse_workspace_document(json.dumps(document))
+
+        self.assertNotIn("root", parsed["state"]["workspace"])
 
     def test_rejects_wrong_format_version_and_campaign(self):
         document = workspace_document(

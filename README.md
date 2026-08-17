@@ -29,7 +29,7 @@ The main architectural boundaries are:
   owns pan/zoom and reset-view observation. The plot runtime owns plot-data
   parsing, SVG rendering, cursor drawing, hover/pan/zoom interactions, and
   render observation. The interaction runtime owns app-scoped variable/grid
-  drag-and-drop, context menus, and floating-panel movement. The resize runtime
+  and tab drag-and-drop, pane-divider resizing, context menus, and floating-panel movement. The resize runtime
   owns variable-panel and grid-track resizing, including pointer capture. All
   runtimes release their listeners, observers, timers, pointer state, and
   transient styling on unmount.
@@ -69,7 +69,7 @@ resolved before Phase 5B.2 resumes.
 
 Client-side event and observer ownership is lifecycle-scoped rather than
 document-global. The registered runtimes own grid timeline/VCR behavior,
-variable/grid drag-and-drop, context menus, floating-panel movement,
+variable/grid/tab drag-and-drop, pane-divider resizing, context menus, floating-panel movement,
 variable-panel and grid-track resizing, media pan/zoom, plot interaction, and
 plot rendering observation. Timeline/VCR policy lives in
 `seurat/module/serve/seurat-timeline-runtime.js`; media pan/zoom and its reset
@@ -81,18 +81,30 @@ combined reset/cursor behavior. Internal runtime objects are collected under
 `window.seurat.runtimes`; existing top-level aliases remain for Trame Vue plugin
 registration compatibility.
 
-### Workspace tabs
+### Workspace panes and tabs
 
 Each workspace tab owns its grid dimensions, track sizes, cell contents,
 selection, timeline-driver cell, and per-cell visualization settings. A split
 pane owns which of its tabs is visible. Campaign selection, the query and
 variable catalog, and the current timestep remain shared across the workspace.
 
+The workspace layout is a binary split tree with pane leaves. Any pane can be
+split right or down until the four-pane limit is reached. Drag a divider to
+resize its two child regions; double-click it to restore an even split. Split
+ratios are stored proportionally in workspace JSON so they survive window-size
+changes and save/load cycles. Older one- and two-pane workspace files are
+migrated to the tree representation when loaded.
+
 Closing a tab removes that tab's grid after confirmation. Tabs can be renamed
 or closed from their context menu, and the visible close button provides the
-same close action. Drag tabs to reorder them within a pane. Tab strips remain
-on one line and show edge fades when more tabs are available by horizontal
-scrolling.
+same close action. Drag tabs to reorder them within a pane or move them to a
+specific position in another pane. Moving the last tab out of a pane closes
+that empty pane. Tab strips remain on one line and show edge fades when more
+tabs are available by horizontal scrolling.
+
+Drag a filled visualization cell onto a cell in an inactive pane preview to
+move it between tab-owned grids. A valid destination is highlighted during the
+drag, and a successful drop activates the destination pane and tab.
 
 ## Run
 
@@ -230,6 +242,28 @@ settings, selected cells, and timeline driver. Rendered plots, image/video
 bytes, frame payloads, and other derived media are intentionally excluded.
 Seurat validates the state-file version and campaign name, then rebuilds
 derived content from the campaign when loading.
+
+## Optional Interaction Log
+
+Seurat can write a local, append-only JSONL log of normalized queries,
+visualization choices, workspace tab/pane/grid organization, and sanitized
+saved-workspace snapshots. Logging is disabled by default and does not change
+visualization behavior. Enable it by selecting a private directory:
+
+```bash
+export SEURAT_INTERACTION_LOG_DIR=/path/to/private/seurat-logs
+export SEURAT_INTERACTION_LOG_MAX_MB=64
+```
+
+The log excludes campaign and workspace file paths, raw query/assistant text,
+tab titles, arrays, and media payloads. Validate and summarize it with:
+
+```bash
+python -m seurat.learning.audit /path/to/private/seurat-logs
+```
+
+See [Interaction Log v1](docs/interaction-log-v1.md) for the event contract,
+privacy boundaries, and workspace snapshot schema.
 
 By default, Seurat stores its viewer sidecar DB under `~/.cache/seurat` using a
 filename derived from the resolved campaign path. Override the location with:

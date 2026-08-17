@@ -242,10 +242,14 @@ def _build_workspace_tab_bars(ctrl):
         with html.Div(
             classes="seurat-workspace-tab-bar",
             raw_attrs=[
-                ":class=\"["
-                "paneIndex === 0 ? 'seurat-workspace-slot-first' : 'seurat-workspace-slot-second',"
-                "pane.id === workspaceActivePaneId ? 'is-active-pane' : ''"
-                "]\"",
+                ":class=\"[paneIndex === 0 ? 'seurat-workspace-slot-first' : 'seurat-workspace-slot-second', pane.id === workspaceActivePaneId ? 'is-active-pane' : '']\"",
+                ':data-pane-frame-id="pane.id"',
+                ":style=\"{"
+                " '--pane-left': Number(((workspacePaneFrames || {})[pane.id] || {}).left || 0) + '%',"
+                " '--pane-top': Number(((workspacePaneFrames || {})[pane.id] || {}).top || 0) + '%',"
+                " '--pane-width': Number(((workspacePaneFrames || {})[pane.id] || {}).width || 100) + '%',"
+                " '--pane-height': Number(((workspacePaneFrames || {})[pane.id] || {}).height || 100) + '%'"
+                "}\"",
             ],
         ):
             with html.Div(classes="seurat-workspace-tabs-viewport"):
@@ -323,9 +327,9 @@ def _build_workspace_tab_bars(ctrl):
                             ),
                         )
                         vuetify.VListItem(
-                            title="Move tab to other pane",
+                            title="Move tab to next pane",
                             prepend_icon="mdi-tab-move",
-                            v_if="workspacePanes.length === 2",
+                            v_if="workspacePanes.length > 1",
                             click=(
                                 ctrl.move_workspace_tab,
                                 "[pane.id, pane.active_tab_id]",
@@ -344,19 +348,19 @@ def _build_workspace_tab_bars(ctrl):
                         vuetify.VListItem(
                             title="Split right",
                             prepend_icon="mdi-view-split-vertical",
-                            disabled=("workspacePanes.length >= 2",),
-                            click=(ctrl.split_workspace_pane, "['horizontal']"),
+                            disabled=("workspacePanes.length >= 4",),
+                            click=(ctrl.split_workspace_pane, "['horizontal', pane.id]"),
                         )
                         vuetify.VListItem(
                             title="Split down",
                             prepend_icon="mdi-view-split-horizontal",
-                            disabled=("workspacePanes.length >= 2",),
-                            click=(ctrl.split_workspace_pane, "['vertical']"),
+                            disabled=("workspacePanes.length >= 4",),
+                            click=(ctrl.split_workspace_pane, "['vertical', pane.id]"),
                         )
                         vuetify.VListItem(
                             title="Close split pane",
                             prepend_icon="mdi-dock-window",
-                            v_if="workspacePanes.length === 2",
+                            v_if="workspacePanes.length > 1",
                             click=(
                                 ctrl.close_workspace_pane,
                                 "[pane.id, window.confirm('Close this pane? Its tabs will move to the other pane.')]",
@@ -374,6 +378,7 @@ def _build_inactive_workspace_grids(ctrl):
                         click=(ctrl.activate_workspace_tab, "[pane.id, tab.id]"),
                         raw_attrs=[
                             ":class=\"paneIndex === 0 ? 'seurat-workspace-slot-first' : 'seurat-workspace-slot-second'\"",
+                            ':data-pane-frame-id="pane.id"',
                             ':data-grid-cols="tab.grid.columns"',
                             ':data-grid-rows="tab.grid.rows"',
                             'role="button"',
@@ -387,6 +392,10 @@ def _build_inactive_workspace_grids(ctrl):
                             " : ('grid-template-columns:' + String(tab.grid.column_template || ('repeat(' + tab.grid.columns + ', ' + Number(tab.grid.cell_size || 300) + 'px)')) + ';'"
                             " + 'grid-template-rows:' + String(tab.grid.row_template || ('repeat(' + tab.grid.rows + ', ' + (Number(tab.grid.cell_size || 300) + 32) + 'px)')) + ';'"
                             " + 'justify-content:center;align-content:start;'))"
+                            " + '--pane-left:' + Number(((workspacePaneFrames || {})[pane.id] || {}).left || 0) + '%;'"
+                            " + '--pane-top:' + Number(((workspacePaneFrames || {})[pane.id] || {}).top || 0) + '%;'"
+                            " + '--pane-width:' + Number(((workspacePaneFrames || {})[pane.id] || {}).width || 100) + '%;'"
+                            " + '--pane-height:' + Number(((workspacePaneFrames || {})[pane.id] || {}).height || 100) + '%;'"
                             " + 'min-height:0;overflow:auto;width:100%;height:100%;box-sizing:border-box;border:1px solid #cfcfcf;')\"",
                         ],
                     ):
@@ -397,6 +406,8 @@ def _build_inactive_workspace_grids(ctrl):
                                 classes="seurat-dropcell seurat-workspace-preview-cell",
                                 raw_attrs=[
                                     ':data-cell-index="i"',
+                                    ':data-pane-id="pane.id"',
+                                    ':data-tab-id="tab.id"',
                                     ':data-cell-filled="((tile && tile.variable_name) ? 1 : 0)"',
                                     ":style=\"((tab.grid.layout_mode === 'spanning')"
                                     " ? ('grid-row:' + Number((tile && tile.grid_row) || (Math.floor(i / tab.grid.columns) + 1)) + ' / span ' + Number((tile && tile.row_span) || 1) + ';grid-column:' + Number((tile && tile.grid_col) || ((i % tab.grid.columns) + 1)) + ' / span ' + Number((tile && tile.col_span) || 1) + ';')"
@@ -427,9 +438,8 @@ def _build_inactive_workspace_grids(ctrl):
                                             ):
                                                 html.Img(
                                                     src=("tile.src",),
-                                                    class_="seurat-workspace-preview-image",
                                                     raw_attrs=[
-                                                        ':class="{ \'seurat-grid-image-sequence\': tile.media_type === \'image_sequence\' }"',
+                                                        ':class="[\'seurat-workspace-preview-image\', { \'seurat-grid-image-sequence\': tile.media_type === \'image_sequence\' }]"',
                                                         ':data-grid-image-sequence="tile.media_type === \'image_sequence\' ? \'1\' : null"',
                                                         ':data-fps="tile.fps || 2"',
                                                         ':data-frame-count="tile.frame_count || 0"',
@@ -463,6 +473,41 @@ def _build_inactive_workspace_grids(ctrl):
                                         html.Div("+", classes="seurat-empty-plus")
 
 
+def _build_workspace_splitters():
+    html.Div(
+        classes="seurat-workspace-layout-surface",
+        raw_attrs=[
+            ':data-layout-tree="JSON.stringify((workspaceLayout || {}).root || {})"'
+        ],
+    )
+    with vuetify.Template(v_for="split in workspaceSplitters", key="split.id"):
+        html.Div(
+            classes="seurat-workspace-splitter",
+            raw_attrs=[
+                ":class=\"split.direction === 'vertical' ? 'is-horizontal-divider' : 'is-vertical-divider'\"",
+                ':data-split-frame-id="split.id"',
+                ':data-split-id="split.id"',
+                ':data-split-direction="split.direction"',
+                ':data-split-ratio="split.ratio"',
+                ':data-container-left="split.container_left"',
+                ':data-container-top="split.container_top"',
+                ':data-container-width="split.container_width"',
+                ':data-container-height="split.container_height"',
+                'role="separator"',
+                ':aria-orientation="split.direction === \'vertical\' ? \'horizontal\' : \'vertical\'"',
+                'aria-valuemin="15"',
+                'aria-valuemax="85"',
+                ':aria-valuenow="Math.round(Number(split.ratio || 0.5) * 100)"',
+                'title="Drag to resize panes; double-click to reset"',
+                ":style=\"{"
+                " '--split-left': Number(split.left || 0) + '%',"
+                " '--split-top': Number(split.top || 0) + '%',"
+                " '--split-span': Number(split.span || 0) + '%'"
+                "}\"",
+            ],
+        )
+
+
 class GridWorkspace(TrameComponent):
     def __init__(self, server):
         super().__init__(server)
@@ -485,12 +530,6 @@ class GridWorkspace(TrameComponent):
             ):
                 with vuetify.VCardText(
                     classes="seurat-workspace-card-content",
-                    raw_attrs=[
-                        ":class=\"["
-                        "workspacePanes.length === 2 ? 'has-workspace-split' : '',"
-                        "workspacePanes.length === 2 && workspaceSplitDirection === 'vertical' ? 'is-split-vertical' : 'is-split-horizontal'"
-                        "]\"",
-                    ],
                     style=(
                         "height:100%;"
                         "min-height:0;"
@@ -592,7 +631,8 @@ class GridWorkspace(TrameComponent):
                         classes="seurat-main-grid seurat-workspace-active-grid",
                         raw_attrs=[
                             ':key="workspaceActiveTabId"',
-                            ":class=\"workspaceActivePaneId === ((workspacePanes[0] || {}).id) ? 'seurat-workspace-slot-first' : 'seurat-workspace-slot-second'\"",
+                            ":class=\"workspacePanes.findIndex(pane => pane.id === workspaceActivePaneId) === 0 ? 'seurat-workspace-slot-first' : 'seurat-workspace-slot-second'\"",
+                            ':data-pane-frame-id="workspaceActivePaneId"',
                             ':data-grid-sizing-mode="gridSizingMode"',
                             ':data-grid-cols="gridCols"',
                             ':data-grid-rows="gridRows"',
@@ -620,6 +660,10 @@ class GridWorkspace(TrameComponent):
                             " + 'grid-template-rows:' + String(gridRowTemplate || ('repeat(' + gridRows + ', ' + (Number(gridCellSize || 300) + 32) + 'px)')) + ';'"
                             " + 'justify-content:center;'"
                             " + 'align-content:start;'))"
+                            " + '--pane-left:' + Number(((workspacePaneFrames || {})[workspaceActivePaneId] || {}).left || 0) + '%;'"
+                            " + '--pane-top:' + Number(((workspacePaneFrames || {})[workspaceActivePaneId] || {}).top || 0) + '%;'"
+                            " + '--pane-width:' + Number(((workspacePaneFrames || {})[workspaceActivePaneId] || {}).width || 100) + '%;'"
+                            " + '--pane-height:' + Number(((workspacePaneFrames || {})[workspaceActivePaneId] || {}).height || 100) + '%;'"
                             " + 'flex:1 1 auto;'"
                             " + 'min-height:0;'"
                             " + 'overflow:auto;'"
@@ -638,6 +682,8 @@ class GridWorkspace(TrameComponent):
                                 classes="seurat-dropcell",
                                 raw_attrs=[
                                     ':data-cell-index="i"',
+                                    ':data-pane-id="workspaceActivePaneId"',
+                                    ':data-tab-id="workspaceActiveTabId"',
                                     ':data-cell-filled="((tile && tile.variable_name) ? 1 : 0)"',
                                     ':data-cell-active="(activeGridCell === i ? 1 : 0)"',
                                     ':data-timeline-driver="(timelineDriverCell === i ? 1 : 0)"',
@@ -1104,6 +1150,7 @@ class GridWorkspace(TrameComponent):
                                         html.Div("+", classes="seurat-empty-plus")
                                         html.Div("Drop variable here", classes="seurat-empty-hover-label")
                     _build_inactive_workspace_grids(ctrl)
+                    _build_workspace_splitters()
 
             html.Div(style="height: 8px; flex:0 0 auto;")
 

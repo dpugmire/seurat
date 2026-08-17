@@ -19,11 +19,16 @@ from seurat.models.workspace_layout import (
     empty_grid_snapshot,
     grid_snapshot,
     initial_workspace_layout,
+    move_workspace_grid_cell as move_workspace_grid_cell_model,
     move_workspace_tab as move_workspace_tab_model,
+    move_workspace_tab_to_pane as move_workspace_tab_to_pane_model,
+    normalized_workspace_root,
     normalized_tab_title,
     pane_and_tab,
     reorder_workspace_tab as reorder_workspace_tab_model,
+    resize_workspace_split as resize_workspace_split_model,
     split_workspace as split_workspace_model,
+    workspace_geometry,
 )
 from seurat.models.workspace_state import (
     WorkspaceStateError,
@@ -52,7 +57,10 @@ class WorkspaceControllerMixin:
         ("load_workspace_state", "load_workspace_state"),
     )
     TRIGGER_BINDINGS = (
+        ("move_workspace_grid_cell_trigger", "move_workspace_grid_cell"),
+        ("move_workspace_tab_trigger", "move_workspace_tab"),
         ("reorder_workspace_tab_trigger", "reorder_workspace_tab"),
+        ("resize_workspace_split_trigger", "resize_workspace_split"),
     )
     STATE_CHANGE_BINDINGS = ()
 
@@ -62,8 +70,19 @@ class WorkspaceControllerMixin:
 
     def _publish_workspace_layout(self, layout: Mapping[str, Any]) -> None:
         published = deepcopy(dict(layout))
+        root = normalized_workspace_root(published)
+        published["root"] = root
+        published["split_direction"] = (
+            root.get("direction", "none") if root.get("kind") == "split" else "none"
+        )
+        published["split_ratio"] = (
+            float(root.get("ratio", 0.5)) if root.get("kind") == "split" else 0.5
+        )
+        frames, splitters = workspace_geometry(published)
         self.state.workspaceLayout = published
         self.state.workspacePanes = deepcopy(list(published.get("panes", []) or []))
+        self.state.workspacePaneFrames = deepcopy(frames)
+        self.state.workspaceSplitters = deepcopy(list(splitters))
         self.state.workspaceSplitDirection = str(
             published.get("split_direction", "none") or "none"
         )
@@ -265,6 +284,9 @@ class WorkspaceControllerMixin:
             "active_tab_id": active_tab_id,
             "panes": panes,
         }
+        if isinstance(saved_workspace.get("root"), Mapping):
+            layout["root"] = deepcopy(dict(saved_workspace["root"]))
+        layout["root"] = normalized_workspace_root(layout)
         self._publish_workspace_layout(layout)
 
     def _activate_workspace_target(
@@ -286,7 +308,18 @@ class WorkspaceControllerMixin:
         return True
 
     def activate_workspace_tab(self, pane_id: str, tab_id: str, **_):
-        self._activate_workspace_target(str(pane_id or ""), str(tab_id or ""))
+        target_pane = str(pane_id or "")
+        target_tab = str(tab_id or "")
+        changed = (
+            target_pane != str(getattr(self.state, "workspaceActivePaneId", "") or "")
+            or target_tab != str(getattr(self.state, "workspaceActiveTabId", "") or "")
+        )
+        if self._activate_workspace_target(target_pane, target_tab) and changed:
+            self.record_interaction(
+                "workspace.tab_activated",
+                source="tab_bar",
+                payload={"pane_id": target_pane, "tab_id": target_tab},
+            )
 
     def add_workspace_tab(self, pane_id: str = "", **_):
         layout = self._stash_active_workspace_grid()
@@ -298,6 +331,11 @@ class WorkspaceControllerMixin:
         self._activate_workspace_target(
             str(layout.get("active_pane_id", "")), tab_id, stash=False
         )
+        self.record_interaction(
+            "workspace.tab_created",
+            source="tab_bar",
+            payload={"pane_id": target_pane, "tab_id": tab_id},
+        )
 
     def rename_workspace_tab(
         self, pane_id: str, tab_id: str, title: str, **_
@@ -306,8 +344,20 @@ class WorkspaceControllerMixin:
         _pane, tab = pane_and_tab(layout, pane_id, tab_id)
         if tab is None or title is None:
             return
-        tab["title"] = normalized_tab_title(title, str(tab.get("title", "View")))
+        previous_title = str(tab.get("title", "View"))
+        tab["title"] = normalized_tab_title(title, previous_title)
         self._publish_workspace_layout(layout)
+        if str(tab["title"]) == previous_title:
+            return
+        self.record_interaction(
+            "workspace.tab_renamed",
+            source="tab_menu",
+            payload={
+                "pane_id": str(pane_id or ""),
+                "tab_id": str(tab_id or ""),
+                "title_changed": True,
+            },
+        )
 
     def close_workspace_tab(
         self, pane_id: str, tab_id: str, confirmed: bool = True, **_
@@ -315,6 +365,7 @@ class WorkspaceControllerMixin:
         if not confirmed:
             return
         layout = self._stash_active_workspace_grid()
+        previous_layout = deepcopy(layout)
         layout = close_workspace_tab_model(layout, pane_id, tab_id)
         self._publish_workspace_layout(layout)
         self._activate_workspace_target(
@@ -322,17 +373,46 @@ class WorkspaceControllerMixin:
             str(layout.get("active_tab_id", "")),
             stash=False,
         )
+        if layout != previous_layout:
+            self.record_interaction(
+                "workspace.tab_closed",
+                source="tab_menu",
+                payload={
+                    "pane_id": str(pane_id or ""),
+                    "tab_id": str(tab_id or ""),
+                },
+            )
+            self.clear_interaction_assignment()
 
-    def split_workspace_pane(self, direction: str = "horizontal", **_):
+    def split_workspace_pane(
+        self,
+        direction: str = "horizontal",
+        pane_id: str = "",
+        **_,
+    ):
         layout = self._stash_active_workspace_grid()
-        layout, _pane_id = split_workspace_model(
-            layout, direction, grid_snapshot(self.state)
+        layout, new_pane_id = split_workspace_model(
+            layout,
+            direction,
+            grid_snapshot(self.state),
+            pane_id=str(pane_id or layout.get("active_pane_id", "")),
         )
         self._publish_workspace_layout(layout)
         self._activate_workspace_target(
             str(layout.get("active_pane_id", "")),
             str(layout.get("active_tab_id", "")),
             stash=False,
+        )
+        if not new_pane_id:
+            return
+        self.record_interaction(
+            "workspace.pane_split",
+            source="pane_menu",
+            payload={
+                "source_pane_id": str(pane_id or ""),
+                "new_pane_id": str(new_pane_id or ""),
+                "direction": str(direction or "horizontal"),
+            },
         )
 
     def close_workspace_pane(
@@ -341,6 +421,7 @@ class WorkspaceControllerMixin:
         if not confirmed:
             return
         layout = self._stash_active_workspace_grid()
+        previous_layout = deepcopy(layout)
         layout = close_workspace_pane_model(layout, pane_id)
         self._publish_workspace_layout(layout)
         self._activate_workspace_target(
@@ -348,25 +429,137 @@ class WorkspaceControllerMixin:
             str(layout.get("active_tab_id", "")),
             stash=False,
         )
+        if layout != previous_layout:
+            self.record_interaction(
+                "workspace.pane_closed",
+                source="pane_menu",
+                payload={"pane_id": str(pane_id or "")},
+            )
+            self.clear_interaction_assignment()
 
-    def move_workspace_tab(self, pane_id: str, tab_id: str, **_):
+    def move_workspace_tab(
+        self,
+        pane_id: str,
+        tab_id: str,
+        destination_pane_id: str = "",
+        insertion_index: Any = None,
+        **_,
+    ):
         layout = self._stash_active_workspace_grid()
-        layout = move_workspace_tab_model(layout, pane_id, tab_id)
+        previous_layout = deepcopy(layout)
+        if destination_pane_id:
+            layout = move_workspace_tab_to_pane_model(
+                layout,
+                pane_id,
+                tab_id,
+                destination_pane_id,
+                insertion_index,
+            )
+        else:
+            layout = move_workspace_tab_model(layout, pane_id, tab_id)
         self._publish_workspace_layout(layout)
         self._activate_workspace_target(
             str(layout.get("active_pane_id", "")),
             str(layout.get("active_tab_id", "")),
             stash=False,
         )
+        if layout != previous_layout:
+            self.record_interaction(
+                "workspace.tab_moved",
+                source="tab_drag",
+                payload={
+                    "source_pane_id": str(pane_id or ""),
+                    "destination_pane_id": str(destination_pane_id or ""),
+                    "tab_id": str(tab_id or ""),
+                    "insertion_index": insertion_index,
+                },
+            )
+            self.clear_interaction_assignment()
 
     def reorder_workspace_tab(
         self, pane_id: str, tab_id: str, insertion_index: int, **_
     ):
         layout = self._stash_active_workspace_grid()
+        previous_layout = deepcopy(layout)
         layout = reorder_workspace_tab_model(
             layout, pane_id, tab_id, insertion_index
         )
         self._publish_workspace_layout(layout)
+        if layout != previous_layout:
+            self.record_interaction(
+                "workspace.tab_reordered",
+                source="tab_drag",
+                payload={
+                    "pane_id": str(pane_id or ""),
+                    "tab_id": str(tab_id or ""),
+                    "insertion_index": insertion_index,
+                },
+            )
+            self.clear_interaction_assignment()
+
+    def move_workspace_grid_cell(
+        self,
+        source_pane_id: str,
+        source_tab_id: str,
+        source_index: int,
+        destination_pane_id: str,
+        destination_tab_id: str,
+        destination_index: int,
+        **_,
+    ):
+        previous_layout = self._stash_active_workspace_grid()
+        layout = move_workspace_grid_cell_model(
+            previous_layout,
+            source_pane_id,
+            source_tab_id,
+            source_index,
+            destination_pane_id,
+            destination_tab_id,
+            destination_index,
+        )
+        self._publish_workspace_layout(layout)
+        self._activate_workspace_target(
+            str(layout.get("active_pane_id", "")),
+            str(layout.get("active_tab_id", "")),
+            stash=False,
+        )
+        if layout != previous_layout:
+            self.record_interaction(
+                "workspace.cell_moved",
+                source="workspace_drag",
+                payload={
+                    "source_pane_id": str(source_pane_id or ""),
+                    "source_tab_id": str(source_tab_id or ""),
+                    "source_cell": source_index,
+                    "destination_pane_id": str(destination_pane_id or ""),
+                    "destination_tab_id": str(destination_tab_id or ""),
+                    "destination_cell": destination_index,
+                },
+            )
+            self.clear_interaction_assignment()
+
+    def resize_workspace_split(self, split_id: str, ratio: float, **_):
+        layout = self._stash_active_workspace_grid()
+        previous_layout = deepcopy(layout)
+        layout = resize_workspace_split_model(layout, split_id, ratio)
+        self._publish_workspace_layout(layout)
+        if layout != previous_layout:
+            actual_ratio = next(
+                (
+                    float(item.get("ratio", 0.5) or 0.5)
+                    for item in list(getattr(self.state, "workspaceSplitters", []) or [])
+                    if str(item.get("id", "") or "") == str(split_id or "")
+                ),
+                0.5,
+            )
+            self.record_interaction(
+                "workspace.pane_resized",
+                source="splitter_drag",
+                payload={
+                    "split_id": str(split_id or ""),
+                    "ratio": actual_ratio,
+                },
+            )
 
     def _set_workspace_error(self, message: str) -> None:
         self.state.workspaceStateStatus = ""
@@ -456,6 +649,16 @@ class WorkspaceControllerMixin:
         self.state.workspaceStatePath = str(target)
         self.state.workspaceStateStatus = f"Saved: {target}"
         self.state.workspaceStateError = ""
+        self.record_interaction(
+            "workspace.saved",
+            source="workspace_menu",
+            payload={"workspace": self.interaction_workspace_snapshot()},
+        )
+        if self.interaction_log is not None:
+            try:
+                self.interaction_log.checkpoint()
+            except Exception:
+                pass
         return True
 
     def save_workspace_state(self, live_grid_sizing=None, **_):
@@ -515,6 +718,24 @@ class WorkspaceControllerMixin:
         self.state.workspaceStatePath = str(source)
         self.state.workspaceStateStatus = f"Loaded: {source}"
         self.state.workspaceStateError = ""
+        self._interaction_query_id = ""
+        self.clear_interaction_assignment()
+        if str(self.state.queryText or "").strip():
+            self.record_query_applied(
+                origin="workspace_restore",
+                target="catalog",
+                action_plan=dict(self.state.activeViewerActionPlan or {}),
+            )
+        self.record_interaction(
+            "workspace.loaded",
+            source="workspace_menu",
+            payload={"workspace": self.interaction_workspace_snapshot()},
+        )
+        if self.interaction_log is not None:
+            try:
+                self.interaction_log.checkpoint()
+            except Exception:
+                pass
 
     def restore_workspace_state(self, document: Dict[str, Any]) -> None:
         validate_workspace_campaign(document, self.campaign_path)

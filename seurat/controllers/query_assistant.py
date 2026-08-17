@@ -656,7 +656,16 @@ class QueryAssistantControllerMixin:
             if not isinstance(cell_index, int):
                 self.state.queryAssistantError = "There is no grid target to apply."
                 return False
-            self.assign_var_to_grid_cell(cell_index, action.variable_id)
+            self.record_query_applied(
+                origin="query_assistant",
+                target="visualization",
+                action_plan=dict(self.state.queryAssistantActionPlan or {}),
+            )
+            self._interaction_assignment_source = "query_assistant"
+            try:
+                self.assign_var_to_grid_cell(cell_index, action.variable_id)
+            finally:
+                self._interaction_assignment_source = ""
             self.state.showQueryAssistant = False
             return True
 
@@ -669,13 +678,26 @@ class QueryAssistantControllerMixin:
             if self.state.sourceFilterError:
                 self.state.queryAssistantError = self.state.sourceFilterError
                 return False
+            self.record_query_applied(
+                origin="query_assistant",
+                target="source_filter",
+                action_plan=dict(self.state.queryAssistantActionPlan or {}),
+            )
             self.state.showQueryAssistant = False
             return True
 
         self.state.queryText = proposal_text
-        if not self.run_query():
-            self.state.queryAssistantError = self.state.queryError
-            return False
+        self._interaction_pending_query_origin = "query_assistant"
+        self._interaction_pending_query_action_plan = dict(
+            self.state.queryAssistantActionPlan or {}
+        )
+        try:
+            if not self.run_query():
+                self.state.queryAssistantError = self.state.queryError
+                return False
+        finally:
+            self._interaction_pending_query_origin = ""
+            self._interaction_pending_query_action_plan = None
 
         self.state.activeViewerActionPlan = dict(
             self.state.queryAssistantActionPlan or {}
