@@ -97,9 +97,14 @@ migrated to the tree representation when loaded.
 
 Closing a tab removes that tab's grid after confirmation. Tabs can be renamed
 or closed from their context menu, and the visible close button provides the
-same close action. Drag tabs to reorder them within a pane. Tab strips remain
-on one line and show edge fades when more tabs are available by horizontal
-scrolling.
+same close action. Drag tabs to reorder them within a pane or move them to a
+specific position in another pane. Moving the last tab out of a pane closes
+that empty pane. Tab strips remain on one line and show edge fades when more
+tabs are available by horizontal scrolling.
+
+Drag a filled visualization cell onto a cell in an inactive pane preview to
+move it between tab-owned grids. A valid destination is highlighted during the
+drag, and a successful drop activates the destination pane and tab.
 
 ## Run
 

@@ -3,7 +3,11 @@
 from copy import deepcopy
 from typing import Any, Dict, Iterable, Mapping, Optional, Tuple
 
-from seurat.models.grid import empty_grid_cell
+from seurat.models.grid import (
+    assign_cell,
+    cell_has_content,
+    empty_grid_cell,
+)
 
 
 MAX_WORKSPACE_PANES = 4
@@ -549,24 +553,65 @@ def close_workspace_pane(
 def move_workspace_tab(
     layout: Mapping[str, Any], pane_id: str, tab_id: str
 ) -> Dict[str, Any]:
-    result = deepcopy(dict(layout))
-    panes = list(result.get("panes", []) or [])
+    panes = list(layout.get("panes", []) or [])
     if len(panes) < 2:
-        return result
+        return deepcopy(dict(layout))
     source = next(
         (pane for pane in panes if str(pane.get("id", "")) == str(pane_id)),
         None,
     )
     if source is None:
-        return result
-    ordered_ids = workspace_pane_ids(result)
+        return deepcopy(dict(layout))
+    ordered_ids = workspace_pane_ids(layout)
     source_order = ordered_ids.index(str(source.get("id", "")))
     destination_id = ordered_ids[(source_order + 1) % len(ordered_ids)]
-    destination = next(
-        pane
-        for pane in panes
-        if str(pane.get("id", "")) == destination_id
+    return move_workspace_tab_to_pane(
+        layout,
+        pane_id,
+        tab_id,
+        destination_id,
     )
+
+
+def move_workspace_tab_to_pane(
+    layout: Mapping[str, Any],
+    source_pane_id: str,
+    tab_id: str,
+    destination_pane_id: str,
+    insertion_index: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Move a tab to a specific insertion slot in another pane."""
+
+    if str(source_pane_id) == str(destination_pane_id):
+        if insertion_index is None:
+            return deepcopy(dict(layout))
+        return reorder_workspace_tab(
+            layout, source_pane_id, tab_id, insertion_index
+        )
+
+    result = deepcopy(dict(layout))
+    panes = list(result.get("panes", []) or [])
+    if len(panes) < 2:
+        return result
+    source = next(
+        (
+            pane
+            for pane in panes
+            if str(pane.get("id", "")) == str(source_pane_id)
+        ),
+        None,
+    )
+    destination = next(
+        (
+            pane
+            for pane in panes
+            if str(pane.get("id", "")) == str(destination_pane_id)
+        ),
+        None,
+    )
+    if source is None or destination is None:
+        return result
+
     tabs = list(source.get("tabs", []) or [])
     tab_index = next(
         (i for i, tab in enumerate(tabs) if str(tab.get("id", "")) == str(tab_id)),
@@ -575,7 +620,18 @@ def move_workspace_tab(
     if tab_index < 0:
         return result
     tab = tabs.pop(tab_index)
-    destination.setdefault("tabs", []).append(tab)
+    destination_tabs = list(destination.get("tabs", []) or [])
+    if insertion_index is None:
+        destination_index = len(destination_tabs)
+    else:
+        try:
+            destination_index = max(
+                0, min(len(destination_tabs), int(insertion_index))
+            )
+        except (TypeError, ValueError):
+            return result
+    destination_tabs.insert(destination_index, tab)
+    destination["tabs"] = destination_tabs
     destination["active_tab_id"] = tab["id"]
     if tabs:
         source["tabs"] = tabs
@@ -583,7 +639,7 @@ def move_workspace_tab(
             source["active_tab_id"] = tabs[min(tab_index, len(tabs) - 1)]["id"]
     else:
         root, _promoted_id, removed = _remove_pane_leaf(
-            normalized_workspace_root(result), str(source.get("id", ""))
+            normalized_workspace_root(result), str(source_pane_id)
         )
         if removed:
             panes = [pane for pane in panes if pane is not source]
@@ -591,6 +647,104 @@ def move_workspace_tab(
     result["panes"] = _ordered_panes(panes, normalized_workspace_root(result))
     result["active_pane_id"] = destination["id"]
     result["active_tab_id"] = tab["id"]
+    return result
+
+
+def move_workspace_grid_cell(
+    layout: Mapping[str, Any],
+    source_pane_id: str,
+    source_tab_id: str,
+    source_index: int,
+    destination_pane_id: str,
+    destination_tab_id: str,
+    destination_index: int,
+) -> Dict[str, Any]:
+    """Move one visualization between tab-owned grid snapshots."""
+
+    result = deepcopy(dict(layout))
+    source_pane, source_tab = pane_and_tab(
+        result, source_pane_id, source_tab_id
+    )
+    destination_pane, destination_tab = pane_and_tab(
+        result, destination_pane_id, destination_tab_id
+    )
+    if (
+        source_pane is None
+        or source_tab is None
+        or destination_pane is None
+        or destination_tab is None
+        or source_tab is destination_tab
+    ):
+        return result
+
+    try:
+        source_cell_index = int(source_index)
+        destination_cell_index = int(destination_index)
+    except (TypeError, ValueError):
+        return result
+
+    source_grid = source_tab.get("grid", {})
+    destination_grid = destination_tab.get("grid", {})
+    if not isinstance(source_grid, dict) or not isinstance(destination_grid, dict):
+        return result
+    source_cells = [
+        dict(cell) if isinstance(cell, dict) else empty_grid_cell()
+        for cell in list(source_grid.get("cells", []) or [])
+    ]
+    destination_cells = [
+        dict(cell) if isinstance(cell, dict) else empty_grid_cell()
+        for cell in list(destination_grid.get("cells", []) or [])
+    ]
+    if not (
+        0 <= source_cell_index < len(source_cells)
+        and 0 <= destination_cell_index < len(destination_cells)
+    ):
+        return result
+    source_cell = source_cells[source_cell_index]
+    if not cell_has_content(source_cell):
+        return result
+
+    assign_cell(destination_cells, destination_cell_index, source_cell)
+    assign_cell(source_cells, source_cell_index, empty_grid_cell())
+    source_grid["cells"] = source_cells
+    destination_grid["cells"] = destination_cells
+
+    source_selected = [
+        int(index)
+        for index in list(source_grid.get("selected_cells", []) or [])
+        if str(index).lstrip("-").isdigit()
+        and int(index) != source_cell_index
+    ]
+    source_grid["selected_cells"] = source_selected
+    source_grid["selected_cell_map"] = {
+        str(index): True for index in source_selected
+    }
+    try:
+        source_active = int(source_grid.get("active_cell", -1))
+    except (TypeError, ValueError):
+        source_active = -1
+    if source_active == source_cell_index:
+        source_grid["active_cell"] = -1
+
+    destination_grid["active_cell"] = destination_cell_index
+    destination_grid["selected_cells"] = [destination_cell_index]
+    destination_grid["selected_cell_map"] = {
+        str(destination_cell_index): True
+    }
+    for grid, cleared_index in (
+        (source_grid, source_cell_index),
+        (destination_grid, destination_cell_index),
+    ):
+        try:
+            driver = int(grid.get("timeline_driver_cell", -1))
+        except (TypeError, ValueError):
+            driver = -1
+        if driver == cleared_index:
+            grid["timeline_driver_cell"] = -1
+
+    destination_pane["active_tab_id"] = destination_tab["id"]
+    result["active_pane_id"] = destination_pane["id"]
+    result["active_tab_id"] = destination_tab["id"]
     return result
 
 

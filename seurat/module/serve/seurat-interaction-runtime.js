@@ -1,5 +1,7 @@
 (function registerSeuratInteractionRuntime() {
   const mountedRoots = new WeakMap();
+  const workspaceGridCellMime =
+    "application/x-seurat-workspace-grid-cell";
 
   function trameTrigger(name, args) {
     if (window.trame && window.trame.trigger) {
@@ -414,6 +416,11 @@
       )) {
         shell.classList.remove("is-tab-drop-before", "is-tab-drop-after");
       }
+      for (const tabs of root.querySelectorAll(
+        ".seurat-workspace-tabs.is-tab-drop-target"
+      )) {
+        tabs.classList.remove("is-tab-drop-target");
+      }
     }
 
     function finishWorkspaceTabDrag() {
@@ -431,18 +438,32 @@
       workspaceTabDrag = null;
     }
 
+    function clearWorkspaceGridDropTargets() {
+      for (const cell of root.querySelectorAll(
+        ".seurat-dropcell.seurat-drop-hover"
+      )) {
+        cell.classList.remove("seurat-drop-hover");
+      }
+      for (const preview of root.querySelectorAll(
+        ".seurat-workspace-grid-preview.is-visualization-drop-target"
+      )) {
+        preview.classList.remove("is-visualization-drop-target");
+      }
+    }
+
     function updateWorkspaceTabDropTarget(event) {
       if (!workspaceTabDrag) return false;
       const target = event && event.target;
       const tabs = closestWithinRoot(target, ".seurat-workspace-tabs", root);
       clearWorkspaceTabDropMarkers();
+      workspaceTabDrag.targetPaneId = null;
       workspaceTabDrag.insertionIndex = null;
-      if (
-        !tabs ||
-        (tabs.getAttribute("data-pane-id") || "") !== workspaceTabDrag.paneId
-      ) {
-        return false;
-      }
+      if (!tabs) return false;
+
+      const targetPaneId = tabs.getAttribute("data-pane-id") || "";
+      if (!targetPaneId) return false;
+      tabs.classList.add("is-tab-drop-target");
+      workspaceTabDrag.targetPaneId = targetPaneId;
 
       const shells = Array.from(
         tabs.querySelectorAll(".seurat-workspace-tab-shell")
@@ -484,7 +505,12 @@
         const shell = workspaceTab.closest(".seurat-workspace-tab-shell");
         if (!paneId || !tabId || !shell) return;
         finishWorkspaceTabDrag();
-        workspaceTabDrag = { paneId, tabId, insertionIndex: null };
+        workspaceTabDrag = {
+          paneId,
+          tabId,
+          targetPaneId: null,
+          insertionIndex: null,
+        };
         workspaceTab.setAttribute("aria-grabbed", "true");
         shell.classList.add("is-tab-dragging");
         event.dataTransfer.setData(
@@ -512,7 +538,19 @@
       const filled = cell.getAttribute("data-cell-filled");
       const fromIndex = cell.getAttribute("data-cell-index");
       if (filled !== "1" || fromIndex === null) return;
+      const sourcePaneId = cell.getAttribute("data-pane-id") || "";
+      const sourceTabId = cell.getAttribute("data-tab-id") || "";
       event.dataTransfer.setData("application/x-seurat-grid-cell", fromIndex);
+      if (sourcePaneId && sourceTabId) {
+        event.dataTransfer.setData(
+          workspaceGridCellMime,
+          JSON.stringify({
+            paneId: sourcePaneId,
+            tabId: sourceTabId,
+            cellIndex: Number(fromIndex),
+          })
+        );
+      }
       event.dataTransfer.effectAllowed = "move";
       cell.style.opacity = "0.55";
     }
@@ -530,6 +568,7 @@
       if (variable) variable.style.opacity = "1";
       const cell = closestWithinRoot(target, ".seurat-dropcell", root);
       if (cell) cell.style.opacity = "1";
+      clearWorkspaceGridDropTargets();
     }
 
     function onDragOver(event) {
@@ -546,10 +585,14 @@
         root
       );
       if (!cell) return;
-      if (cell.closest(".seurat-workspace-grid-preview")) return;
+      const preview = cell.closest(".seurat-workspace-grid-preview");
+      const types = event.dataTransfer
+        ? Array.from(event.dataTransfer.types || [])
+        : [];
+      const workspaceCellDrag = types.includes(workspaceGridCellMime);
+      if (preview && !workspaceCellDrag) return;
       event.preventDefault();
       if (event.dataTransfer) {
-        const types = Array.from(event.dataTransfer.types || []);
         event.dataTransfer.dropEffect = types.includes(
           "application/x-seurat-grid-cell"
         )
@@ -557,6 +600,9 @@
           : "copy";
       }
       cell.classList.add("seurat-drop-hover");
+      if (preview) {
+        preview.classList.add("is-visualization-drop-target");
+      }
     }
 
     function onDragLeave(event) {
@@ -567,23 +613,37 @@
       );
       if (cell && !cell.contains(event.relatedTarget)) {
         cell.classList.remove("seurat-drop-hover");
+        const preview = cell.closest(".seurat-workspace-grid-preview");
+        if (preview && !preview.contains(event.relatedTarget)) {
+          preview.classList.remove("is-visualization-drop-target");
+        }
       }
     }
 
     function onDrop(event) {
       if (workspaceTabDrag) {
         const accepted = updateWorkspaceTabDropTarget(event);
-        const paneId = workspaceTabDrag.paneId;
+        const sourcePaneId = workspaceTabDrag.paneId;
+        const targetPaneId = workspaceTabDrag.targetPaneId;
         const tabId = workspaceTabDrag.tabId;
         const insertionIndex = workspaceTabDrag.insertionIndex;
         if (accepted) event.preventDefault();
         finishWorkspaceTabDrag();
         if (accepted && Number.isInteger(insertionIndex)) {
-          trameTrigger("reorder_workspace_tab_trigger", [
-            paneId,
-            tabId,
-            insertionIndex,
-          ]);
+          if (sourcePaneId === targetPaneId) {
+            trameTrigger("reorder_workspace_tab_trigger", [
+              sourcePaneId,
+              tabId,
+              insertionIndex,
+            ]);
+          } else {
+            trameTrigger("move_workspace_tab_trigger", [
+              sourcePaneId,
+              tabId,
+              targetPaneId,
+              insertionIndex,
+            ]);
+          }
         }
         return;
       }
@@ -593,14 +653,47 @@
         root
       );
       if (!cell) return;
-      if (cell.closest(".seurat-workspace-grid-preview")) return;
       event.preventDefault();
-      cell.classList.remove("seurat-drop-hover");
+      const preview = cell.closest(".seurat-workspace-grid-preview");
 
       const fromCell = event.dataTransfer
         ? event.dataTransfer.getData("application/x-seurat-grid-cell") || ""
         : "";
       const targetIndex = cell.getAttribute("data-cell-index");
+      if (preview) {
+        const workspaceCell = event.dataTransfer
+          ? event.dataTransfer.getData(workspaceGridCellMime) || ""
+          : "";
+        const targetPaneId = cell.getAttribute("data-pane-id") || "";
+        const targetTabId = cell.getAttribute("data-tab-id") || "";
+        clearWorkspaceGridDropTargets();
+        if (targetIndex === null || !targetPaneId || !targetTabId) return;
+        if (workspaceCell) {
+          try {
+            const source = JSON.parse(workspaceCell);
+            if (
+              source &&
+              source.paneId &&
+              source.tabId &&
+              Number.isInteger(Number(source.cellIndex))
+            ) {
+              trameTrigger("move_workspace_grid_cell_trigger", [
+                source.paneId,
+                source.tabId,
+                Number(source.cellIndex),
+                targetPaneId,
+                targetTabId,
+                Number(targetIndex),
+              ]);
+            }
+          } catch (_error) {
+            return;
+          }
+          return;
+        }
+        return;
+      }
+      clearWorkspaceGridDropTargets();
       if (fromCell !== "" && targetIndex !== null) {
         trameTrigger("move_grid_cell_trigger", [fromCell, targetIndex]);
         return;
@@ -717,6 +810,7 @@
         finishFloatingDrag();
         finishWorkspaceSplitDrag(false);
         finishWorkspaceTabDrag();
+        clearWorkspaceGridDropTargets();
         if (tabOverflowFrame) {
           window.cancelAnimationFrame(tabOverflowFrame);
           tabOverflowFrame = 0;

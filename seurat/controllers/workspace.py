@@ -19,7 +19,9 @@ from seurat.models.workspace_layout import (
     empty_grid_snapshot,
     grid_snapshot,
     initial_workspace_layout,
+    move_workspace_grid_cell as move_workspace_grid_cell_model,
     move_workspace_tab as move_workspace_tab_model,
+    move_workspace_tab_to_pane as move_workspace_tab_to_pane_model,
     normalized_workspace_root,
     normalized_tab_title,
     pane_and_tab,
@@ -55,6 +57,8 @@ class WorkspaceControllerMixin:
         ("load_workspace_state", "load_workspace_state"),
     )
     TRIGGER_BINDINGS = (
+        ("move_workspace_grid_cell_trigger", "move_workspace_grid_cell"),
+        ("move_workspace_tab_trigger", "move_workspace_tab"),
         ("reorder_workspace_tab_trigger", "reorder_workspace_tab"),
         ("resize_workspace_split_trigger", "resize_workspace_split"),
     )
@@ -375,9 +379,25 @@ class WorkspaceControllerMixin:
             stash=False,
         )
 
-    def move_workspace_tab(self, pane_id: str, tab_id: str, **_):
+    def move_workspace_tab(
+        self,
+        pane_id: str,
+        tab_id: str,
+        destination_pane_id: str = "",
+        insertion_index: Any = None,
+        **_,
+    ):
         layout = self._stash_active_workspace_grid()
-        layout = move_workspace_tab_model(layout, pane_id, tab_id)
+        if destination_pane_id:
+            layout = move_workspace_tab_to_pane_model(
+                layout,
+                pane_id,
+                tab_id,
+                destination_pane_id,
+                insertion_index,
+            )
+        else:
+            layout = move_workspace_tab_model(layout, pane_id, tab_id)
         self._publish_workspace_layout(layout)
         self._activate_workspace_target(
             str(layout.get("active_pane_id", "")),
@@ -393,6 +413,32 @@ class WorkspaceControllerMixin:
             layout, pane_id, tab_id, insertion_index
         )
         self._publish_workspace_layout(layout)
+
+    def move_workspace_grid_cell(
+        self,
+        source_pane_id: str,
+        source_tab_id: str,
+        source_index: int,
+        destination_pane_id: str,
+        destination_tab_id: str,
+        destination_index: int,
+        **_,
+    ):
+        layout = move_workspace_grid_cell_model(
+            self._stash_active_workspace_grid(),
+            source_pane_id,
+            source_tab_id,
+            source_index,
+            destination_pane_id,
+            destination_tab_id,
+            destination_index,
+        )
+        self._publish_workspace_layout(layout)
+        self._activate_workspace_target(
+            str(layout.get("active_pane_id", "")),
+            str(layout.get("active_tab_id", "")),
+            stash=False,
+        )
 
     def resize_workspace_split(self, split_id: str, ratio: float, **_):
         layout = self._stash_active_workspace_grid()

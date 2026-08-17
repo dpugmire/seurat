@@ -12,7 +12,9 @@ from seurat.models.workspace_layout import (
     close_workspace_tab,
     grid_snapshot,
     initial_workspace_layout,
+    move_workspace_grid_cell,
     move_workspace_tab,
+    move_workspace_tab_to_pane,
     reorder_workspace_tab,
     resize_workspace_split,
     split_workspace,
@@ -134,6 +136,109 @@ class WorkspaceLayoutTests(unittest.TestCase):
         self.assertEqual(pane["id"], "pane-2")
         self.assertEqual(tab["id"], moved_tab_id)
         self.assertEqual(tab["grid"]["cells"][0]["variable_id"], "pressure")
+
+    def test_tabs_move_to_a_specific_pane_insertion_slot(self):
+        state = self.make_state()
+        snapshot = grid_snapshot(state)
+        layout = initial_workspace_layout(snapshot)
+        layout, moved_tab_id = add_workspace_tab(layout, "pane-1", snapshot)
+        _, moved_tab = active_pane_and_tab(layout)
+        moved_tab["grid"]["cells"][0]["variable_id"] = "pressure"
+        layout, _ = split_workspace(layout, "horizontal", snapshot)
+
+        layout = move_workspace_tab_to_pane(
+            layout, "pane-1", moved_tab_id, "pane-2", 0
+        )
+
+        first_pane = next(
+            pane for pane in layout["panes"] if pane["id"] == "pane-1"
+        )
+        second_pane = next(
+            pane for pane in layout["panes"] if pane["id"] == "pane-2"
+        )
+        self.assertEqual([tab["id"] for tab in first_pane["tabs"]], ["tab-1"])
+        self.assertEqual(
+            [tab["id"] for tab in second_pane["tabs"]],
+            [moved_tab_id, "tab-3"],
+        )
+        self.assertEqual(
+            second_pane["tabs"][0]["grid"]["cells"][0]["variable_id"],
+            "pressure",
+        )
+        self.assertEqual(layout["active_pane_id"], "pane-2")
+        self.assertEqual(layout["active_tab_id"], moved_tab_id)
+
+    def test_moving_a_panes_last_tab_collapses_the_empty_pane(self):
+        state = self.make_state()
+        snapshot = grid_snapshot(state)
+        layout = initial_workspace_layout(snapshot)
+        layout, _ = split_workspace(layout, "horizontal", snapshot)
+
+        layout = move_workspace_tab_to_pane(
+            layout, "pane-1", "tab-1", "pane-2", 1
+        )
+
+        self.assertEqual(workspace_pane_ids(layout), ("pane-2",))
+        self.assertEqual(layout["root"], {"kind": "pane", "pane_id": "pane-2"})
+        self.assertEqual(
+            [tab["id"] for tab in layout["panes"][0]["tabs"]],
+            ["tab-2", "tab-1"],
+        )
+        self.assertEqual(layout["active_pane_id"], "pane-2")
+        self.assertEqual(layout["active_tab_id"], "tab-1")
+
+    def test_visualizations_move_between_tab_grids_and_update_ownership(self):
+        state = self.make_state()
+        state.gridCells[0].update(
+            {
+                "variable_id": "pressure",
+                "variable_name": "pressure",
+                "status": "ready",
+            }
+        )
+        state.activeGridCell = 0
+        state.selectedGridCellIndices = [0, 1]
+        state.selectedGridCellMap = {"0": True, "1": True}
+        state.timelineDriverCell = 0
+        snapshot = grid_snapshot(state)
+        layout = initial_workspace_layout(snapshot)
+        layout, _ = split_workspace(layout, "horizontal", snapshot)
+        destination_grid = layout["panes"][1]["tabs"][0]["grid"]
+        destination_grid["cells"][4].update(
+            {
+                "variable_id": "temperature",
+                "variable_name": "temperature",
+                "status": "ready",
+            }
+        )
+        destination_grid["timeline_driver_cell"] = 4
+
+        layout = move_workspace_grid_cell(
+            layout,
+            "pane-1",
+            "tab-1",
+            0,
+            "pane-2",
+            "tab-2",
+            4,
+        )
+
+        source_grid = layout["panes"][0]["tabs"][0]["grid"]
+        destination_grid = layout["panes"][1]["tabs"][0]["grid"]
+        self.assertEqual(source_grid["cells"][0]["variable_id"], "")
+        self.assertEqual(source_grid["active_cell"], -1)
+        self.assertEqual(source_grid["selected_cells"], [1])
+        self.assertEqual(source_grid["selected_cell_map"], {"1": True})
+        self.assertEqual(source_grid["timeline_driver_cell"], -1)
+        self.assertEqual(
+            destination_grid["cells"][4]["variable_id"], "pressure"
+        )
+        self.assertEqual(destination_grid["active_cell"], 4)
+        self.assertEqual(destination_grid["selected_cells"], [4])
+        self.assertEqual(destination_grid["selected_cell_map"], {"4": True})
+        self.assertEqual(destination_grid["timeline_driver_cell"], -1)
+        self.assertEqual(layout["active_pane_id"], "pane-2")
+        self.assertEqual(layout["active_tab_id"], "tab-2")
 
     def test_tabs_reorder_within_a_pane_without_losing_state(self):
         state = self.make_state()

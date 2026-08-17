@@ -21,7 +21,9 @@ from seurat.models.workspace_layout import (  # noqa: E402
     close_workspace_tab as close_workspace_tab_model,
     grid_snapshot,
     initial_workspace_layout,
+    move_workspace_grid_cell as move_workspace_grid_cell_model,
     move_workspace_tab as move_workspace_tab_model,
+    move_workspace_tab_to_pane as move_workspace_tab_to_pane_model,
     normalized_workspace_root,
     normalized_tab_title,
     pane_and_tab,
@@ -388,18 +390,50 @@ def build_fixture_server(mode):
                 close_workspace_pane_model(stash_active_workspace_grid(), pane_id)
             )
 
-    def move_workspace_tab(pane_id, tab_id):
-        load_active_workspace_grid(
-            move_workspace_tab_model(
-                stash_active_workspace_grid(), pane_id, tab_id
+    def move_workspace_tab(
+        pane_id,
+        tab_id,
+        destination_pane_id="",
+        insertion_index=None,
+    ):
+        layout = stash_active_workspace_grid()
+        if destination_pane_id:
+            layout = move_workspace_tab_to_pane_model(
+                layout,
+                pane_id,
+                tab_id,
+                destination_pane_id,
+                insertion_index,
             )
-        )
+        else:
+            layout = move_workspace_tab_model(layout, pane_id, tab_id)
+        load_active_workspace_grid(layout)
 
     def reorder_workspace_tab(pane_id, tab_id, insertion_index):
         layout = reorder_workspace_tab_model(
             stash_active_workspace_grid(), pane_id, tab_id, insertion_index
         )
         publish_workspace_layout(layout)
+
+    def move_workspace_grid_cell(
+        source_pane_id,
+        source_tab_id,
+        source_index,
+        destination_pane_id,
+        destination_tab_id,
+        destination_index,
+    ):
+        load_active_workspace_grid(
+            move_workspace_grid_cell_model(
+                stash_active_workspace_grid(),
+                source_pane_id,
+                source_tab_id,
+                source_index,
+                destination_pane_id,
+                destination_tab_id,
+                destination_index,
+            )
+        )
 
     def resize_workspace_split(split_id, ratio):
         publish_workspace_layout(
@@ -777,6 +811,10 @@ def build_fixture_server(mode):
         assign_var_to_grid_cell
     )
     server.controller.trigger("move_grid_cell_trigger")(move_grid_cell)
+    server.controller.trigger("move_workspace_grid_cell_trigger")(
+        move_workspace_grid_cell
+    )
+    server.controller.trigger("move_workspace_tab_trigger")(move_workspace_tab)
     server.controller.trigger("reorder_workspace_tab_trigger")(
         reorder_workspace_tab
     )

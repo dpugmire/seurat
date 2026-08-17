@@ -168,6 +168,55 @@ def test_workspace_tabs_and_split_panes_preserve_grid_content(
     assert console_errors == [], response_errors
 
 
+def test_visualization_drop_on_inactive_pane_moves_and_activates_it(
+    page, seurat_server
+):
+    console_errors, page_errors, response_errors = _open_app(page, seurat_server)
+
+    pane_one_bar = page.locator(
+        '.seurat-workspace-tab-bar[data-pane-frame-id="pane-1"]'
+    )
+    pane_one_bar.get_by_role("button", name="Pane and tab actions").click()
+    page.get_by_text("Split right", exact=True).click()
+    page.get_by_role("tab", name="View 2").wait_for(state="visible")
+    page.get_by_role("tab", name="View 1").click()
+
+    source_grid = page.locator(
+        '.seurat-workspace-active-grid[data-pane-frame-id="pane-1"]'
+    )
+    source_grid.wait_for(state="visible")
+    source = source_grid.locator('.seurat-dropcell[data-cell-index="0"]')
+    destination = page.locator(
+        '.seurat-workspace-grid-preview[data-pane-frame-id="pane-2"] '
+        '.seurat-workspace-preview-cell[data-cell-index="2"]'
+    )
+    destination.wait_for(state="visible")
+
+    source.drag_to(destination)
+
+    destination_grid = page.locator(
+        '.seurat-workspace-active-grid[data-pane-frame-id="pane-2"]'
+    )
+    destination_grid.wait_for(state="visible")
+    destination_grid.locator(
+        '.seurat-dropcell[data-cell-index="2"]'
+    ).get_by_text("internal_energy", exact=True).wait_for(state="visible")
+    assert page.get_by_role("tab", name="View 2").get_attribute(
+        "aria-selected"
+    ) == "true"
+    assert page.locator(
+        '.seurat-workspace-grid-preview[data-pane-frame-id="pane-1"] '
+        '.seurat-workspace-preview-cell[data-cell-index="0"]'
+    ).get_attribute("data-cell-filled") == "0"
+    assert page.locator(
+        ".seurat-workspace-grid-preview.is-visualization-drop-target"
+    ).count() == 0
+    assert page.locator(".seurat-dropcell.seurat-drop-hover").count() == 0
+
+    assert page_errors == []
+    assert console_errors == [], response_errors
+
+
 def test_vertical_split_keeps_inactive_grid_backgrounds_visible(
     page, seurat_server
 ):
@@ -509,6 +558,81 @@ def test_workspace_tabs_drag_to_reorder_with_insertion_feedback(
     page.locator(".seurat-workspace-active-grid").get_by_text(
         "internal_energy", exact=True
     ).wait_for(state="visible")
+
+    assert page_errors == []
+    assert console_errors == [], response_errors
+
+
+def test_workspace_tabs_drag_between_panes_at_the_drop_position(
+    page, seurat_server
+):
+    console_errors, page_errors, response_errors = _open_app(page, seurat_server)
+
+    pane_one = page.locator(
+        '.seurat-workspace-tab-bar[data-pane-frame-id="pane-1"]'
+    )
+    pane_one.get_by_role("button", name="New tab").click()
+    page.get_by_role("tab", name="View 2").wait_for(state="visible")
+    pane_one.get_by_role("button", name="Pane and tab actions").click()
+    page.get_by_text("Split right", exact=True).click()
+    page.get_by_role("tab", name="View 3").wait_for(state="visible")
+    page.wait_for_function(
+        """() => {
+            const first = document.querySelector(
+              '.seurat-workspace-tab-bar[data-pane-frame-id="pane-1"]'
+            );
+            const second = document.querySelector(
+              '.seurat-workspace-tab-bar[data-pane-frame-id="pane-2"]'
+            );
+            if (!first || !second) return false;
+            const firstBounds = first.getBoundingClientRect();
+            const secondBounds = second.getBoundingClientRect();
+            return secondBounds.left >= firstBounds.right - 2;
+        }"""
+    )
+
+    source = page.get_by_role("tab", name="View 1")
+    destination = page.get_by_role("tab", name="View 3")
+    source_bounds = source.bounding_box()
+    destination_bounds = destination.bounding_box()
+    assert source_bounds is not None
+    assert destination_bounds is not None
+
+    source.drag_to(
+        destination,
+        target_position={
+            "x": destination_bounds["width"] * 0.2,
+            "y": destination_bounds["height"] / 2,
+        },
+    )
+
+    page.wait_for_function(
+        """() => {
+            const paneOne = document.querySelector(
+              '.seurat-workspace-tabs[data-pane-id="pane-1"]'
+            );
+            const paneTwo = document.querySelector(
+              '.seurat-workspace-tabs[data-pane-id="pane-2"]'
+            );
+            const titles = element => Array.from(
+              element.querySelectorAll('.seurat-workspace-tab')
+            ).map(tab => tab.textContent.trim()).join(',');
+            return paneOne && paneTwo
+              && titles(paneOne) === 'View 2'
+              && titles(paneTwo) === 'View 1,View 3';
+        }"""
+    )
+    assert page.get_by_role("tab", name="View 1").get_attribute(
+        "aria-selected"
+    ) == "true"
+    page.locator(".seurat-workspace-active-grid").get_by_text(
+        "internal_energy", exact=True
+    ).wait_for(state="visible")
+    assert page.locator(".seurat-workspace-tabs.is-tab-drop-target").count() == 0
+    assert page.locator(
+        ".seurat-workspace-tab-shell.is-tab-drop-before, "
+        ".seurat-workspace-tab-shell.is-tab-drop-after"
+    ).count() == 0
 
     assert page_errors == []
     assert console_errors == [], response_errors

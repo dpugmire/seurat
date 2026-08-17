@@ -406,6 +406,8 @@ def _build_inactive_workspace_grids(ctrl):
                                 classes="seurat-dropcell seurat-workspace-preview-cell",
                                 raw_attrs=[
                                     ':data-cell-index="i"',
+                                    ':data-pane-id="pane.id"',
+                                    ':data-tab-id="tab.id"',
                                     ':data-cell-filled="((tile && tile.variable_name) ? 1 : 0)"',
                                     ":style=\"((tab.grid.layout_mode === 'spanning')"
                                     " ? ('grid-row:' + Number((tile && tile.grid_row) || (Math.floor(i / tab.grid.columns) + 1)) + ' / span ' + Number((tile && tile.row_span) || 1) + ';grid-column:' + Number((tile && tile.grid_col) || ((i % tab.grid.columns) + 1)) + ' / span ' + Number((tile && tile.col_span) || 1) + ';')"
@@ -680,6 +682,8 @@ class GridWorkspace(TrameComponent):
                                 classes="seurat-dropcell",
                                 raw_attrs=[
                                     ':data-cell-index="i"',
+                                    ':data-pane-id="workspaceActivePaneId"',
+                                    ':data-tab-id="workspaceActiveTabId"',
                                     ':data-cell-filled="((tile && tile.variable_name) ? 1 : 0)"',
                                     ':data-cell-active="(activeGridCell === i ? 1 : 0)"',
                                     ':data-timeline-driver="(timelineDriverCell === i ? 1 : 0)"',
