@@ -332,6 +332,8 @@ class CampaignDbNavigationTests(unittest.TestCase):
         self.assertEqual(
             set(controller.actions),
             {
+                "activate_workspace_tab",
+                "add_workspace_tab",
                 "add_grid_column",
                 "add_grid_row",
                 "add_var_to_grid",
@@ -351,6 +353,8 @@ class CampaignDbNavigationTests(unittest.TestCase):
                 "clear_grid_cell",
                 "clear_query",
                 "clear_source_filter",
+                "close_workspace_pane",
+                "close_workspace_tab",
                 "close_query_assistant",
                 "close_help_modal",
                 "confirm_scalar_plot_generation",
@@ -370,14 +374,18 @@ class CampaignDbNavigationTests(unittest.TestCase):
                 "context_menu_cell_span_right",
                 "context_menu_item_add",
                 "context_menu_item_select",
+                "context_menu_tab_close",
+                "context_menu_tab_rename",
                 "delete_grid_column",
                 "delete_grid_row",
                 "hide_context_menu",
                 "move_grid_cell",
+                "move_workspace_tab",
                 "load_workspace_state",
                 "open_plot_settings_plugin_options",
                 "open_query_assistant",
                 "open_source_query_assistant",
+                "open_visualization_assistant",
                 "pick_grid_cell_visualization",
                 "pick_tile_visualization",
                 "pick_var",
@@ -386,6 +394,7 @@ class CampaignDbNavigationTests(unittest.TestCase):
                 "reset_plot_settings",
                 "reset_plugin_options",
                 "reset_scalar_field_settings",
+                "rename_workspace_tab",
                 "run_query",
                 "save_workspace_state",
                 "save_workspace_state_as",
@@ -407,6 +416,7 @@ class CampaignDbNavigationTests(unittest.TestCase):
                 "source_dialog_select",
                 "span_grid_cell_down",
                 "span_grid_cell_right",
+                "split_workspace_pane",
                 "toggle_add_source",
                 "toggle_scalar_field_background",
                 "toggle_movie_details",
@@ -431,10 +441,12 @@ class CampaignDbNavigationTests(unittest.TestCase):
                 "assign_var_to_grid_cell_trigger",
                 "hide_context_menu_trigger",
                 "move_grid_cell_trigger",
+                "reorder_workspace_tab_trigger",
                 "set_grid_track_sizes_trigger",
                 "set_grid_track_weights_trigger",
                 "show_cell_context_menu",
                 "show_item_context_menu",
+                "show_tab_context_menu",
             },
         )
         self.assertEqual(
@@ -447,6 +459,89 @@ class CampaignDbNavigationTests(unittest.TestCase):
             },
         )
         self.assertEqual(len(controller.on_server_ready.callbacks), 1)
+
+    def test_workspace_tabs_preserve_independent_grid_state(self):
+        state, controller = self.make_controller()
+        state.gridCells[0]["variable_id"] = "density"
+        state.gridCells[0]["variable_name"] = "density"
+
+        controller.actions["add_workspace_tab"]("pane-1")
+
+        self.assertEqual(state.workspaceActiveTabId, "tab-2")
+        self.assertFalse(state.gridCells[0].get("variable_id"))
+
+        controller.actions["activate_workspace_tab"]("pane-1", "tab-1")
+
+        self.assertEqual(state.workspaceActiveTabId, "tab-1")
+        self.assertEqual(state.gridCells[0]["variable_id"], "density")
+
+    def test_tab_context_menu_renames_and_closes_target_tab(self):
+        state, controller = self.make_controller()
+        controller.actions["add_workspace_tab"]("pane-1")
+
+        controller.triggers["show_tab_context_menu"](
+            "pane-1", "tab-1", 125.8, 42.2
+        )
+
+        self.assertTrue(state.contextMenuVisible)
+        self.assertEqual(state.contextMenuKind, "tab")
+        self.assertEqual(state.contextMenuItemLabel, "View 1")
+        self.assertEqual(state.contextMenuTabPaneId, "pane-1")
+        self.assertEqual(state.contextMenuTabId, "tab-1")
+        self.assertTrue(state.contextMenuTabCanClose)
+        self.assertEqual((state.contextMenuX, state.contextMenuY), (125, 42))
+
+        controller.actions["context_menu_tab_rename"]("Overview")
+        self.assertEqual(state.workspacePanes[0]["tabs"][0]["title"], "Overview")
+        self.assertFalse(state.contextMenuVisible)
+
+        controller.triggers["show_tab_context_menu"](
+            "pane-1", "tab-1", 20, 30
+        )
+        controller.actions["context_menu_tab_close"](True)
+        self.assertEqual(
+            [tab["id"] for tab in state.workspacePanes[0]["tabs"]],
+            ["tab-2"],
+        )
+
+        controller.triggers["show_tab_context_menu"](
+            "pane-1", "tab-2", 20, 30
+        )
+        self.assertFalse(state.contextMenuTabCanClose)
+        controller.actions["context_menu_tab_close"](True)
+        self.assertEqual(len(state.workspacePanes[0]["tabs"]), 1)
+
+    def test_workspace_split_and_move_tab_actions_are_constrained(self):
+        state, controller = self.make_controller()
+        controller.actions["add_workspace_tab"]("pane-1")
+        controller.actions["split_workspace_pane"]("horizontal")
+
+        self.assertEqual(len(state.workspacePanes), 2)
+        self.assertEqual(state.workspaceSplitDirection, "horizontal")
+
+        controller.actions["move_workspace_tab"]("pane-1", "tab-2")
+
+        self.assertEqual(state.workspaceActivePaneId, "pane-2")
+        self.assertEqual(state.workspaceActiveTabId, "tab-2")
+        self.assertEqual(len(state.workspacePanes), 2)
+
+        controller.actions["close_workspace_pane"]("pane-2", False)
+        self.assertEqual(len(state.workspacePanes), 2)
+
+    def test_workspace_tab_reorder_trigger_preserves_active_tab(self):
+        state, controller = self.make_controller()
+        controller.actions["add_workspace_tab"]("pane-1")
+        controller.actions["add_workspace_tab"]("pane-1")
+
+        controller.triggers["reorder_workspace_tab_trigger"](
+            "pane-1", "tab-1", 3
+        )
+
+        self.assertEqual(
+            [tab["id"] for tab in state.workspacePanes[0]["tabs"]],
+            ["tab-2", "tab-3", "tab-1"],
+        )
+        self.assertEqual(state.workspaceActiveTabId, "tab-3")
 
     def test_server_ready_lifecycle_reingests_and_refreshes_catalog(self):
         state = RecordingState()
@@ -646,6 +741,39 @@ class CampaignDbNavigationTests(unittest.TestCase):
             "minmax(212px, 2.5fr) minmax(212px, 1fr) "
             "minmax(212px, 0.25fr)",
         )
+
+    def test_workspace_layout_round_trip_restores_tabs_and_split(self):
+        state, controller = self.make_controller()
+        owner = controller.actions["save_workspace_state"].__self__
+        controller.actions["add_workspace_tab"]("pane-1")
+        controller.actions["rename_workspace_tab"](
+            "pane-1", "tab-1", "2D Fields"
+        )
+        controller.actions["rename_workspace_tab"](
+            "pane-1", "tab-2", "1D Trends"
+        )
+        controller.actions["split_workspace_pane"]("horizontal")
+        serialized = parse_workspace_document(
+            workspace_json(state, "/campaign/example.aca")
+        )
+
+        controller.actions["close_workspace_pane"]("pane-2")
+        self.assertEqual(len(state.workspacePanes), 1)
+
+        owner.restore_workspace_state(serialized)
+
+        self.assertEqual(state.workspaceSplitDirection, "horizontal")
+        self.assertEqual(len(state.workspacePanes), 2)
+        self.assertEqual(
+            [
+                tab["title"]
+                for pane in state.workspacePanes
+                for tab in pane["tabs"]
+            ],
+            ["2D Fields", "1D Trends", "View 3"],
+        )
+        self.assertEqual(state.workspaceActivePaneId, "pane-2")
+        self.assertEqual(state.workspaceActiveTabId, "tab-3")
 
     def test_workspace_refresh_uses_source_plugin_rehydration(self):
         state, controller = self.make_controller()

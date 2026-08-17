@@ -2,8 +2,11 @@
 
 import json
 import re
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict
+
+from seurat.models.workspace_layout import active_pane_and_tab, grid_snapshot
 
 
 WORKSPACE_FORMAT = "seurat-workspace"
@@ -75,6 +78,78 @@ def _cell_state(cell: Dict[str, Any], index: int) -> Dict[str, Any]:
     }
 
 
+def _grid_document(grid: Dict[str, Any]) -> Dict[str, Any]:
+    raw_cells = list(grid.get("cells", []) or [])
+    return {
+        "rows": grid.get("rows", 3),
+        "columns": grid.get("columns", 3),
+        "layout_mode": str(grid.get("layout_mode", "uniform") or "uniform"),
+        "sizing_mode": str(grid.get("sizing_mode", "static") or "static"),
+        "cell_size": grid.get("cell_size", 300),
+        "fit_minimum_cell_size": grid.get("fit_minimum_cell_size", 180),
+        "column_sizes": _json_copy(
+            grid.get("column_sizes", []), "Grid column sizes"
+        ),
+        "row_sizes": _json_copy(grid.get("row_sizes", []), "Grid row sizes"),
+        "column_weights": _json_copy(
+            grid.get("column_weights", []), "Grid column weights"
+        ),
+        "row_weights": _json_copy(
+            grid.get("row_weights", []), "Grid row weights"
+        ),
+        "cells": [
+            _cell_state(cell if isinstance(cell, dict) else {}, index)
+            for index, cell in enumerate(raw_cells)
+        ],
+        "active_cell": grid.get("active_cell", -1),
+        "selected_cells": _json_copy(
+            grid.get("selected_cells", []), "Selected grid cells"
+        ),
+        "timeline_driver_cell": grid.get("timeline_driver_cell", -1),
+    }
+
+
+def _workspace_document(state) -> Dict[str, Any]:
+    layout = deepcopy(_state_value(state, "workspaceLayout", {}) or {})
+    if not isinstance(layout, dict) or not layout.get("panes"):
+        return {}
+
+    _pane, active_tab = active_pane_and_tab(layout)
+    if active_tab is not None:
+        active_tab["grid"] = grid_snapshot(state)
+
+    panes = []
+    for pane_index, pane in enumerate(list(layout.get("panes", []) or [])):
+        tabs = []
+        for tab_index, tab in enumerate(list(pane.get("tabs", []) or [])):
+            grid = tab.get("grid", {})
+            if not isinstance(grid, dict):
+                grid = {}
+            tabs.append(
+                {
+                    "id": str(tab.get("id", "") or f"tab-{tab_index + 1}"),
+                    "title": str(tab.get("title", "") or f"View {tab_index + 1}"),
+                    "grid": _grid_document(grid),
+                }
+            )
+        panes.append(
+            {
+                "id": str(pane.get("id", "") or f"pane-{pane_index + 1}"),
+                "active_tab_id": str(pane.get("active_tab_id", "") or ""),
+                "tabs": tabs,
+            }
+        )
+    return {
+        "split_direction": str(
+            layout.get("split_direction", "none") or "none"
+        ),
+        "split_ratio": layout.get("split_ratio", 0.5),
+        "active_pane_id": str(layout.get("active_pane_id", "") or ""),
+        "active_tab_id": str(layout.get("active_tab_id", "") or ""),
+        "panes": panes,
+    }
+
+
 def default_workspace_filename(campaign_path: str) -> str:
     name = Path(str(campaign_path or "")).name
     stem = Path(name).stem if name else "seurat"
@@ -85,11 +160,7 @@ def default_workspace_filename(campaign_path: str) -> str:
 def workspace_document(state, campaign_path: str) -> Dict[str, Any]:
     """Return the durable, semantic subset of the current Trame state."""
 
-    raw_cells = list(_state_value(state, "gridCells", []) or [])
-    cells = [
-        _cell_state(cell if isinstance(cell, dict) else {}, index)
-        for index, cell in enumerate(raw_cells)
-    ]
+    active_grid = _grid_document(grid_snapshot(state))
     campaign_name = Path(str(campaign_path or "")).name
     if not campaign_name:
         raise WorkspaceStateError("Cannot save state without a campaign name")
@@ -129,46 +200,8 @@ def workspace_document(state, campaign_path: str) -> Dict[str, Any]:
                     _state_value(state, "activeNaturalLanguageQuery", "") or ""
                 ),
             },
-            "grid": {
-                "rows": _state_value(state, "gridRows", 3),
-                "columns": _state_value(state, "gridCols", 3),
-                "layout_mode": str(
-                    _state_value(state, "gridLayoutMode", "uniform")
-                    or "uniform"
-                ),
-                "sizing_mode": str(
-                    _state_value(state, "gridSizingMode", "static") or "static"
-                ),
-                "cell_size": _state_value(state, "gridCellSize", 300),
-                "fit_minimum_cell_size": _state_value(
-                    state, "gridFitMinCellSize", 180
-                ),
-                "column_sizes": _json_copy(
-                    _state_value(state, "gridColumnSizes", []),
-                    "Grid column sizes",
-                ),
-                "row_sizes": _json_copy(
-                    _state_value(state, "gridRowSizes", []),
-                    "Grid row sizes",
-                ),
-                "column_weights": _json_copy(
-                    _state_value(state, "gridColumnWeights", []),
-                    "Grid column weights",
-                ),
-                "row_weights": _json_copy(
-                    _state_value(state, "gridRowWeights", []),
-                    "Grid row weights",
-                ),
-                "cells": cells,
-                "active_cell": _state_value(state, "activeGridCell", -1),
-                "selected_cells": _json_copy(
-                    _state_value(state, "selectedGridCellIndices", []),
-                    "Selected grid cells",
-                ),
-                "timeline_driver_cell": _state_value(
-                    state, "timelineDriverCell", -1
-                ),
-            },
+            "grid": active_grid,
+            "workspace": _workspace_document(state),
             "visualization": {
                 "scalar_plot_policy": str(
                     _state_value(state, "scalarPlotPolicy", "always") or "always"
@@ -244,18 +277,88 @@ def parse_workspace_document(content: Any) -> Dict[str, Any]:
     grid = _require_mapping(saved_state.get("grid"), "state.grid")
     _require_mapping(saved_state.get("visualization"), "state.visualization")
 
+    _validate_grid_document(grid, "state.grid")
+    workspace = saved_state.get("workspace")
+    if workspace is not None:
+        _validate_workspace_layout(workspace)
+
+    return document
+
+
+def _validate_grid_document(grid: Any, description: str) -> None:
+    grid = _require_mapping(grid, description)
     cells = grid.get("cells")
     if not isinstance(cells, list):
-        raise WorkspaceStateError("state.grid.cells must be a JSON array")
+        raise WorkspaceStateError(f"{description}.cells must be a JSON array")
     if len(cells) > 64:
-        raise WorkspaceStateError("state.grid.cells exceeds the 8x8 grid limit")
+        raise WorkspaceStateError(
+            f"{description}.cells exceeds the 8x8 grid limit"
+        )
     for index, cell in enumerate(cells):
         if not isinstance(cell, dict):
             raise WorkspaceStateError(
-                f"state.grid.cells[{index}] must be a JSON object"
+                f"{description}.cells[{index}] must be a JSON object"
             )
 
-    return document
+
+def _validate_workspace_layout(value: Any) -> None:
+    workspace = _require_mapping(value, "state.workspace")
+    panes = workspace.get("panes")
+    if not isinstance(panes, list) or not 1 <= len(panes) <= 2:
+        raise WorkspaceStateError(
+            "state.workspace.panes must contain one or two panes"
+        )
+    pane_ids = set()
+    tab_ids = set()
+    active_tab_by_pane = {}
+    total_tabs = 0
+    for pane_index, pane_value in enumerate(panes):
+        pane = _require_mapping(
+            pane_value, f"state.workspace.panes[{pane_index}]"
+        )
+        pane_id = pane.get("id")
+        if not isinstance(pane_id, str) or not pane_id or pane_id in pane_ids:
+            raise WorkspaceStateError("Workspace pane IDs must be unique strings")
+        pane_ids.add(pane_id)
+        tabs = pane.get("tabs")
+        if not isinstance(tabs, list) or not tabs:
+            raise WorkspaceStateError("Each workspace pane must contain a tab")
+        total_tabs += len(tabs)
+        pane_tab_ids = set()
+        for tab_index, tab_value in enumerate(tabs):
+            tab = _require_mapping(
+                tab_value,
+                f"state.workspace.panes[{pane_index}].tabs[{tab_index}]",
+            )
+            tab_id = tab.get("id")
+            if not isinstance(tab_id, str) or not tab_id or tab_id in tab_ids:
+                raise WorkspaceStateError("Workspace tab IDs must be unique strings")
+            tab_ids.add(tab_id)
+            pane_tab_ids.add(tab_id)
+            _validate_grid_document(
+                tab.get("grid"),
+                f"state.workspace.panes[{pane_index}].tabs[{tab_index}].grid",
+            )
+        pane_active_tab = pane.get("active_tab_id")
+        if pane_active_tab not in pane_tab_ids:
+            raise WorkspaceStateError(
+                "Each workspace pane active_tab_id must reference one of its tabs"
+            )
+        active_tab_by_pane[pane_id] = pane_active_tab
+
+    if total_tabs > 64:
+        raise WorkspaceStateError("state.workspace exceeds the 64 tab limit")
+
+    active_pane_id = workspace.get("active_pane_id")
+    active_tab_id = workspace.get("active_tab_id")
+    if active_pane_id not in pane_ids:
+        raise WorkspaceStateError("state.workspace.active_pane_id is not present")
+    if active_tab_id not in tab_ids:
+        raise WorkspaceStateError("state.workspace.active_tab_id is not present")
+    if active_tab_by_pane.get(active_pane_id) != active_tab_id:
+        raise WorkspaceStateError(
+            "state.workspace.active_tab_id must belong to the active pane"
+        )
 
 
 def validate_workspace_campaign(

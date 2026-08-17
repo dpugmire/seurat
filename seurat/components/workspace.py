@@ -7,7 +7,7 @@ from trame.widgets import vuetify3 as vuetify
 
 _LIVE_GRID_SIZING_ARGUMENTS = """
 [(() => {
-  const grid = $event.target.ownerDocument.querySelector('.seurat-main-grid');
+  const grid = $event.target.ownerDocument.querySelector('.seurat-workspace-active-grid');
   if (!grid) return null;
   return {
     mode: grid.getAttribute('data-grid-sizing-mode') || '',

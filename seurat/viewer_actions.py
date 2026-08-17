@@ -3,7 +3,7 @@
 import json
 import math
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple, Union
 
 
 MAX_ACTIONS = 1
@@ -68,9 +68,19 @@ class CatalogQueryAction:
 
 
 @dataclass(frozen=True)
+class VisualizationAddAction:
+    action_type: str
+    variable_id: str
+    target: str = "active_cell"
+
+
+ViewerAction = Union[CatalogQueryAction, VisualizationAddAction]
+
+
+@dataclass(frozen=True)
 class ViewerActionProposal:
     status: str
-    actions: Tuple[CatalogQueryAction, ...]
+    actions: Tuple[ViewerAction, ...]
     explanation: str
     assumptions: Tuple[str, ...] = ()
     clarification: str = ""
@@ -110,6 +120,96 @@ CONDITION_JSON_SCHEMA: Dict[str, Any] = {
 }
 
 
+CATALOG_QUERY_ACTION_JSON_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "type": {"type": "string", "enum": ["catalog.query"]},
+        "arguments": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "select": {
+                    "type": "string",
+                    "enum": ["variables", "sources"],
+                },
+                "result_variable_id": {"type": "string"},
+                "conditions": {
+                    "type": "array",
+                    "maxItems": MAX_CONDITIONS,
+                    "items": CONDITION_JSON_SCHEMA,
+                },
+                "source_conditions": {
+                    "type": "array",
+                    "maxItems": MAX_CONDITIONS,
+                    "items": CONDITION_JSON_SCHEMA,
+                },
+                "rank": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "enabled": {"type": "boolean"},
+                        "variable_id": {"type": "string"},
+                        "field": {
+                            "type": "string",
+                            "enum": ["", "minimum", "maximum"],
+                        },
+                        "direction": {
+                            "type": "string",
+                            "enum": ["", "ascending", "descending"],
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 1,
+                        },
+                        "include_ties": {"type": "boolean"},
+                    },
+                    "required": [
+                        "enabled",
+                        "variable_id",
+                        "field",
+                        "direction",
+                        "limit",
+                        "include_ties",
+                    ],
+                },
+            },
+            "required": [
+                "select",
+                "result_variable_id",
+                "conditions",
+                "source_conditions",
+                "rank",
+            ],
+        },
+    },
+    "required": ["type", "arguments"],
+}
+
+
+VISUALIZATION_ADD_ACTION_JSON_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "type": {"type": "string", "enum": ["visualization.add"]},
+        "arguments": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "variable_id": {"type": "string"},
+                "target": {
+                    "type": "string",
+                    "enum": ["active_cell"],
+                },
+            },
+            "required": ["variable_id", "target"],
+        },
+    },
+    "required": ["type", "arguments"],
+}
+
+
 VIEWER_ACTION_PROPOSAL_JSON_SCHEMA: Dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
@@ -126,70 +226,10 @@ VIEWER_ACTION_PROPOSAL_JSON_SCHEMA: Dict[str, Any] = {
             "type": "array",
             "maxItems": MAX_ACTIONS,
             "items": {
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {
-                    "type": {"type": "string", "enum": ["catalog.query"]},
-                    "arguments": {
-                        "type": "object",
-                        "additionalProperties": False,
-                        "properties": {
-                            "select": {
-                                "type": "string",
-                                "enum": ["variables", "sources"],
-                            },
-                            "result_variable_id": {"type": "string"},
-                            "conditions": {
-                                "type": "array",
-                                "maxItems": MAX_CONDITIONS,
-                                "items": CONDITION_JSON_SCHEMA,
-                            },
-                            "source_conditions": {
-                                "type": "array",
-                                "maxItems": MAX_CONDITIONS,
-                                "items": CONDITION_JSON_SCHEMA,
-                            },
-                            "rank": {
-                                "type": "object",
-                                "additionalProperties": False,
-                                "properties": {
-                                    "enabled": {"type": "boolean"},
-                                    "variable_id": {"type": "string"},
-                                    "field": {
-                                        "type": "string",
-                                        "enum": ["", "minimum", "maximum"],
-                                    },
-                                    "direction": {
-                                        "type": "string",
-                                        "enum": ["", "ascending", "descending"],
-                                    },
-                                    "limit": {
-                                        "type": "integer",
-                                        "minimum": 1,
-                                        "maximum": 1,
-                                    },
-                                    "include_ties": {"type": "boolean"},
-                                },
-                                "required": [
-                                    "enabled",
-                                    "variable_id",
-                                    "field",
-                                    "direction",
-                                    "limit",
-                                    "include_ties",
-                                ],
-                            },
-                        },
-                        "required": [
-                            "select",
-                            "result_variable_id",
-                            "conditions",
-                            "source_conditions",
-                            "rank",
-                        ],
-                    },
-                },
-                "required": ["type", "arguments"],
+                "oneOf": [
+                    CATALOG_QUERY_ACTION_JSON_SCHEMA,
+                    VISUALIZATION_ADD_ACTION_JSON_SCHEMA,
+                ]
             },
         },
         "explanation": {"type": "string"},
@@ -397,6 +437,53 @@ def parse_catalog_query_action(payload: Any) -> CatalogQueryAction:
     return action
 
 
+def parse_visualization_add_action(payload: Any) -> VisualizationAddAction:
+    if not isinstance(payload, dict):
+        raise ViewerActionValidationError("Viewer action must be an object")
+    _exact_keys(payload, {"type", "arguments"}, "Viewer action")
+    action_type = _text(payload["type"], "Action type", allow_empty=False)
+    if action_type != "visualization.add":
+        raise ViewerActionValidationError(f"Unsupported action type: {action_type}")
+    arguments = payload["arguments"]
+    if not isinstance(arguments, dict):
+        raise ViewerActionValidationError("Action arguments must be an object")
+    _exact_keys(
+        arguments,
+        {"variable_id", "target"},
+        "Visualization add arguments",
+    )
+    variable_id = _text(
+        arguments["variable_id"],
+        "Visualization variable_id",
+        allow_empty=False,
+    )
+    target = _text(
+        arguments["target"],
+        "Visualization target",
+        allow_empty=False,
+    )
+    if target != "active_cell":
+        raise ViewerActionValidationError(
+            f"Unsupported visualization target: {target}"
+        )
+    return VisualizationAddAction(
+        action_type=action_type,
+        variable_id=variable_id,
+        target=target,
+    )
+
+
+def parse_viewer_action(payload: Any) -> ViewerAction:
+    if not isinstance(payload, dict):
+        raise ViewerActionValidationError("Viewer action must be an object")
+    action_type = payload.get("type")
+    if action_type == "catalog.query":
+        return parse_catalog_query_action(payload)
+    if action_type == "visualization.add":
+        return parse_visualization_add_action(payload)
+    raise ViewerActionValidationError(f"Unsupported action type: {action_type}")
+
+
 def catalog_action_to_dict(action: CatalogQueryAction) -> Dict[str, Any]:
     def condition_dict(condition: CatalogCondition) -> Dict[str, Any]:
         value = condition.value
@@ -431,8 +518,20 @@ def catalog_action_to_dict(action: CatalogQueryAction) -> Dict[str, Any]:
     }
 
 
+def visualization_action_to_dict(
+    action: VisualizationAddAction,
+) -> Dict[str, Any]:
+    return {
+        "type": action.action_type,
+        "arguments": {
+            "variable_id": action.variable_id,
+            "target": action.target,
+        },
+    }
+
+
 def viewer_action_plan_to_dict(
-    actions: Tuple[CatalogQueryAction, ...],
+    actions: Tuple[ViewerAction, ...],
     *,
     version: int = VIEWER_ACTION_SCHEMA_VERSION,
 ) -> Dict[str, Any]:
@@ -440,10 +539,17 @@ def viewer_action_plan_to_dict(
         raise ViewerActionValidationError(
             f"Unsupported viewer action schema version: {version}"
         )
-    return {
-        "version": version,
-        "actions": [catalog_action_to_dict(action) for action in actions],
-    }
+    serialized = []
+    for action in actions:
+        if isinstance(action, CatalogQueryAction):
+            serialized.append(catalog_action_to_dict(action))
+        elif isinstance(action, VisualizationAddAction):
+            serialized.append(visualization_action_to_dict(action))
+        else:
+            raise ViewerActionValidationError(
+                f"Unsupported viewer action object: {type(action).__name__}"
+            )
+    return {"version": version, "actions": serialized}
 
 
 def _query_value(value: Any) -> str:
@@ -598,3 +704,16 @@ def summarize_catalog_query(
             f"{'s' if condition_count != 1 else ''}"
         )
     return " ".join(parts) + "."
+
+
+def summarize_visualization_add(
+    action: VisualizationAddAction,
+    *,
+    cell_index: int,
+    visualization_name: str,
+) -> str:
+    visualization = str(visualization_name or "viewer default").strip()
+    return (
+        f"Add {action.variable_id} to grid cell {cell_index + 1} using "
+        f"{visualization}. The active query and current source selection apply."
+    )

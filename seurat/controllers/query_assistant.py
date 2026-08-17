@@ -1,10 +1,11 @@
-"""Natural-language query proposal and explicit-apply controller behavior."""
+"""Natural-language viewer-action proposal and explicit-apply behavior."""
 
 import asyncio
 import math
 from dataclasses import replace
 from typing import Dict, List
 
+from query_parser import and_filter
 from seurat.query_assistant import (
     MAX_ASSISTANT_REQUEST_LENGTH,
     MAX_CONTEXT_SOURCES,
@@ -15,10 +16,12 @@ from seurat.query_assistant import (
 )
 from seurat.viewer_actions import (
     CatalogQueryAction,
+    VisualizationAddAction,
     ViewerActionProposal,
     compile_catalog_query,
     compile_source_filter_query,
     summarize_catalog_query,
+    summarize_visualization_add,
     viewer_action_plan_to_dict,
 )
 
@@ -27,6 +30,7 @@ class QueryAssistantControllerMixin:
     ACTION_BINDINGS = (
         ("open_query_assistant", "open_query_assistant"),
         ("open_source_query_assistant", "open_source_query_assistant"),
+        ("open_visualization_assistant", "open_visualization_assistant"),
         ("close_query_assistant", "close_query_assistant"),
         ("translate_query_request", "translate_query_request"),
         ("validate_query_proposal", "validate_query_proposal"),
@@ -38,6 +42,7 @@ class QueryAssistantControllerMixin:
     def reset_query_assistant_proposal(self) -> None:
         self._query_assistant_action = None
         self._query_assistant_rank_value = None
+        self._query_assistant_target_cell_index = None
         self.state.queryAssistantProposalText = ""
         self.state.queryAssistantProposalSummary = ""
         self.state.queryAssistantActionPlan = {}
@@ -51,6 +56,8 @@ class QueryAssistantControllerMixin:
         self.state.queryAssistantRankValue = None
         self.state.queryAssistantTieCount = 0
         self.state.queryAssistantValidatedText = ""
+        self.state.queryAssistantTargetCellIndex = -1
+        self.state.queryAssistantVisualizationName = ""
 
     def open_query_assistant(self, **_):
         if not self.query_translator:
@@ -80,6 +87,25 @@ class QueryAssistantControllerMixin:
         self.state.queryAssistantRequestText = str(
             self.state.sourceFilterDraftText or ""
         ).strip()
+        self.state.showQueryAssistant = True
+        return True
+
+    def open_visualization_assistant(self, **_):
+        if not self.query_translator:
+            return False
+        previous_target = str(self.state.queryAssistantTarget or "catalog")
+        self.reset_query_assistant_proposal()
+        self.state.queryAssistantTarget = "visualization"
+        if previous_target != "visualization":
+            self.state.queryAssistantRequestText = ""
+        try:
+            cell_index = int(self.state.activeGridCell)
+        except (TypeError, ValueError):
+            cell_index = -1
+        if not self.is_valid_grid_index(cell_index):
+            self.state.queryAssistantError = (
+                "Select a grid cell before adding a visualization."
+            )
         self.state.showQueryAssistant = True
         return True
 
@@ -236,10 +262,22 @@ class QueryAssistantControllerMixin:
                     "Translator returned an invalid proposal object."
                 )
             if proposal.status == "proposal":
-                action, rank_value, tie_count = self.resolve_catalog_action(
-                    proposal.actions[0],
-                    translation_request,
-                )
+                proposed_action = proposal.actions[0]
+                if isinstance(proposed_action, CatalogQueryAction):
+                    action, rank_value, tie_count = self.resolve_catalog_action(
+                        proposed_action,
+                        translation_request,
+                    )
+                    target_cell_index = None
+                elif isinstance(proposed_action, VisualizationAddAction):
+                    action, target_cell_index = self.resolve_visualization_action(
+                        proposed_action,
+                        translation_request,
+                    )
+                    rank_value = None
+                    tie_count = 0
+                else:
+                    raise QueryAssistantError("Unsupported viewer action proposal.")
         except asyncio.TimeoutError:
             if request_id == self._query_assistant_request_id:
                 self.state.queryAssistantError = "Query translation timed out."
@@ -269,20 +307,24 @@ class QueryAssistantControllerMixin:
 
         self._query_assistant_action = action
         self._query_assistant_rank_value = rank_value
+        self._query_assistant_target_cell_index = target_cell_index
         self.state.queryAssistantActionPlan = viewer_action_plan_to_dict(
             (action,),
             version=proposal.version,
         )
         self.state.queryAssistantRankValue = rank_value
         self.state.queryAssistantTieCount = tie_count
-        self.state.queryAssistantProposalText = self.compile_query_assistant_action(
-            action
-        )
-        self.state.queryAssistantProposalSummary = summarize_catalog_query(
-            action,
-            rank_value=rank_value,
-            tie_count=tie_count,
-        )
+        if isinstance(action, CatalogQueryAction):
+            self.state.queryAssistantProposalText = (
+                self.compile_query_assistant_action(action)
+            )
+            self.state.queryAssistantProposalSummary = summarize_catalog_query(
+                action,
+                rank_value=rank_value,
+                tie_count=tie_count,
+            )
+        else:
+            self.state.queryAssistantTargetCellIndex = target_cell_index
         return self.validate_query_proposal()
 
     def resolve_catalog_action(
@@ -290,6 +332,10 @@ class QueryAssistantControllerMixin:
         action: CatalogQueryAction,
         request: QueryTranslationRequest,
     ):
+        if request.target == "visualization":
+            raise QueryAssistantError(
+                "A visualization request must propose visualization.add."
+            )
         available_ids = {variable.variable_id for variable in request.variables}
         available_names = {variable.name for variable in request.variables}
         available_sources = set(request.source_datasets)
@@ -424,8 +470,132 @@ class QueryAssistantControllerMixin:
         tie_count = sum(value == rank_value for value in values)
         return action, rank_value, tie_count
 
+    def resolve_visualization_action(
+        self,
+        action: VisualizationAddAction,
+        request: QueryTranslationRequest,
+    ):
+        if request.target != "visualization":
+            raise QueryAssistantError(
+                "A query request must propose catalog.query."
+            )
+        available_ids = {variable.variable_id for variable in request.variables}
+        if action.variable_id not in available_ids:
+            raise QueryAssistantError(
+                f"Unknown campaign variable: {action.variable_id}"
+            )
+        try:
+            cell_index = int(self.state.activeGridCell)
+        except (TypeError, ValueError):
+            cell_index = -1
+        if not self.is_valid_grid_index(cell_index):
+            raise QueryAssistantError(
+                "Select a grid cell before adding a visualization."
+            )
+        return action, cell_index
+
+    def visualization_add_preview(
+        self,
+        action: VisualizationAddAction,
+        cell_index: int,
+    ) -> str:
+        if not self.is_valid_grid_index(cell_index):
+            raise QueryAssistantError("The target grid cell is no longer available.")
+
+        variable_id = action.variable_id
+        source_filter = self.active_source_filter_for_variable(variable_id)
+        query_filter = self.active_query_filter()
+        active_filter = (
+            and_filter(query_filter, source_filter)
+            if query_filter and source_filter
+            else (query_filter or source_filter or None)
+        )
+        try:
+            visualization_names = self.visualization_names_with_plugins(
+                variable_id,
+                source_filter=source_filter or None,
+                extra_filter=active_filter,
+            )
+        except Exception as e:
+            raise QueryAssistantError(
+                f"Could not inspect visualizations for {variable_id}: {e}"
+            ) from e
+
+        selected = self.choose_visualization_default(visualization_names)
+        if selected:
+            return selected
+
+        try:
+            scalar_candidate = self.db.scalar_plot_candidate(
+                variable_id,
+                source_filter=source_filter or None,
+                extra_filter=query_filter,
+            )
+        except Exception as e:
+            raise QueryAssistantError(
+                f"Could not inspect raw scalar data for {variable_id}: {e}"
+            ) from e
+        if scalar_candidate:
+            policy = str(self.state.scalarPlotPolicy or "always").strip().lower()
+            if policy == "never":
+                raise QueryAssistantError(
+                    f"No stored visualization is available for {variable_id}, and "
+                    "scalar plot generation is disabled."
+                )
+            return "generated scalar plot"
+
+        raise QueryAssistantError(
+            f"No visualization is available for {variable_id} under the active query."
+        )
+
+    def validate_visualization_proposal(
+        self,
+        action: VisualizationAddAction,
+    ) -> bool:
+        cell_index = getattr(self, "_query_assistant_target_cell_index", None)
+        if not isinstance(cell_index, int):
+            self.state.queryAssistantError = "There is no grid target to validate."
+            self.state.queryAssistantStatus = ""
+            return False
+        try:
+            visualization_name = self.visualization_add_preview(action, cell_index)
+        except Exception as e:
+            self.state.queryAssistantError = (
+                str(e)
+                if isinstance(e, QueryAssistantError)
+                else f"{type(e).__name__}: {e}"
+            )
+            self.state.queryAssistantStatus = "Proposal is not valid"
+            self.state.queryAssistantProposalSummary = ""
+            self.state.queryAssistantVisualizationName = ""
+            return False
+
+        self.state.queryAssistantProposalText = ""
+        self.state.queryAssistantValidatedText = ""
+        self.state.queryAssistantVariableCount = 1
+        self.state.queryAssistantSourceCount = 0
+        self.state.queryAssistantTargetCellIndex = cell_index
+        self.state.queryAssistantVisualizationName = visualization_name
+        self.state.queryAssistantProposalSummary = summarize_visualization_add(
+            action,
+            cell_index=cell_index,
+            visualization_name=visualization_name,
+        )
+        self.state.queryAssistantError = ""
+        self.state.queryAssistantStatus = (
+            f"Valid · {action.variable_id} · grid cell {cell_index + 1}"
+        )
+        return True
+
     def validate_query_proposal(self, **_):
         action = getattr(self, "_query_assistant_action", None)
+        if isinstance(action, VisualizationAddAction):
+            if self.state.queryAssistantTarget != "visualization":
+                self.state.queryAssistantError = (
+                    "A query request cannot apply a visualization action."
+                )
+                return False
+            return self.validate_visualization_proposal(action)
         if not isinstance(action, CatalogQueryAction):
             self.state.queryAssistantError = "There is no viewer action to validate."
             self.state.queryAssistantStatus = ""
@@ -479,6 +649,16 @@ class QueryAssistantControllerMixin:
     def apply_query_proposal(self, **_):
         if not self.validate_query_proposal():
             return False
+
+        action = getattr(self, "_query_assistant_action", None)
+        if isinstance(action, VisualizationAddAction):
+            cell_index = getattr(self, "_query_assistant_target_cell_index", None)
+            if not isinstance(cell_index, int):
+                self.state.queryAssistantError = "There is no grid target to apply."
+                return False
+            self.assign_var_to_grid_cell(cell_index, action.variable_id)
+            self.state.showQueryAssistant = False
+            return True
 
         proposal_text = str(self.state.queryAssistantValidatedText or "").strip()
         if self.state.queryAssistantTarget == "source_filter":

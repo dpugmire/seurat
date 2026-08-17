@@ -2,6 +2,7 @@
 
 import argparse
 import sys
+from copy import deepcopy
 from pathlib import Path
 
 
@@ -12,6 +13,20 @@ if str(REPOSITORY_ROOT) not in sys.path:
 from seurat import module as seurat_module  # noqa: E402
 from seurat.controllers.catalog import _filter_variable_groups  # noqa: E402
 from seurat.models.grid import empty_grid_cell  # noqa: E402
+from seurat.models.workspace_layout import (  # noqa: E402
+    active_pane_and_tab,
+    add_workspace_tab as add_workspace_tab_model,
+    apply_grid_snapshot,
+    close_workspace_pane as close_workspace_pane_model,
+    close_workspace_tab as close_workspace_tab_model,
+    grid_snapshot,
+    initial_workspace_layout,
+    move_workspace_tab as move_workspace_tab_model,
+    normalized_tab_title,
+    pane_and_tab,
+    reorder_workspace_tab as reorder_workspace_tab_model,
+    split_workspace as split_workspace_model,
+)
 from seurat.state import init_state  # noqa: E402
 from trame.app import get_server  # noqa: E402
 from ui import build_ui  # noqa: E402
@@ -248,6 +263,8 @@ def build_fixture_server(mode):
             _image_sequence_cell(mode),
             empty_grid_cell(),
         ]
+    state.workspaceLayout = initial_workspace_layout(grid_snapshot(state))
+    state.workspacePanes = deepcopy(state.workspaceLayout["panes"])
 
     if mode == "scalar-settings":
         state.showScalarFieldSettingsModal = True
@@ -271,6 +288,93 @@ def build_fixture_server(mode):
         collapsed = dict(state.variableGroupCollapsed or {})
         collapsed[str(group_name)] = not bool(collapsed.get(str(group_name), False))
         state.variableGroupCollapsed = collapsed
+
+    def publish_workspace_layout(layout):
+        state.workspaceLayout = deepcopy(layout)
+        state.workspacePanes = deepcopy(layout["panes"])
+        state.workspaceSplitDirection = layout["split_direction"]
+        state.workspaceSplitRatio = layout["split_ratio"]
+        state.workspaceActivePaneId = layout["active_pane_id"]
+        state.workspaceActiveTabId = layout["active_tab_id"]
+
+    def stash_active_workspace_grid():
+        layout = deepcopy(state.workspaceLayout)
+        _pane, tab = active_pane_and_tab(layout)
+        if tab is not None:
+            tab["grid"] = grid_snapshot(state)
+        publish_workspace_layout(layout)
+        return layout
+
+    def activate_workspace_tab(pane_id, tab_id):
+        layout = stash_active_workspace_grid()
+        pane, tab = pane_and_tab(layout, pane_id, tab_id)
+        if pane is None or tab is None:
+            return
+        pane["active_tab_id"] = tab["id"]
+        layout["active_pane_id"] = pane["id"]
+        layout["active_tab_id"] = tab["id"]
+        publish_workspace_layout(layout)
+        apply_grid_snapshot(state, tab["grid"])
+
+    def add_workspace_tab(pane_id=""):
+        layout = stash_active_workspace_grid()
+        layout, tab_id = add_workspace_tab_model(
+            layout,
+            pane_id or layout["active_pane_id"],
+            grid_snapshot(state),
+        )
+        publish_workspace_layout(layout)
+        pane, tab = pane_and_tab(layout, layout["active_pane_id"], tab_id)
+        if pane is not None and tab is not None:
+            apply_grid_snapshot(state, tab["grid"])
+
+    def rename_workspace_tab(pane_id, tab_id, title):
+        if title is None:
+            return
+        layout = stash_active_workspace_grid()
+        _pane, tab = pane_and_tab(layout, pane_id, tab_id)
+        if tab is not None:
+            tab["title"] = normalized_tab_title(title, tab["title"])
+        publish_workspace_layout(layout)
+
+    def load_active_workspace_grid(layout):
+        publish_workspace_layout(layout)
+        _pane, tab = active_pane_and_tab(layout)
+        if tab is not None:
+            apply_grid_snapshot(state, tab["grid"])
+
+    def close_workspace_tab(pane_id, tab_id, confirmed=True):
+        if confirmed:
+            load_active_workspace_grid(
+                close_workspace_tab_model(
+                    stash_active_workspace_grid(), pane_id, tab_id
+                )
+            )
+
+    def split_workspace_pane(direction="horizontal"):
+        layout, _pane_id = split_workspace_model(
+            stash_active_workspace_grid(), direction, grid_snapshot(state)
+        )
+        load_active_workspace_grid(layout)
+
+    def close_workspace_pane(pane_id, confirmed=True):
+        if confirmed:
+            load_active_workspace_grid(
+                close_workspace_pane_model(stash_active_workspace_grid(), pane_id)
+            )
+
+    def move_workspace_tab(pane_id, tab_id):
+        load_active_workspace_grid(
+            move_workspace_tab_model(
+                stash_active_workspace_grid(), pane_id, tab_id
+            )
+        )
+
+    def reorder_workspace_tab(pane_id, tab_id, insertion_index):
+        layout = reorder_workspace_tab_model(
+            stash_active_workspace_grid(), pane_id, tab_id, insertion_index
+        )
+        publish_workspace_layout(layout)
 
     @state.change("variableSearchText")
     def filter_variable_groups(variableSearchText, **_):
@@ -390,6 +494,37 @@ def build_fixture_server(mode):
     def hide_context_menu_trigger():
         state.contextMenuVisible = False
 
+    def show_tab_context_menu(pane_id, tab_id, x, y):
+        _pane, tab = pane_and_tab(state.workspaceLayout, pane_id, tab_id)
+        if tab is None:
+            return
+        state.contextMenuKind = "tab"
+        state.contextMenuItemLabel = tab["title"]
+        state.contextMenuTabPaneId = pane_id
+        state.contextMenuTabId = tab_id
+        state.contextMenuTabCanClose = sum(
+            len(pane["tabs"]) for pane in state.workspaceLayout["panes"]
+        ) > 1
+        state.contextMenuX = int(float(x))
+        state.contextMenuY = int(float(y))
+        state.contextMenuVisible = True
+
+    def context_menu_tab_rename(title):
+        rename_workspace_tab(
+            state.contextMenuTabPaneId,
+            state.contextMenuTabId,
+            title,
+        )
+        state.contextMenuVisible = False
+
+    def context_menu_tab_close(confirmed=True):
+        if confirmed and state.contextMenuTabCanClose:
+            close_workspace_tab(
+                state.contextMenuTabPaneId,
+                state.contextMenuTabId,
+            )
+        state.contextMenuVisible = False
+
     saved_grid_sizing = None
 
     def apply_live_grid_sizing(sizing):
@@ -472,6 +607,8 @@ def build_fixture_server(mode):
         state.queryAssistantExplanation = ""
         state.queryAssistantStatus = ""
         state.queryAssistantError = ""
+        state.queryAssistantTargetCellIndex = -1
+        state.queryAssistantVisualizationName = ""
 
     def open_query_assistant():
         previous_target = state.queryAssistantTarget
@@ -485,6 +622,14 @@ def build_fixture_server(mode):
         reset_query_assistant_proposal()
         state.queryAssistantTarget = "source_filter"
         state.queryAssistantRequestText = state.sourceFilterDraftText
+        state.showQueryAssistant = True
+
+    def open_visualization_assistant():
+        previous_target = state.queryAssistantTarget
+        reset_query_assistant_proposal()
+        state.queryAssistantTarget = "visualization"
+        if previous_target != "visualization":
+            state.queryAssistantRequestText = ""
         state.showQueryAssistant = True
 
     def close_query_assistant():
@@ -501,6 +646,24 @@ def build_fixture_server(mode):
             state.queryAssistantStatus = "Valid · 1 source row"
             state.queryAssistantVariableCount = 1
             state.queryAssistantSourceCount = 1
+        elif state.queryAssistantTarget == "visualization":
+            variable_id = (
+                "current_z"
+                if "current" in state.queryAssistantRequestText.lower()
+                else "internal_energy"
+            )
+            state.queryAssistantProposalText = ""
+            state.queryAssistantVisualizationName = "viewer default"
+            state.queryAssistantTargetCellIndex = state.activeGridCell
+            state.queryAssistantProposalSummary = (
+                f"Add {variable_id} to grid cell {state.activeGridCell + 1} "
+                "using viewer default."
+            )
+            state.queryAssistantStatus = (
+                f"Valid · {variable_id} · grid cell {state.activeGridCell + 1}"
+            )
+            state.queryAssistantVariableCount = 1
+            state.queryAssistantSourceCount = 0
         else:
             state.queryAssistantProposalText = "var == 'internal_energy'"
             state.queryAssistantProposalSummary = (
@@ -509,34 +672,55 @@ def build_fixture_server(mode):
             state.queryAssistantStatus = "Valid · 1 variable"
             state.queryAssistantVariableCount = 1
             state.queryAssistantSourceCount = 0
-        state.queryAssistantActionPlan = {
-            "version": 1,
-            "actions": [
-                {
-                    "type": "catalog.query",
-                    "arguments": {
-                        "select": "variables",
-                        "result_variable_id": "internal_energy",
-                    },
-                }
-            ],
-        }
+        if state.queryAssistantTarget == "visualization":
+            state.queryAssistantActionPlan = {
+                "version": 1,
+                "actions": [
+                    {
+                        "type": "visualization.add",
+                        "arguments": {
+                            "variable_id": variable_id,
+                            "target": "active_cell",
+                        },
+                    }
+                ],
+            }
+        else:
+            state.queryAssistantActionPlan = {
+                "version": 1,
+                "actions": [
+                    {
+                        "type": "catalog.query",
+                        "arguments": {
+                            "select": "variables",
+                            "result_variable_id": "internal_energy",
+                        },
+                    }
+                ],
+            }
         state.queryAssistantExplanation = (
-            "Select the exact internal_energy variable."
+            f"Add {variable_id} to the active grid cell."
+            if state.queryAssistantTarget == "visualization"
+            else "Select the exact internal_energy variable."
         )
 
     def validate_query_proposal():
-        state.queryAssistantStatus = (
-            "Valid · 1 source row"
-            if state.queryAssistantTarget == "source_filter"
-            else "Valid · 1 variable"
-        )
+        if state.queryAssistantTarget == "source_filter":
+            state.queryAssistantStatus = "Valid · 1 source row"
+        elif state.queryAssistantTarget == "catalog":
+            state.queryAssistantStatus = "Valid · 1 variable"
 
     def apply_query_proposal():
         if state.queryAssistantTarget == "source_filter":
             state.sourceFilterDraftText = state.queryAssistantProposalText
             state.sourceFilterText = state.queryAssistantProposalText
             state.sourceRows = [dict(state.sourceRowsAll[0])]
+        elif state.queryAssistantTarget == "visualization":
+            action = state.queryAssistantActionPlan["actions"][0]
+            assign_var_to_grid_cell(
+                action["arguments"]["variable_id"],
+                state.queryAssistantTargetCellIndex,
+            )
         else:
             state.queryText = state.queryAssistantProposalText
         state.showQueryAssistant = False
@@ -546,16 +730,29 @@ def build_fixture_server(mode):
         state.showSourcesModal = not bool(state.showSourcesModal)
 
     server.controller.add("toggle_variable_group")(toggle_variable_group)
+    server.controller.add("activate_workspace_tab")(activate_workspace_tab)
+    server.controller.add("add_workspace_tab")(add_workspace_tab)
+    server.controller.add("rename_workspace_tab")(rename_workspace_tab)
+    server.controller.add("close_workspace_tab")(close_workspace_tab)
+    server.controller.add("context_menu_tab_rename")(context_menu_tab_rename)
+    server.controller.add("context_menu_tab_close")(context_menu_tab_close)
+    server.controller.add("split_workspace_pane")(split_workspace_pane)
+    server.controller.add("close_workspace_pane")(close_workspace_pane)
+    server.controller.add("move_workspace_tab")(move_workspace_tab)
     server.controller.add("set_active_grid_cell")(set_active_grid_cell)
     server.controller.add("set_grid_layout_size")(set_grid_layout_size)
     server.controller.trigger("assign_var_to_grid_cell_trigger")(
         assign_var_to_grid_cell
     )
     server.controller.trigger("move_grid_cell_trigger")(move_grid_cell)
+    server.controller.trigger("reorder_workspace_tab_trigger")(
+        reorder_workspace_tab
+    )
     server.controller.trigger("set_grid_track_sizes_trigger")(set_grid_track_sizes)
     server.controller.trigger("set_grid_track_weights_trigger")(set_grid_track_weights)
     server.controller.trigger("show_item_context_menu")(show_item_context_menu)
     server.controller.trigger("show_cell_context_menu")(show_cell_context_menu)
+    server.controller.trigger("show_tab_context_menu")(show_tab_context_menu)
     server.controller.trigger("hide_context_menu_trigger")(hide_context_menu_trigger)
     server.controller.add("save_workspace_state")(save_workspace_state)
     server.controller.add("save_workspace_state_as")(save_workspace_state_as)
@@ -570,6 +767,9 @@ def build_fixture_server(mode):
     server.controller.add("open_query_assistant")(open_query_assistant)
     server.controller.add("open_source_query_assistant")(
         open_source_query_assistant
+    )
+    server.controller.add("open_visualization_assistant")(
+        open_visualization_assistant
     )
     server.controller.add("close_query_assistant")(close_query_assistant)
     server.controller.add("translate_query_request")(translate_query_request)

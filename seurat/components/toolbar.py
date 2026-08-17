@@ -36,6 +36,14 @@ class QueryToolbar(TrameComponent):
                 class_="ml-1",
                 title="Translate natural language into a query",
             )
+            vuetify.VBtn(
+                "Visualize",
+                click=ctrl.open_visualization_assistant,
+                variant="tonal",
+                size="small",
+                class_="ml-1",
+                title="Add a variable to the active grid cell using natural language",
+            )
         vuetify.VBtn(
             "Clear",
             click=ctrl.clear_query,

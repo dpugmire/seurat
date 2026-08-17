@@ -15,6 +15,65 @@
 
   function createHandlers(root) {
     let floatingDrag = null;
+    let workspaceTabDrag = null;
+    let tabOverflowFrame = 0;
+    let tabOverflowMutationObserver = null;
+    const visibleWorkspaceTabs = new WeakMap();
+    const tabOverflowResizeObserver =
+      typeof ResizeObserver === "function"
+        ? new ResizeObserver(scheduleWorkspaceTabOverflowUpdate)
+        : null;
+
+    function updateWorkspaceTabOverflow() {
+      tabOverflowFrame = 0;
+      for (const viewport of root.querySelectorAll(
+        ".seurat-workspace-tabs-viewport"
+      )) {
+        const tabs = viewport.querySelector(".seurat-workspace-tabs");
+        if (!tabs) continue;
+        if (tabOverflowResizeObserver) tabOverflowResizeObserver.observe(tabs);
+        const activeTab = tabs.querySelector(
+          ".seurat-workspace-tab.is-pane-tab-active"
+        );
+        const activeTabId = activeTab
+          ? activeTab.getAttribute("data-tab-id") || ""
+          : "";
+        if (activeTabId && visibleWorkspaceTabs.get(viewport) !== activeTabId) {
+          const shell = activeTab.closest(".seurat-workspace-tab-shell");
+          if (shell) {
+            const tabsRect = tabs.getBoundingClientRect();
+            const shellRect = shell.getBoundingClientRect();
+            const shellLeft = tabs.scrollLeft + shellRect.left - tabsRect.left;
+            const shellRight = shellLeft + shellRect.width;
+            if (shellLeft < tabs.scrollLeft) tabs.scrollLeft = shellLeft;
+            else if (shellRight > tabs.scrollLeft + tabs.clientWidth) {
+              tabs.scrollLeft = shellRight - tabs.clientWidth;
+            }
+          }
+          visibleWorkspaceTabs.set(viewport, activeTabId);
+        }
+        const maximum = Math.max(0, tabs.scrollWidth - tabs.clientWidth);
+        viewport.classList.toggle("has-overflow-left", tabs.scrollLeft > 1);
+        viewport.classList.toggle(
+          "has-overflow-right",
+          maximum > 1 && tabs.scrollLeft < maximum - 1
+        );
+      }
+    }
+
+    function scheduleWorkspaceTabOverflowUpdate() {
+      if (tabOverflowFrame) return;
+      tabOverflowFrame = window.requestAnimationFrame(
+        updateWorkspaceTabOverflow
+      );
+    }
+
+    function onWorkspaceTabsScroll(event) {
+      const target = event && event.target;
+      if (target && target.classList.contains("seurat-workspace-tabs")) {
+        scheduleWorkspaceTabOverflowUpdate();
+      }
+    }
 
     function clampFloatingPanel(panel, left, top) {
       const margin = 8;
@@ -123,11 +182,96 @@
         panel.style.left = position.left + "px";
         panel.style.top = position.top + "px";
       }
+      scheduleWorkspaceTabOverflowUpdate();
+    }
+
+    function clearWorkspaceTabDropMarkers() {
+      for (const shell of root.querySelectorAll(
+        ".seurat-workspace-tab-shell.is-tab-drop-before, " +
+          ".seurat-workspace-tab-shell.is-tab-drop-after"
+      )) {
+        shell.classList.remove("is-tab-drop-before", "is-tab-drop-after");
+      }
+    }
+
+    function finishWorkspaceTabDrag() {
+      clearWorkspaceTabDropMarkers();
+      for (const tab of root.querySelectorAll(
+        ".seurat-workspace-tab[aria-grabbed='true']"
+      )) {
+        tab.removeAttribute("aria-grabbed");
+      }
+      for (const shell of root.querySelectorAll(
+        ".seurat-workspace-tab-shell.is-tab-dragging"
+      )) {
+        shell.classList.remove("is-tab-dragging");
+      }
+      workspaceTabDrag = null;
+    }
+
+    function updateWorkspaceTabDropTarget(event) {
+      if (!workspaceTabDrag) return false;
+      const target = event && event.target;
+      const tabs = closestWithinRoot(target, ".seurat-workspace-tabs", root);
+      clearWorkspaceTabDropMarkers();
+      workspaceTabDrag.insertionIndex = null;
+      if (
+        !tabs ||
+        (tabs.getAttribute("data-pane-id") || "") !== workspaceTabDrag.paneId
+      ) {
+        return false;
+      }
+
+      const shells = Array.from(
+        tabs.querySelectorAll(".seurat-workspace-tab-shell")
+      );
+      const targetShell = closestWithinRoot(
+        target,
+        ".seurat-workspace-tab-shell",
+        tabs
+      );
+      if (targetShell) {
+        const targetIndex = shells.indexOf(targetShell);
+        if (targetIndex < 0) return false;
+        const bounds = targetShell.getBoundingClientRect();
+        const before = (Number(event.clientX) || 0) < bounds.left + bounds.width / 2;
+        targetShell.classList.add(
+          before ? "is-tab-drop-before" : "is-tab-drop-after"
+        );
+        workspaceTabDrag.insertionIndex = targetIndex + (before ? 0 : 1);
+      } else {
+        const lastShell = shells[shells.length - 1];
+        if (lastShell) lastShell.classList.add("is-tab-drop-after");
+        workspaceTabDrag.insertionIndex = shells.length;
+      }
+      return true;
     }
 
     function onDragStart(event) {
       const target = event && event.target;
       if (!event.dataTransfer) return;
+
+      const workspaceTab = closestWithinRoot(
+        target,
+        ".seurat-workspace-tab",
+        root
+      );
+      if (workspaceTab) {
+        const paneId = workspaceTab.getAttribute("data-pane-id") || "";
+        const tabId = workspaceTab.getAttribute("data-tab-id") || "";
+        const shell = workspaceTab.closest(".seurat-workspace-tab-shell");
+        if (!paneId || !tabId || !shell) return;
+        finishWorkspaceTabDrag();
+        workspaceTabDrag = { paneId, tabId, insertionIndex: null };
+        workspaceTab.setAttribute("aria-grabbed", "true");
+        shell.classList.add("is-tab-dragging");
+        event.dataTransfer.setData(
+          "application/x-seurat-workspace-tab",
+          tabId
+        );
+        event.dataTransfer.effectAllowed = "move";
+        return;
+      }
 
       const variable = closestWithinRoot(target, ".seurat-draggable-var", root);
       if (variable) {
@@ -142,6 +286,7 @@
 
       const cell = closestWithinRoot(target, ".seurat-dropcell", root);
       if (!cell) return;
+      if (cell.closest(".seurat-workspace-grid-preview")) return;
       const filled = cell.getAttribute("data-cell-filled");
       const fromIndex = cell.getAttribute("data-cell-index");
       if (filled !== "1" || fromIndex === null) return;
@@ -152,6 +297,13 @@
 
     function onDragEnd(event) {
       const target = event && event.target;
+      if (
+        workspaceTabDrag ||
+        closestWithinRoot(target, ".seurat-workspace-tab", root)
+      ) {
+        finishWorkspaceTabDrag();
+        return;
+      }
       const variable = closestWithinRoot(target, ".seurat-draggable-var", root);
       if (variable) variable.style.opacity = "1";
       const cell = closestWithinRoot(target, ".seurat-dropcell", root);
@@ -159,12 +311,20 @@
     }
 
     function onDragOver(event) {
+      if (workspaceTabDrag) {
+        if (updateWorkspaceTabDropTarget(event)) {
+          event.preventDefault();
+          if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+        }
+        return;
+      }
       const cell = closestWithinRoot(
         event && event.target,
         ".seurat-dropcell",
         root
       );
       if (!cell) return;
+      if (cell.closest(".seurat-workspace-grid-preview")) return;
       event.preventDefault();
       if (event.dataTransfer) {
         const types = Array.from(event.dataTransfer.types || []);
@@ -189,12 +349,29 @@
     }
 
     function onDrop(event) {
+      if (workspaceTabDrag) {
+        const accepted = updateWorkspaceTabDropTarget(event);
+        const paneId = workspaceTabDrag.paneId;
+        const tabId = workspaceTabDrag.tabId;
+        const insertionIndex = workspaceTabDrag.insertionIndex;
+        if (accepted) event.preventDefault();
+        finishWorkspaceTabDrag();
+        if (accepted && Number.isInteger(insertionIndex)) {
+          trameTrigger("reorder_workspace_tab_trigger", [
+            paneId,
+            tabId,
+            insertionIndex,
+          ]);
+        }
+        return;
+      }
       const cell = closestWithinRoot(
         event && event.target,
         ".seurat-dropcell",
         root
       );
       if (!cell) return;
+      if (cell.closest(".seurat-workspace-grid-preview")) return;
       event.preventDefault();
       cell.classList.remove("seurat-drop-hover");
 
@@ -221,6 +398,26 @@
       const target = event && event.target;
       if (closestWithinRoot(target, "#seurat-context-menu", root)) return;
 
+      const workspaceTab = closestWithinRoot(
+        target,
+        ".seurat-workspace-tab",
+        root
+      );
+      if (workspaceTab) {
+        event.preventDefault();
+        const paneId = workspaceTab.getAttribute("data-pane-id") || "";
+        const tabId = workspaceTab.getAttribute("data-tab-id") || "";
+        if (paneId && tabId) {
+          trameTrigger("show_tab_context_menu", [
+            paneId,
+            tabId,
+            event.clientX || 0,
+            event.clientY || 0,
+          ]);
+        }
+        return;
+      }
+
       const variable = closestWithinRoot(target, ".seurat-draggable-var", root);
       if (variable) {
         event.preventDefault();
@@ -237,6 +434,7 @@
 
       const cell = closestWithinRoot(target, ".seurat-dropcell", root);
       if (cell) {
+        if (cell.closest(".seurat-workspace-grid-preview")) return;
         event.preventDefault();
         const index = cell.getAttribute("data-cell-index");
         if (index !== null) {
@@ -258,7 +456,7 @@
       }
     }
 
-    return {
+    const handlers = {
       root: {
         dragstart: onDragStart,
         dragend: onDragEnd,
@@ -274,12 +472,23 @@
         pointerup: onPointerEnd,
         pointercancel: onPointerEnd,
         lostpointercapture: onLostPointerCapture,
+        scroll: onWorkspaceTabsScroll,
       },
       window: {
         resize: onWindowResize,
       },
       cleanup() {
         finishFloatingDrag();
+        finishWorkspaceTabDrag();
+        if (tabOverflowFrame) {
+          window.cancelAnimationFrame(tabOverflowFrame);
+          tabOverflowFrame = 0;
+        }
+        if (tabOverflowMutationObserver) {
+          tabOverflowMutationObserver.disconnect();
+          tabOverflowMutationObserver = null;
+        }
+        if (tabOverflowResizeObserver) tabOverflowResizeObserver.disconnect();
         for (const panel of root.querySelectorAll(
           ".seurat-floating-options-panel.is-dragging"
         )) {
@@ -287,6 +496,21 @@
         }
       },
     };
+
+    if (typeof MutationObserver === "function") {
+      tabOverflowMutationObserver = new MutationObserver(
+        scheduleWorkspaceTabOverflowUpdate
+      );
+      tabOverflowMutationObserver.observe(root, {
+        attributes: true,
+        attributeFilter: ["class"],
+        childList: true,
+        subtree: true,
+      });
+    }
+    scheduleWorkspaceTabOverflowUpdate();
+
+    return handlers;
   }
 
   function mount(root) {

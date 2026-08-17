@@ -19,6 +19,7 @@ from seurat.viewer_actions import (
     CatalogCondition,
     CatalogQueryAction,
     SourceRank,
+    VisualizationAddAction,
     ViewerActionProposal,
 )
 from trame_server.controller import Controller
@@ -172,6 +173,40 @@ class FakeBackend:
         return {"query": {"source_dataset": "run/scalars.bp"}, "count": 1}
 
 
+class FakeVisualizationDB:
+    ok = True
+    last_error = ""
+
+    def __init__(self, visualization_names=None, scalar_candidate=None):
+        self.visualization_names = list(visualization_names or [])
+        self._scalar_candidate = dict(scalar_candidate or {})
+        self.visualization_queries = []
+        self.tile_queries = []
+
+    def distinct_visualization_names_for_variable(self, variable_id, extra_filter=None):
+        self.visualization_queries.append((variable_id, extra_filter))
+        return list(self.visualization_names)
+
+    def scalar_plot_candidate(self, variable_id, **kwargs):
+        return dict(self._scalar_candidate)
+
+    def get_first_movie_tiles_for_variable(self, variable_id, **kwargs):
+        self.tile_queries.append((variable_id, kwargs))
+        if not self.visualization_names:
+            return []
+        return [
+            {
+                "variable_id": variable_id,
+                "variable_name": variable_id,
+                "visualization_name": self.visualization_names[0],
+                "selected_visualization": self.visualization_names[0],
+                "media_type": "plot1d",
+                "plot": {"series": []},
+                "status": "ready",
+            }
+        ]
+
+
 class FakeTranslator:
     description = "Fake translator"
     timeout_seconds = 2.0
@@ -185,9 +220,9 @@ class FakeTranslator:
         return self.proposal
 
 
-def make_controller(translator, backend=None):
+def make_controller(translator, backend=None, db=None):
     state = RecordingState()
-    db = SimpleNamespace(ok=True, last_error="")
+    db = db or SimpleNamespace(ok=True, last_error="")
     init_state(state, db)
     server = SimpleNamespace(state=state, controller=RecordingController())
     backend = backend or FakeBackend()
@@ -221,6 +256,14 @@ def variable_action(variable_id="temperature"):
         select="variables",
         result_variable_id=variable_id,
         rank=disabled_rank(),
+    )
+
+
+def visualization_action(variable_id="temperature"):
+    return VisualizationAddAction(
+        action_type="visualization.add",
+        variable_id=variable_id,
+        target="active_cell",
     )
 
 
@@ -412,16 +455,35 @@ class QueryProposalTests(unittest.TestCase):
             '"largest max" means field maximum',
             system_message,
         )
-        self.assertIn(
-            "The only available action is catalog.query",
-            system_message,
-        )
+        self.assertIn("visualization: visualization.add", system_message)
         sent_context = json.loads(sent_payload["messages"][1]["content"])
         self.assertEqual(
             sent_context["campaign_context"]["target"],
             "catalog",
         )
         self.assertEqual(proposal.actions[0].result_variable_id, "temperature")
+
+    def test_visualization_proposal_is_parsed_from_provider_envelope(self):
+        proposal = parse_query_proposal(
+            {
+                "version": 1,
+                "status": "proposal",
+                "actions": [
+                    {
+                        "type": "visualization.add",
+                        "arguments": {
+                            "variable_id": "pressure",
+                            "target": "active_cell",
+                        },
+                    }
+                ],
+                "explanation": "Add pressure to the active cell.",
+                "assumptions": [],
+                "clarification": "",
+            }
+        )
+
+        self.assertEqual(proposal.actions[0], visualization_action("pressure"))
 
     def test_chat_completions_falls_back_when_json_schema_is_rejected(self):
         response_payload = {
@@ -954,6 +1016,151 @@ class QueryAssistantControllerTests(unittest.TestCase):
         self.assertEqual(state.queryAssistantProposalText, "")
         self.assertEqual(state.queryAssistantStatus, "Clarification needed")
         self.assertIn("Which temperature", state.queryAssistantClarification)
+
+    def test_visualization_is_previewed_without_mutating_grid_until_apply(self):
+        translator = FakeTranslator(
+            action_proposal(
+                visualization_action("pressure"),
+                explanation="Add pressure to the active cell.",
+            )
+        )
+        db = FakeVisualizationDB(["timeseries"])
+        state, controller, _backend = make_controller(translator, db=db)
+        state.activeGridCell = 0
+        state.queryText = 'source(producer == "run-128")'
+        state.queryFilter = {"producer": "run-128"}
+        state.activeViewerActionPlan = {"preserve": "catalog query provenance"}
+        original_cells = [dict(cell) for cell in state.gridCells]
+
+        self.assertTrue(controller.actions["open_visualization_assistant"]())
+        state.queryAssistantRequestText = "Plot pressure in the selected cell"
+        result = asyncio.run(controller.actions["translate_query_request"]())
+
+        self.assertTrue(result)
+        self.assertEqual(translator.requests[0].target, "visualization")
+        self.assertEqual(state.gridCells, original_cells)
+        self.assertEqual(state.queryAssistantProposalText, "")
+        self.assertEqual(state.queryAssistantVisualizationName, "timeseries")
+        self.assertEqual(state.queryAssistantTargetCellIndex, 0)
+        self.assertEqual(
+            state.queryAssistantStatus,
+            "Valid · pressure · grid cell 1",
+        )
+        self.assertIn("using timeseries", state.queryAssistantProposalSummary)
+        self.assertEqual(
+            state.queryAssistantActionPlan["actions"][0]["type"],
+            "visualization.add",
+        )
+
+        self.assertTrue(controller.actions["apply_query_proposal"]())
+        self.assertEqual(state.gridCells[0]["variable_id"], "pressure")
+        self.assertEqual(
+            state.gridCells[0]["selected_visualization"],
+            "timeseries",
+        )
+        self.assertEqual(state.queryText, 'source(producer == "run-128")')
+        self.assertEqual(state.queryFilter, {"producer": "run-128"})
+        self.assertEqual(
+            state.activeViewerActionPlan,
+            {"preserve": "catalog query provenance"},
+        )
+        self.assertFalse(state.showQueryAssistant)
+
+    def test_visualization_preview_respects_active_query_and_preserves_grid(self):
+        translator = FakeTranslator(action_proposal(visualization_action("pressure")))
+        db = FakeVisualizationDB(["timeseries"])
+        state, controller, _backend = make_controller(translator, db=db)
+        state.activeGridCell = 1
+        state.queryFilter = {"producer": "matching-run"}
+        original_cells = [dict(cell) for cell in state.gridCells]
+
+        controller.actions["open_visualization_assistant"]()
+        state.queryAssistantRequestText = "Show pressure"
+        self.assertTrue(asyncio.run(controller.actions["translate_query_request"]()))
+
+        variable_id, query_filter = db.visualization_queries[0]
+        self.assertEqual(variable_id, "pressure")
+        self.assertEqual(query_filter, {"producer": "matching-run"})
+        self.assertEqual(state.gridCells, original_cells)
+
+    def test_visualization_rejects_missing_cell_unknown_variable_and_wrong_action(self):
+        db = FakeVisualizationDB(["timeseries"])
+        translator = FakeTranslator(action_proposal(visualization_action("pressure")))
+        state, controller, _backend = make_controller(translator, db=db)
+        state.activeGridCell = -1
+        controller.actions["open_visualization_assistant"]()
+        state.queryAssistantRequestText = "Show pressure"
+
+        self.assertFalse(asyncio.run(controller.actions["translate_query_request"]()))
+        self.assertIn("Select a grid cell", state.queryAssistantError)
+
+        translator.proposal = action_proposal(visualization_action("invented"))
+        state.activeGridCell = 0
+        self.assertFalse(asyncio.run(controller.actions["translate_query_request"]()))
+        self.assertEqual(
+            state.queryAssistantError,
+            "Unknown campaign variable: invented",
+        )
+
+        translator.proposal = action_proposal(variable_action("pressure"))
+        self.assertFalse(asyncio.run(controller.actions["translate_query_request"]()))
+        self.assertIn("must propose visualization.add", state.queryAssistantError)
+
+    def test_query_target_rejects_visualization_action(self):
+        translator = FakeTranslator(action_proposal(visualization_action("pressure")))
+        state, controller, _backend = make_controller(translator)
+        state.queryAssistantTarget = "catalog"
+        state.queryAssistantRequestText = "Show pressure"
+
+        self.assertFalse(asyncio.run(controller.actions["translate_query_request"]()))
+        self.assertEqual(
+            state.queryAssistantError,
+            "A query request must propose catalog.query.",
+        )
+
+    def test_visualization_uses_existing_scalar_generation_confirmation(self):
+        translator = FakeTranslator(action_proposal(visualization_action("pressure")))
+        db = FakeVisualizationDB(
+            scalar_candidate={
+                "variable_id": "pressure",
+                "source_label": "run-128",
+                "source_fields": {"source_dataset": "run-128/output.bp"},
+            }
+        )
+        state, controller, _backend = make_controller(translator, db=db)
+        state.activeGridCell = 0
+        state.scalarPlotPolicy = "ask"
+        original_cells = [dict(cell) for cell in state.gridCells]
+
+        controller.actions["open_visualization_assistant"]()
+        state.queryAssistantRequestText = "Plot pressure"
+        self.assertTrue(asyncio.run(controller.actions["translate_query_request"]()))
+        self.assertEqual(
+            state.queryAssistantVisualizationName,
+            "generated scalar plot",
+        )
+        self.assertEqual(state.gridCells, original_cells)
+
+        self.assertTrue(controller.actions["apply_query_proposal"]())
+        self.assertTrue(state.showScalarPlotDialog)
+        self.assertEqual(state.pendingScalarPlotVariableId, "pressure")
+        self.assertEqual(state.pendingScalarPlotCellIndex, 0)
+        self.assertEqual(state.gridCells, original_cells)
+
+    def test_visualization_rejects_disabled_scalar_generation(self):
+        translator = FakeTranslator(action_proposal(visualization_action("pressure")))
+        db = FakeVisualizationDB(scalar_candidate={"variable_id": "pressure"})
+        state, controller, _backend = make_controller(translator, db=db)
+        state.activeGridCell = 0
+        state.scalarPlotPolicy = "never"
+        original_cells = [dict(cell) for cell in state.gridCells]
+
+        controller.actions["open_visualization_assistant"]()
+        state.queryAssistantRequestText = "Plot pressure"
+        self.assertFalse(asyncio.run(controller.actions["translate_query_request"]()))
+
+        self.assertIn("scalar plot generation is disabled", state.queryAssistantError)
+        self.assertEqual(state.gridCells, original_cells)
 
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@ from seurat.models.grid import (
     assign_cell,
     preserve_grid_geometry,
 )
+from seurat.models.workspace_layout import pane_and_tab
 
 
 class ContextMenuControllerMixin:
@@ -14,6 +15,8 @@ class ContextMenuControllerMixin:
         ("hide_context_menu", "hide_context_menu"),
         ("context_menu_item_add", "context_menu_item_add"),
         ("context_menu_item_select", "context_menu_item_select"),
+        ("context_menu_tab_rename", "context_menu_tab_rename"),
+        ("context_menu_tab_close", "context_menu_tab_close"),
         ("context_menu_cell_clear", "context_menu_cell_clear"),
         ("context_menu_cell_select", "context_menu_cell_select"),
         ("context_menu_cell_reset_view", "context_menu_cell_reset_view"),
@@ -39,6 +42,7 @@ class ContextMenuControllerMixin:
         ("hide_context_menu_trigger", "hide_context_menu_trigger"),
         ("show_item_context_menu", "show_item_context_menu"),
         ("show_cell_context_menu", "show_cell_context_menu"),
+        ("show_tab_context_menu", "show_tab_context_menu"),
     )
     STATE_CHANGE_BINDINGS = ()
 
@@ -47,6 +51,9 @@ class ContextMenuControllerMixin:
         self.state.contextMenuKind = ""
         self.state.contextMenuItem = ""
         self.state.contextMenuItemLabel = ""
+        self.state.contextMenuTabPaneId = ""
+        self.state.contextMenuTabId = ""
+        self.state.contextMenuTabCanClose = False
         self.state.contextMenuCellIndex = -1
         self.state.contextMenuCellHasVariable = False
         self.state.contextMenuCellCanAddSource = False
@@ -79,6 +86,9 @@ class ContextMenuControllerMixin:
         self.state.contextMenuKind = "item"
         self.state.contextMenuItem = item
         self.state.contextMenuItemLabel = self.variable_label(item)
+        self.state.contextMenuTabPaneId = ""
+        self.state.contextMenuTabId = ""
+        self.state.contextMenuTabCanClose = False
         self.state.contextMenuCellIndex = -1
         self.state.contextMenuCellHasVariable = False
         self.state.contextMenuCellCanAddSource = False
@@ -146,6 +156,9 @@ class ContextMenuControllerMixin:
         self.state.contextMenuKind = "cell"
         self.state.contextMenuItem = label
         self.state.contextMenuItemLabel = label
+        self.state.contextMenuTabPaneId = ""
+        self.state.contextMenuTabId = ""
+        self.state.contextMenuTabCanClose = False
         self.state.contextMenuCellIndex = idx
         self.state.contextMenuCellHasVariable = has_var
         self.state.contextMenuCellCanAddSource = can_add_source
@@ -158,6 +171,53 @@ class ContextMenuControllerMixin:
         self.state.contextMenuX = px
         self.state.contextMenuY = py
         self.state.contextMenuVisible = True
+
+    def show_tab_context_menu(self, pane_id, tab_id, x, y, **_):
+        pane_id = str(pane_id or "")
+        tab_id = str(tab_id or "")
+        layout = self._workspace_layout()
+        _pane, tab = pane_and_tab(layout, pane_id, tab_id)
+        if tab is None:
+            return
+        try:
+            px = int(float(x))
+        except Exception:
+            px = 0
+        try:
+            py = int(float(y))
+        except Exception:
+            py = 0
+
+        tab_count = sum(
+            len(pane.get("tabs", []) or [])
+            for pane in layout.get("panes", []) or []
+        )
+        self.clear_context_menu_state()
+        self.state.contextMenuKind = "tab"
+        self.state.contextMenuItemLabel = str(tab.get("title", "View") or "View")
+        self.state.contextMenuTabPaneId = pane_id
+        self.state.contextMenuTabId = tab_id
+        self.state.contextMenuTabCanClose = tab_count > 1
+        self.state.contextMenuX = px
+        self.state.contextMenuY = py
+        self.state.contextMenuVisible = True
+
+    def context_menu_tab_rename(self, title, **_):
+        if title is not None:
+            self.rename_workspace_tab(
+                self.state.contextMenuTabPaneId,
+                self.state.contextMenuTabId,
+                title,
+            )
+        self.hide_context_menu()
+
+    def context_menu_tab_close(self, confirmed=True, **_):
+        if confirmed and bool(self.state.contextMenuTabCanClose):
+            self.close_workspace_tab(
+                self.state.contextMenuTabPaneId,
+                self.state.contextMenuTabId,
+            )
+        self.hide_context_menu()
 
     def context_menu_item_add(self, **_):
         item = str(self.state.contextMenuItem or "").strip()

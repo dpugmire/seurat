@@ -127,6 +127,296 @@ def test_app_mounts_and_renders_structural_ui(page, seurat_server):
     assert console_errors == [], response_errors
 
 
+def test_workspace_tabs_and_split_panes_preserve_grid_content(
+    page, seurat_server
+):
+    console_errors, page_errors, response_errors = _open_app(page, seurat_server)
+
+    first_bar = page.locator(
+        ".seurat-workspace-tab-bar.seurat-workspace-slot-first"
+    )
+    first_bar.get_by_role("button", name="New tab").click()
+    page.get_by_role("tab", name="View 2").wait_for(state="visible")
+    assert page.locator(".seurat-workspace-tab").count() == 2
+
+    page.get_by_role("tab", name="View 1").click()
+    page.locator(".seurat-workspace-active-grid").get_by_text(
+        "internal_energy", exact=True
+    ).wait_for(state="visible")
+
+    first_bar.get_by_role("button", name="Pane and tab actions").click()
+    page.get_by_text("Split right", exact=True).click()
+    page.get_by_role("tab", name="View 3").wait_for(state="visible")
+
+    assert page.locator(".seurat-workspace-tab-bar").count() == 2
+    assert page.locator(".seurat-main-grid").count() == 2
+    assert page.locator(".seurat-workspace-grid-preview").count() == 1
+    assert page.locator(
+        ".seurat-workspace-active-grid.seurat-workspace-slot-second"
+    ).count() == 1
+    assert page.locator(".seurat-workspace-grid-preview").get_by_text(
+        "internal_energy", exact=True
+    ).is_visible()
+
+    page.get_by_role("tab", name="View 1").click()
+    page.locator(
+        ".seurat-workspace-active-grid.seurat-workspace-slot-first"
+    ).wait_for(state="visible")
+    assert page.locator(".seurat-workspace-grid-preview").count() == 1
+
+    assert page_errors == []
+    assert console_errors == [], response_errors
+
+
+def test_vertical_split_keeps_inactive_grid_backgrounds_visible(
+    page, seurat_server
+):
+    console_errors, page_errors, response_errors = _open_app(page, seurat_server)
+
+    first_bar = page.locator(
+        ".seurat-workspace-tab-bar.seurat-workspace-slot-first"
+    )
+    first_bar.get_by_role("button", name="Pane and tab actions").click()
+    page.get_by_text("Split down", exact=True).click()
+    page.get_by_role("tab", name="View 2").wait_for(state="visible")
+
+    page.get_by_role("tab", name="View 1").click()
+    lower_preview = page.locator(
+        ".seurat-workspace-grid-preview.seurat-workspace-slot-second"
+    )
+    lower_preview.wait_for(state="visible")
+    assert lower_preview.locator(".seurat-workspace-preview-cell").evaluate_all(
+        "cells => cells.every(cell => getComputedStyle(cell).backgroundColor === 'rgb(255, 255, 255)')"
+    )
+
+    page.get_by_role("tab", name="View 2").click()
+    upper_preview = page.locator(
+        ".seurat-workspace-grid-preview.seurat-workspace-slot-first"
+    )
+    upper_preview.wait_for(state="visible")
+    assert upper_preview.locator(".seurat-plot1d").evaluate(
+        "plot => getComputedStyle(plot).backgroundColor === 'rgb(255, 255, 255)'"
+    )
+
+    assert page_errors == []
+    assert console_errors == [], response_errors
+
+
+def test_workspace_tabs_preserve_independent_grid_track_sizes(
+    page, seurat_server
+):
+    console_errors, page_errors, response_errors = _open_app(page, seurat_server)
+
+    first_bar = page.locator(
+        ".seurat-workspace-tab-bar.seurat-workspace-slot-first"
+    )
+    first_bar.get_by_role("button", name="New tab").click()
+    page.get_by_role("tab", name="View 2").wait_for(state="visible")
+
+    grid = page.locator(".seurat-workspace-active-grid")
+    original_sizes = grid.get_attribute("data-grid-column-sizes")
+    handle = grid.locator(
+        '.seurat-dropcell[data-cell-index="0"] '
+        '.seurat-grid-col-resize-handle[data-resize-edge="right"]'
+    )
+    _drag(page, handle, delta_x=45)
+    page.wait_for_function(
+        "Number(document.querySelector('.seurat-workspace-active-grid')"
+        ".getAttribute('data-grid-column-sizes').split(',')[0]) > 320"
+    )
+    resized_sizes = grid.get_attribute("data-grid-column-sizes")
+    assert resized_sizes != original_sizes
+
+    page.get_by_role("tab", name="View 1").click()
+    page.wait_for_function(
+        "document.querySelector('.seurat-workspace-active-grid')"
+        ".getAttribute('data-grid-column-sizes') === "
+        f"{original_sizes!r}"
+    )
+    assert grid.get_attribute("data-grid-column-sizes") == original_sizes
+
+    page.get_by_role("tab", name="View 2").click()
+    page.wait_for_function(
+        "document.querySelector('.seurat-workspace-active-grid')"
+        ".getAttribute('data-grid-column-sizes') === "
+        f"{resized_sizes!r}"
+    )
+    assert grid.get_attribute("data-grid-column-sizes") == resized_sizes
+
+    assert page_errors == []
+    assert console_errors == [], response_errors
+
+
+def test_workspace_tabs_drag_to_reorder_with_insertion_feedback(
+    page, seurat_server
+):
+    console_errors, page_errors, response_errors = _open_app(page, seurat_server)
+
+    first_bar = page.locator(
+        ".seurat-workspace-tab-bar.seurat-workspace-slot-first"
+    )
+    add_tab = first_bar.get_by_role("button", name="New tab")
+    add_tab.click()
+    page.get_by_role("tab", name="View 2").wait_for(state="visible")
+    add_tab.click()
+    page.get_by_role("tab", name="View 3").wait_for(state="visible")
+
+    source = page.get_by_role("tab", name="View 1")
+    destination = page.get_by_role("tab", name="View 3")
+    source_bounds = source.bounding_box()
+    destination_bounds = destination.bounding_box()
+    assert source_bounds is not None
+    assert destination_bounds is not None
+
+    page.mouse.move(
+        source_bounds["x"] + source_bounds["width"] / 2,
+        source_bounds["y"] + source_bounds["height"] / 2,
+    )
+    page.mouse.down()
+    page.mouse.move(
+        destination_bounds["x"] + destination_bounds["width"] * 0.8,
+        destination_bounds["y"] + destination_bounds["height"] / 2,
+        steps=8,
+    )
+    page.wait_for_function(
+        "document.querySelectorAll('.seurat-workspace-tab-shell.is-tab-drop-after').length === 1"
+    )
+    assert source.get_attribute("aria-grabbed") == "true"
+    page.mouse.up()
+
+    page.wait_for_function(
+        """() => Array.from(document.querySelectorAll('.seurat-workspace-tab'))
+            .map(tab => tab.textContent.trim()).join(',') === 'View 2,View 3,View 1'"""
+    )
+    assert page.locator(".seurat-workspace-tab-shell.is-tab-dragging").count() == 0
+    assert page.locator(
+        ".seurat-workspace-tab-shell.is-tab-drop-before, "
+        ".seurat-workspace-tab-shell.is-tab-drop-after"
+    ).count() == 0
+    assert page.get_by_role("tab", name="View 3").get_attribute(
+        "aria-selected"
+    ) == "true"
+
+    page.get_by_role("tab", name="View 1").click()
+    page.locator(".seurat-workspace-active-grid").get_by_text(
+        "internal_energy", exact=True
+    ).wait_for(state="visible")
+
+    assert page_errors == []
+    assert console_errors == [], response_errors
+
+
+def test_tab_context_menu_renames_and_closes_with_icons(page, seurat_server):
+    console_errors, page_errors, response_errors = _open_app(page, seurat_server)
+
+    first_bar = page.locator(
+        ".seurat-workspace-tab-bar.seurat-workspace-slot-first"
+    )
+    first_bar.get_by_role("button", name="New tab").click()
+    page.get_by_role("tab", name="View 2").wait_for(state="visible")
+
+    page.get_by_role("tab", name="View 1").click(button="right")
+    menu = page.locator("#seurat-context-menu")
+    menu.get_by_text("View 1", exact=True).wait_for(state="visible")
+    assert menu.locator(".mdi-pencil-outline").count() == 1
+    assert menu.locator(".mdi-close").count() == 1
+
+    page.once("dialog", lambda dialog: dialog.accept("Overview"))
+    menu.get_by_text("Rename…", exact=True).click()
+    page.get_by_role("tab", name="Overview").wait_for(state="visible")
+
+    page.get_by_role("tab", name="Overview").click(button="right")
+    menu.get_by_text("Close", exact=True).wait_for(state="visible")
+    page.once("dialog", lambda dialog: dialog.accept())
+    menu.get_by_text("Close", exact=True).click()
+    page.get_by_role("tab", name="Overview").wait_for(state="detached")
+    assert page.locator(".seurat-workspace-tab").count() == 1
+
+    assert page_errors == []
+    assert console_errors == [], response_errors
+
+
+def test_workspace_tab_close_button_is_visible_for_active_and_hovered_tabs(
+    page, seurat_server
+):
+    console_errors, page_errors, response_errors = _open_app(page, seurat_server)
+
+    first_bar = page.locator(
+        ".seurat-workspace-tab-bar.seurat-workspace-slot-first"
+    )
+    first_bar.get_by_role("button", name="New tab").click()
+    page.get_by_role("tab", name="View 2").wait_for(state="visible")
+
+    active_close = first_bar.get_by_role("button", name="Close View 2")
+    inactive_tab = page.get_by_role("tab", name="View 1")
+    inactive_shell = inactive_tab.locator("xpath=..")
+    inactive_close = inactive_shell.get_by_role("button", name="Close View 1")
+
+    assert active_close.evaluate("button => getComputedStyle(button).opacity") == "1"
+    assert inactive_close.evaluate("button => getComputedStyle(button).opacity") == "0"
+    inactive_shell.hover()
+    page.wait_for_function(
+        "getComputedStyle(document.querySelector('[aria-label=\"Close View 1\"]')).opacity === '1'"
+    )
+
+    page.once("dialog", lambda dialog: dialog.accept())
+    inactive_close.click()
+    inactive_tab.wait_for(state="detached")
+    assert page.locator(".seurat-workspace-tab").count() == 1
+    assert first_bar.locator(".seurat-workspace-tab-close").count() == 0
+
+    assert page_errors == []
+    assert console_errors == [], response_errors
+
+
+def test_workspace_tab_strip_marks_hidden_tabs_at_each_scroll_edge(
+    page, seurat_server
+):
+    console_errors, page_errors, response_errors = _open_app(page, seurat_server)
+
+    first_bar = page.locator(
+        ".seurat-workspace-tab-bar.seurat-workspace-slot-first"
+    )
+    add_tab = first_bar.get_by_role("button", name="New tab")
+    for expected_count in range(2, 19):
+        add_tab.click()
+        page.wait_for_function(
+            "expected => document.querySelectorAll('.seurat-workspace-tab').length === expected",
+            arg=expected_count,
+        )
+
+    viewport = first_bar.locator(".seurat-workspace-tabs-viewport")
+    tabs = viewport.locator(".seurat-workspace-tabs")
+    active_tab = page.get_by_role("tab", name="View 18")
+    page.wait_for_function(
+        "document.querySelector('.seurat-workspace-tabs').scrollLeft > 0"
+    )
+    assert active_tab.evaluate(
+        """tab => {
+            const strip = tab.closest('.seurat-workspace-tabs');
+            const tabBounds = tab.getBoundingClientRect();
+            const stripBounds = strip.getBoundingClientRect();
+            return tabBounds.left >= stripBounds.left
+                && tabBounds.right <= stripBounds.right + 1;
+        }"""
+    )
+
+    tabs.evaluate("element => { element.scrollLeft = 0; }")
+    page.wait_for_function(
+        "document.querySelector('.seurat-workspace-tabs-viewport').classList.contains('has-overflow-right')"
+    )
+    assert viewport.evaluate("element => element.classList.contains('has-overflow-left')") is False
+
+    tabs.evaluate("element => { element.scrollLeft = element.scrollWidth; }")
+    page.wait_for_function(
+        "document.querySelector('.seurat-workspace-tabs-viewport').classList.contains('has-overflow-left')"
+    )
+    assert viewport.evaluate("element => element.classList.contains('has-overflow-right')") is False
+
+    assert page_errors == []
+    assert console_errors == [], response_errors
+
+
 def test_query_assistant_reviews_before_applying(page, seurat_server):
     console_errors, page_errors, response_errors = _open_app(page, seurat_server)
 
@@ -148,6 +438,41 @@ def test_query_assistant_reviews_before_applying(page, seurat_server):
     assert page.locator(
         'input[placeholder^="e.g. var =="]'
     ).input_value() == "var == 'internal_energy'"
+
+    assert page_errors == []
+    assert console_errors == [], response_errors
+
+
+def test_visualization_assistant_reviews_before_adding_to_grid(
+    page, seurat_server
+):
+    console_errors, page_errors, response_errors = _open_app(page, seurat_server)
+
+    target_cell = page.locator('.seurat-dropcell[data-cell-index="2"]')
+    target_cell.click()
+    page.wait_for_function(
+        "document.querySelector('.seurat-dropcell[data-cell-index=\"2\"]')"
+        ".getAttribute('data-cell-active') === '1'"
+    )
+    assert target_cell.get_by_text("current_z", exact=True).count() == 0
+
+    page.get_by_role("button", name="Visualize").click()
+    page.get_by_text("Visualization Assistant", exact=True).wait_for(
+        state="visible"
+    )
+    page.get_by_label("Request").fill("Show current_z in the selected cell")
+    page.get_by_role("button", name="Translate").click()
+
+    page.get_by_text(
+        "Valid · current_z · grid cell 3", exact=True
+    ).wait_for(state="visible")
+    assert target_cell.get_by_text("current_z", exact=True).count() == 0
+
+    page.get_by_role("button", name="Add to Grid").click()
+    page.get_by_text("Visualization Assistant", exact=True).wait_for(
+        state="hidden"
+    )
+    target_cell.get_by_text("current_z", exact=True).wait_for(state="visible")
 
     assert page_errors == []
     assert console_errors == [], response_errors
