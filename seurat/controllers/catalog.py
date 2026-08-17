@@ -621,18 +621,40 @@ Notes:
 
     def run_query(self, **_):
         if self.update_query_state():
+            pending_plan = getattr(
+                self, "_interaction_pending_query_action_plan", None
+            )
+            pending_origin = str(
+                getattr(self, "_interaction_pending_query_origin", "manual")
+                or "manual"
+            )
             self.state.activeViewerActionPlan = {}
             self.state.activeNaturalLanguageQuery = ""
             self.refresh_after_variable_catalog_change()
+            if str(self.state.queryText or "").strip():
+                self.record_query_applied(
+                    origin=pending_origin,
+                    target="catalog",
+                    action_plan=pending_plan,
+                )
             return True
         return False
 
     def clear_query(self, **_):
+        previous_query_id = self._interaction_query_id
+        had_query = bool(str(self.state.queryText or "").strip())
         self.state.activeViewerActionPlan = {}
         self.state.activeNaturalLanguageQuery = ""
         self.state.queryText = ""
         self.update_query_state()
         self.refresh_after_variable_catalog_change()
+        if had_query or previous_query_id:
+            self.record_interaction(
+                "query.cleared",
+                source="query_toolbar",
+                payload={"query_id": previous_query_id, "target": "catalog"},
+            )
+        self._interaction_query_id = ""
 
     def on_show_only_visualized_vars(self, showOnlyVisualizedVars, **_):
         self.refresh_after_variable_catalog_change()

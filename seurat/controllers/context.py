@@ -18,3 +18,4 @@ class ControllerContext:
     image_association_schema_path: str = ""
     campaign_schema_path: str = ""
     query_translator: Optional[QueryTranslator] = None
+    interaction_log: Optional[Any] = None

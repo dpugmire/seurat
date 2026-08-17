@@ -73,6 +73,21 @@ class RecordingState(SimpleNamespace):
         return register
 
 
+class RecordingInteractionLog:
+    enabled = True
+
+    def __init__(self):
+        self.events = []
+
+    def record(self, event_type, *, source, payload):
+        event_id = f"event:{len(self.events) + 1}"
+        self.events.append((event_type, source, payload))
+        return event_id
+
+    def checkpoint(self):
+        pass
+
+
 class VariableCatalogSearchTests(unittest.TestCase):
     def setUp(self):
         self.groups = [
@@ -309,7 +324,7 @@ class CampaignDbNavigationTests(unittest.TestCase):
         self.assertEqual(candidate["time_source"], "variable:time")
         self.assertEqual(candidate["time_values"], [0.0, 0.25, 1.0])
 
-    def make_controller(self):
+    def make_controller(self, interaction_log=None):
         state = RecordingState()
         init_state(state, self.db)
         state.variableLabelsById = {
@@ -323,8 +338,28 @@ class CampaignDbNavigationTests(unittest.TestCase):
             collection=self.collection,
             parse_campaign=lambda *_args, **_kwargs: None,
             campaign_path="/campaign/example.aca",
+            interaction_log=interaction_log,
         )
         return state, server.controller
+
+    def test_controller_records_normalized_query_and_workspace_events(self):
+        interaction_log = RecordingInteractionLog()
+        state, controller = self.make_controller(interaction_log)
+
+        state.queryText = 'id == "density"'
+        self.assertTrue(controller.actions["run_query"]())
+        controller.actions["add_workspace_tab"]("pane-1")
+
+        self.assertEqual(
+            [event_type for event_type, _source, _payload in interaction_log.events],
+            ["query.applied", "workspace.tab_created"],
+        )
+        query_payload = interaction_log.events[0][2]
+        self.assertEqual(query_payload["origin"], "manual")
+        self.assertEqual(query_payload["target"], "catalog")
+        self.assertEqual(query_payload["result_variable_count"], 1)
+        self.assertNotIn("queryText", query_payload)
+        self.assertNotIn('id == "density"', str(query_payload))
 
     def test_controller_registration_contract_is_complete(self):
         state, controller = self.make_controller()

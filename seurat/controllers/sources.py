@@ -10,6 +10,7 @@ from plugin_runtime import (
     is_plugin_visualization,
 )
 from query_parser import and_filter, mongo_filter_matches, python_query_to_filters
+from seurat.learning.context import stable_fingerprint
 from seurat.models import source_selection as source_selection_model
 from seurat.models.grid import (
     assign_cell,
@@ -1040,6 +1041,21 @@ class SourcesControllerMixin:
         ).strip()
         self.state.sourceFilterError = ""
         self.apply_source_filter_and_sort()
+        if self.state.sourceFilterError or not self.state.sourceFilterText:
+            return
+        row_filter, source_filters = python_query_to_filters(
+            self.state.sourceFilterText
+        )
+        self.record_query_applied(
+            origin="source_filter",
+            target="source_filter",
+            action_plan={
+                "action": "source_filter",
+                "row_filter": row_filter,
+                "source_filters": source_filters,
+                "variable_id": str(self.state.detailsSelectedVarId or ""),
+            },
+        )
 
     def sync_add_source_selection_to_cell(
         self, var_id: str, idx: int, selected: List[str]
@@ -1201,8 +1217,22 @@ class SourcesControllerMixin:
         picked = str(picked or "")
 
         by_source = dict(self.state.tileVisualizationBySource or {})
+        previous = str(by_source.get(key, "") or "")
         by_source[key] = picked
         self.state.tileVisualizationBySource = by_source
 
         if self.state.selectedVar:
             self.update_selected_var_panels(self.state.selectedVar)
+        if picked and picked != previous:
+            self.record_interaction(
+                "visualization.changed",
+                source="source_preview_menu",
+                payload={
+                    "variable_id": str(self.state.selectedVar or ""),
+                    "source_id": stable_fingerprint(key, "source"),
+                    "previous_visualization": previous,
+                    "selected_visualization": picked,
+                    "query_id": self._interaction_query_id,
+                    "context": "source_preview",
+                },
+            )

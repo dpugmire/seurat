@@ -243,6 +243,28 @@ bytes, frame payloads, and other derived media are intentionally excluded.
 Seurat validates the state-file version and campaign name, then rebuilds
 derived content from the campaign when loading.
 
+## Optional Interaction Log
+
+Seurat can write a local, append-only JSONL log of normalized queries,
+visualization choices, workspace tab/pane/grid organization, and sanitized
+saved-workspace snapshots. Logging is disabled by default and does not change
+visualization behavior. Enable it by selecting a private directory:
+
+```bash
+export SEURAT_INTERACTION_LOG_DIR=/path/to/private/seurat-logs
+export SEURAT_INTERACTION_LOG_MAX_MB=64
+```
+
+The log excludes campaign and workspace file paths, raw query/assistant text,
+tab titles, arrays, and media payloads. Validate and summarize it with:
+
+```bash
+python -m seurat.learning.audit /path/to/private/seurat-logs
+```
+
+See [Interaction Log v1](docs/interaction-log-v1.md) for the event contract,
+privacy boundaries, and workspace snapshot schema.
+
 By default, Seurat stores its viewer sidecar DB under `~/.cache/seurat` using a
 filename derived from the resolved campaign path. Override the location with:
 

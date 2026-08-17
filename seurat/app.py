@@ -1,6 +1,7 @@
 """Seurat's Trame application composition root."""
 
 import argparse
+import atexit
 from pathlib import Path
 
 from trame.app import TrameApp
@@ -10,6 +11,8 @@ from config import (
     SEURAT_LLM_BASE_URL,
     SEURAT_LLM_MODEL,
     SEURAT_LLM_TIMEOUT_SECONDS,
+    SEURAT_INTERACTION_LOG_DIR,
+    SEURAT_INTERACTION_LOG_MAX_MB,
 )
 from controllers import attach_controllers
 from db import CampaignDb
@@ -19,6 +22,7 @@ from ui import build_ui
 
 from . import module as seurat_module
 from .backends import LocalCampaignBackend
+from .learning import InteractionLog
 from .query_assistant import make_chat_completions_query_translator
 from .state import init_state
 
@@ -39,6 +43,7 @@ class SeuratApp(TrameApp):
         collection=None,
         db=None,
         query_translator=None,
+        interaction_log=None,
         controller_attacher=attach_controllers,
         ui_builder=build_ui,
     ):
@@ -56,6 +61,20 @@ class SeuratApp(TrameApp):
 
         self.db = db or CampaignDb(self.collection)
         self.backend = LocalCampaignBackend(self.db)
+        self.interaction_log = (
+            interaction_log
+            if interaction_log is not None
+            else InteractionLog(
+                SEURAT_INTERACTION_LOG_DIR,
+                campaign_path=self.campaign_path,
+                max_megabytes=SEURAT_INTERACTION_LOG_MAX_MB,
+            )
+        )
+        close_interaction_log = getattr(self.interaction_log, "close", None)
+        if bool(getattr(self.interaction_log, "enabled", False)) and callable(
+            close_interaction_log
+        ):
+            atexit.register(close_interaction_log)
         self.query_translator = (
             query_translator
             or make_chat_completions_query_translator(
@@ -77,6 +96,7 @@ class SeuratApp(TrameApp):
             image_association_schema_path=self.image_association_schema_path,
             campaign_schema_path=self.campaign_schema_path,
             query_translator=self.query_translator,
+            interaction_log=self.interaction_log,
         )
         self.ui = ui_builder(
             self.server,

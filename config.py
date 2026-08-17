@@ -2,6 +2,10 @@ import os
 
 SEURAT_SQLITE_DB = os.getenv("SEURAT_SQLITE_DB", "")
 SEURAT_CACHE_DIR = os.getenv("SEURAT_CACHE_DIR", "~/.cache/seurat")
+SEURAT_INTERACTION_LOG_DIR = os.getenv("SEURAT_INTERACTION_LOG_DIR", "").strip()
+SEURAT_INTERACTION_LOG_MAX_MB = int(
+    os.getenv("SEURAT_INTERACTION_LOG_MAX_MB", "64")
+)
 
 CAMPAIGN_PATH = os.getenv("CAMPAIGN_PATH", "kh.aca")
 
