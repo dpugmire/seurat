@@ -23,11 +23,17 @@ DEMO_VARIABLES_1D = (
     "moving_pulse_1d",
     "damped_mode_1d",
 )
+DEMO_VARIABLES_SCALAR = (
+    "scalar/moving_pulse_position",
+    "scalar/damped_mode_energy",
+)
 DEMO_VARIABLES_2D = (
     "traveling_wave_2d",
     "moving_blob_2d",
     "rotating_vortex_2d",
 )
+DEFAULT_DEMO_SOURCE_COUNT = 5
+MAX_DEMO_SOURCE_COUNT = 49
 
 
 class DemoDependencyError(RuntimeError):
@@ -39,6 +45,7 @@ class DemoConfig:
     steps: int = 20
     samples_1d: int = 256
     shape_2d: tuple[int, int] = (96, 96)
+    source_count: int = DEFAULT_DEMO_SOURCE_COUNT
 
     def validate(self) -> None:
         if self.steps <= 1:
@@ -47,6 +54,10 @@ class DemoConfig:
             raise ValueError("Demo 1D sample count must be greater than one")
         if len(self.shape_2d) != 2 or any(value <= 1 for value in self.shape_2d):
             raise ValueError("Demo 2D shape must contain two dimensions greater than one")
+        if not 1 <= self.source_count <= MAX_DEMO_SOURCE_COUNT:
+            raise ValueError(
+                f"Demo source count must be between 1 and {MAX_DEMO_SOURCE_COUNT}"
+            )
 
 
 @dataclass(frozen=True)
@@ -66,6 +77,30 @@ DEMO_SOURCES = (
     DemoSource("fast_dynamics", speed=1.5),
     DemoSource("elevated_offset", offset=0.5, width_scale=1.15),
 )
+
+
+def demo_sources(source_count: int) -> tuple[DemoSource, ...]:
+    """Return ``source_count`` deterministic synthetic source definitions."""
+
+    config = DemoConfig(source_count=source_count)
+    config.validate()
+    if source_count <= len(DEMO_SOURCES):
+        return DEMO_SOURCES[:source_count]
+
+    sources = list(DEMO_SOURCES)
+    for index in range(len(sources), source_count):
+        fraction = float(index) / float(MAX_DEMO_SOURCE_COUNT - 1)
+        sources.append(
+            DemoSource(
+                f"variant_{index + 1:02d}",
+                amplitude=0.8 + 0.8 * fraction,
+                phase=2.0 * math.pi * ((index * 0.61803398875) % 1.0),
+                speed=0.75 + fraction,
+                offset=-0.25 + 0.5 * fraction,
+                width_scale=0.8 + 0.4 * fraction,
+            )
+        )
+    return tuple(sources)
 
 
 @dataclass(frozen=True)
@@ -108,7 +143,7 @@ def analytical_step(
     step: int,
     config: DemoConfig,
 ) -> dict[str, np.ndarray]:
-    """Return all six analytical fields for one source and time step."""
+    """Return all analytical quantities for one source and time step."""
 
     if not 0 <= step < config.steps:
         raise ValueError(f"Demo step {step} is outside [0, {config.steps - 1}]")
@@ -131,6 +166,13 @@ def analytical_step(
     damped_mode_1d = source.offset + source.amplitude * math.exp(-1.4 * tau) * np.sin(
         3.0 * math.pi * x_1d + source.phase
     ) * math.cos(temporal_phase)
+
+    pulse_weights = moving_pulse_1d - source.offset
+    circular_moment = np.sum(
+        pulse_weights * np.exp(2.0j * math.pi * x_1d)
+    ) / np.sum(pulse_weights)
+    moving_pulse_position = (np.angle(circular_moment) / (2.0 * math.pi)) % 1.0
+    damped_mode_energy = np.mean((damped_mode_1d - source.offset) ** 2)
 
     height, width = config.shape_2d
     x_2d = np.linspace(-1.0, 1.0, width, dtype=np.float32)
@@ -165,6 +207,12 @@ def analytical_step(
         "traveling_wave_1d": np.asarray(traveling_wave_1d, dtype=np.float32),
         "moving_pulse_1d": np.asarray(moving_pulse_1d, dtype=np.float32),
         "damped_mode_1d": np.asarray(damped_mode_1d, dtype=np.float32),
+        "scalar/moving_pulse_position": np.asarray(
+            moving_pulse_position, dtype=np.float32
+        ),
+        "scalar/damped_mode_energy": np.asarray(
+            damped_mode_energy, dtype=np.float32
+        ),
         "traveling_wave_2d": np.asarray(traveling_wave_2d, dtype=np.float32),
         "moving_blob_2d": np.asarray(moving_blob_2d, dtype=np.float32),
         "rotating_vortex_2d": np.asarray(rotating_vortex_2d, dtype=np.float32),
@@ -180,6 +228,9 @@ def _write_source(path: Path, steps: list[dict[str, np.ndarray]]) -> None:
         for fields in steps:
             stream.begin_step()
             for name, values in fields.items():
+                if values.ndim == 0:
+                    stream.write(name, values)
+                    continue
                 shape = list(values.shape)
                 stream.write(name, values, shape, [0] * values.ndim, shape)
             stream.end_step()
@@ -274,6 +325,11 @@ variable_groups:
     pattern: "*_1d"
     role: profile
 
+  Scalar Time Series:
+    file: synthetic_sources
+    pattern: "scalar/*"
+    role: scalar_trace
+
   2D Fields:
     file: synthetic_sources
     pattern: "*_2d"
@@ -299,13 +355,14 @@ def generate_demo_campaign(
     os.chdir(root)
     manager = None
     try:
+        sources = demo_sources(config.source_count)
         manager = Manager(str(campaign_path), campaign_store="", verbose=0)
         _quiet_hpc_call(manager.open, create=True, truncate=True)
         print(
             "Generating Seurat demo campaign "
-            f"({len(DEMO_SOURCES)} sources, {config.steps} steps)..."
+            f"({len(sources)} sources, {config.steps} steps)..."
         )
-        for source in DEMO_SOURCES:
+        for source in sources:
             print(f"  synthetic source: {source.name}")
             steps = _source_steps(source, config)
             source_path = sources_dir / f"{source.name}.bp"
@@ -323,7 +380,11 @@ def generate_demo_campaign(
                     dataset=source_dataset,
                     variable=variable_name,
                 )
-                for variable_name in (*DEMO_VARIABLES_1D, *DEMO_VARIABLES_2D)
+                for variable_name in (
+                    *DEMO_VARIABLES_1D,
+                    *DEMO_VARIABLES_SCALAR,
+                    *DEMO_VARIABLES_2D,
+                )
             }
 
             representation_dataset = f"representations/{source.name}"

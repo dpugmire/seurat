@@ -1,4 +1,4 @@
-"""Profile-index time series plugin for rank-1 ADIOS variables."""
+"""Time-series plugin for scalar and rank-1 ADIOS variables."""
 
 from __future__ import annotations
 
@@ -6,39 +6,48 @@ import numpy as np
 
 
 PLUGIN_ID = "profile_timeseries"
-LABEL = "Profile time series"
+LABEL = "Scalar/profile time series"
 
 
 def supports(meta):
-    """Support rank-1 variables with more than one ADIOS step."""
-    return int(meta.get("ndims", -1) or -1) == 1 and int(meta.get("steps_count", 1) or 1) > 1
+    """Support scalar and rank-1 variables with more than one ADIOS step."""
+    return int(meta.get("ndims", -1)) in (0, 1) and int(
+        meta.get("steps_count", 1) or 1
+    ) > 1
 
 
 def options_schema(meta):
     """Return user-editable plotting options."""
     shape = list(meta.get("shape", []) or [])
     n_profile = int(shape[0]) if shape else 1
-    return [
-        {
-            "key": "profile_indices",
-            "type": "text",
-            "label": "Profile indices",
-            "default": _default_indices(n_profile),
-        },
-        {
-            "key": "x_axis",
-            "type": "select",
-            "label": "X axis",
-            "choices": ["adios_step", "time", "step", "tindex"],
-            "default": "time",
-        },
-        {
-            "key": "normalize",
-            "type": "bool",
-            "label": "Normalize",
-            "default": False,
-        },
-    ]
+    schema = []
+    if int(meta.get("ndims", -1)) == 1:
+        schema.append(
+            {
+                "key": "profile_indices",
+                "type": "text",
+                "label": "Profile indices",
+                "default": _default_indices(n_profile),
+            }
+        )
+    schema.extend(
+        [
+            {
+                "key": "x_axis",
+                "type": "select",
+                "label": "X axis",
+                "choices": ["adios_step", "time", "step", "tindex"],
+                "default": "time",
+            },
+            {
+                "key": "normalize",
+                "type": "bool",
+                "label": "Normalize",
+                "default": False,
+            },
+        ]
+    )
+    return schema
 
 
 def render(ctx):
@@ -69,11 +78,12 @@ def render(ctx):
     x_axis_name = str(options.get("x_axis", "adios_step") or "adios_step")
     x_values, x_label = _x_axis(ctx, helpers, x_axis_name, steps_count)
     normalize = bool(options.get("normalize", False))
+    is_scalar = int(ctx.get("ndims", -1)) == 0
 
     series = []
     for index in indices:
         y = np.asarray(data[:, index], dtype=float)
-        label = f"index {index}"
+        label = variable_name if is_scalar else f"index {index}"
         if normalize:
             y = _normalize(y)
             label = f"{label} normalized"
@@ -82,7 +92,7 @@ def render(ctx):
                 "x": x_values,
                 "y": y,
                 "source_label": label,
-                "source_key": f"profile_index:{index}",
+                "source_key": "scalar" if is_scalar else f"profile_index:{index}",
             }
         )
 
@@ -94,7 +104,11 @@ def render(ctx):
 
     return {
         "media_type": "plot1d",
-        "display_title": f"{variable_name} profile time series",
+        "display_title": (
+            f"{variable_name} time series"
+            if is_scalar
+            else f"{variable_name} profile time series"
+        ),
         "plot": plot,
         "status": "ok",
         "note": note,
