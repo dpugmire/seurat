@@ -38,6 +38,10 @@ class QueryAssistantControllerMixin:
     )
     TRIGGER_BINDINGS = ()
     STATE_CHANGE_BINDINGS = ()
+    HISTORY_ACTIONS = {
+        "apply_query_proposal": "Apply assistant proposal",
+    }
+    HISTORY_TRIGGERS = {}
 
     def reset_query_assistant_proposal(self) -> None:
         self._query_assistant_action = None

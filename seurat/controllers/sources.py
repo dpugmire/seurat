@@ -47,6 +47,12 @@ class SourcesControllerMixin:
     )
     TRIGGER_BINDINGS = ()
     STATE_CHANGE_BINDINGS = ()
+    HISTORY_ACTIONS = {
+        "apply_source_dialog": "Change plot sources",
+        "select_source": "Change plot source",
+        "toggle_source_visibility": "Change plot source",
+    }
+    HISTORY_TRIGGERS = {}
 
     def all_source_rows(self) -> List[Dict[str, Any]]:
         return list(self.state.sourceRowsAll or self.state.sourceRows or [])

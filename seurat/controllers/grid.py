@@ -1,5 +1,6 @@
 """Grid layout, selection, assignment, and timeline controller behavior."""
 
+from collections.abc import Mapping
 import json
 from math import ceil
 from typing import Any, Dict, List, Optional, Tuple
@@ -60,6 +61,10 @@ class GridControllerMixin:
     TRIGGER_BINDINGS = (
         ("set_grid_track_sizes_trigger", "set_grid_track_sizes_trigger"),
         ("set_grid_track_weights_trigger", "set_grid_track_weights_trigger"),
+        (
+            "commit_grid_track_resize_trigger",
+            "commit_grid_track_resize_trigger",
+        ),
         ("move_grid_cell_trigger", "move_grid_cell_trigger"),
         ("assign_var_to_grid_cell_trigger", "assign_var_to_grid_cell_trigger"),
         ("commit_canvas_layout_trigger", "commit_canvas_layout_trigger"),
@@ -67,6 +72,40 @@ class GridControllerMixin:
         ("sync_canvas_fit_zoom_trigger", "sync_canvas_fit_zoom_trigger"),
     )
     STATE_CHANGE_BINDINGS = ()
+    HISTORY_ACTIONS = {
+        "set_grid_layout_mode": "Change layout mode",
+        "set_canvas_columns": "Change canvas columns",
+        "set_grid_cell_size": "Resize grid cells",
+        "set_grid_fit_min_cell_size": "Resize fitted grid cells",
+        "set_grid_sizing_mode": "Change grid sizing mode",
+        "reset_grid_track_sizes": "Reset grid sizes",
+        "set_grid_layout_size": "Resize grid",
+        "add_var_to_grid": "Add plot",
+        "set_active_grid_cell": "Assign plot",
+        "toggle_timeline_driver_cell": "Change timeline driver",
+        "clear_grid_cell": "Remove plot",
+        "move_grid_cell": "Move plot",
+        "add_grid_row": "Add grid row",
+        "delete_grid_row": "Delete grid row",
+        "add_grid_column": "Add grid column",
+        "delete_grid_column": "Delete grid column",
+        "span_grid_cell_right": "Resize plot",
+        "span_grid_cell_down": "Resize plot",
+        "shrink_grid_cell_width": "Resize plot",
+        "shrink_grid_cell_height": "Resize plot",
+        "reset_grid_cell_span": "Reset plot size",
+        "assign_var_to_grid_cell": "Assign plot",
+        "pick_grid_cell_visualization": "Change visualization",
+    }
+    HISTORY_TRIGGERS = {
+        "set_grid_track_sizes_trigger": "Resize grid track",
+        "set_grid_track_weights_trigger": "Resize grid track",
+        "commit_grid_track_resize_trigger": "Resize grid track",
+        "move_grid_cell_trigger": "Move plot",
+        "assign_var_to_grid_cell_trigger": "Assign plot",
+        "commit_canvas_layout_trigger": "Move or resize plot",
+        "add_var_to_canvas_trigger": "Add plot",
+    }
 
     grid_fit_template_from_weights = staticmethod(
         grid_layout_model.grid_fit_template_from_weights
@@ -1099,6 +1138,31 @@ class GridControllerMixin:
                 "workspace": self.interaction_workspace_location(),
             },
         )
+
+    def commit_grid_track_resize_trigger(self, resize_payload="", **_):
+        """Commit every axis changed by one pointer resize atomically."""
+
+        payload = self.parse_canvas_payload(resize_payload, {})
+        changes = payload.get("changes", []) if isinstance(payload, Mapping) else []
+        if not isinstance(changes, list):
+            return
+
+        applied_axes = set()
+        for change in changes[:2]:
+            if not isinstance(change, Mapping):
+                continue
+            axis = str(change.get("axis", "") or "").strip().lower()
+            if axis not in {"column", "row"} or axis in applied_axes:
+                continue
+            kind = str(change.get("kind", "") or "").strip().lower()
+            values = change.get("values", "")
+            if kind == "sizes":
+                self.set_grid_track_sizes_trigger(axis, values)
+            elif kind == "weights":
+                self.set_grid_track_weights_trigger(axis, values)
+            else:
+                continue
+            applied_axes.add(axis)
 
     def set_grid_layout_size(self, rows: int, cols: int, **_):
         if self.normalize_grid_layout_mode() == "freeform":

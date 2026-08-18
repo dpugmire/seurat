@@ -66,6 +66,13 @@ class VisualizationControllerMixin:
     )
     TRIGGER_BINDINGS = ()
     STATE_CHANGE_BINDINGS = ()
+    HISTORY_ACTIONS = {
+        "confirm_scalar_plot_generation": "Generate scalar plot",
+        "apply_plugin_options": "Change plugin settings",
+        "apply_scalar_field_settings": "Change scalar field settings",
+        "apply_plot_settings": "Change plot settings",
+    }
+    HISTORY_TRIGGERS = {}
 
     assign_plot_series_keys = staticmethod(plot_model.assign_plot_series_keys)
     axis_has_positive_data = staticmethod(plot_model.axis_has_positive_data)

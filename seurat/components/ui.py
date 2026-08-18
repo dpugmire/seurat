@@ -4,7 +4,12 @@ from trame.app import TrameComponent
 from trame.ui.vuetify3 import SinglePageLayout
 from trame.widgets import vuetify3 as vuetify
 
-from seurat.widgets import CanvasRuntime, InteractionRuntime, ResizeRuntime
+from seurat.widgets import (
+    CanvasRuntime,
+    HistoryRuntime,
+    InteractionRuntime,
+    ResizeRuntime,
+)
 
 from .context_menu import ContextMenu
 from .dialogs import HelpDialog
@@ -28,6 +33,7 @@ class SeuratUI(TrameComponent):
         self.interaction_runtime = None
         self.canvas_runtime = None
         self.resize_runtime = None
+        self.history_runtime = None
         self.layout = self.build(campaign_name)
 
     def build(self, campaign_name=""):
@@ -53,6 +59,7 @@ class SeuratUI(TrameComponent):
                 self.interaction_runtime = InteractionRuntime()
                 self.canvas_runtime = CanvasRuntime()
                 self.resize_runtime = ResizeRuntime()
+                self.history_runtime = HistoryRuntime()
                 self.help_dialog.build()
                 self.query_assistant.build()
                 with vuetify.VContainer(fluid=True, class_="pa-2"):

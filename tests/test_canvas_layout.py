@@ -1,4 +1,6 @@
 import unittest
+import json
+from pathlib import Path
 
 from seurat.models.canvas_layout import (
     apply_column_insertion,
@@ -24,6 +26,47 @@ def tile(tile_id, x, y, w, h, kind="plot"):
 
 
 class CanvasLayoutTests(unittest.TestCase):
+    def test_shared_browser_conformance_fixtures_match_python(self):
+        fixture_path = (
+            Path(__file__).with_name("fixtures")
+            / "canvas_layout_conformance.json"
+        )
+        cases = json.loads(fixture_path.read_text(encoding="utf-8"))["cases"]
+
+        for case in cases:
+            operation = case["operation"]
+            arguments = case["arguments"]
+            if operation == "horizontal_resize_push":
+                result = horizontal_resize_push(
+                    case["items"],
+                    arguments["priority_id"],
+                    original_right=arguments["original_right"],
+                    columns=arguments["columns"],
+                )
+            elif operation == "insertion_zone":
+                result = insertion_zone(
+                    case["items"],
+                    arguments["dragged_id"],
+                    arguments["pointer_x"],
+                    arguments["pointer_y"],
+                    x_tolerance=arguments["x_tolerance"],
+                    y_tolerance=arguments["y_tolerance"],
+                )
+            elif operation == "apply_column_insertion":
+                result = apply_column_insertion(
+                    case["items"],
+                    dragged_id=arguments["dragged_id"],
+                    seam=arguments["seam"],
+                    anchor_y=arguments["anchor_y"],
+                    move_ids=arguments["move_ids"],
+                    width=arguments["width"],
+                    height=arguments["height"],
+                    mode=arguments["mode"],
+                    columns=arguments["columns"],
+                )
+            else:
+                self.fail(f"Unknown conformance operation: {operation}")
+            self.assertEqual(result, case["expected"], case["name"])
     def test_geometry_clamps_to_canvas_and_minimum_size(self):
         item = geometry("plot-1", "plot", 23, -2, 1, 1)
 

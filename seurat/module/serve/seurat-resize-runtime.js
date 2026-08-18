@@ -360,19 +360,19 @@
       }
     }
 
-    function commitTrackResizeAction(action) {
-      if (!window.trame || !window.trame.trigger) return;
-      if (action.mode === "fit") {
-        window.trame.trigger("set_grid_track_weights_trigger", [
-          action.axis,
-          action.weights.join(","),
-        ]);
-      } else {
-        window.trame.trigger("set_grid_track_sizes_trigger", [
-          action.axis,
-          action.sizes.join(","),
-        ]);
-      }
+    function commitTrackResizeActions(actions) {
+      if (!window.trame || !window.trame.trigger || !actions.length) return;
+      const changes = actions.map(function (action) {
+        const fit = action.mode === "fit";
+        return {
+          axis: action.axis,
+          kind: fit ? "weights" : "sizes",
+          values: fit ? action.weights : action.sizes,
+        };
+      });
+      window.trame.trigger("commit_grid_track_resize_trigger", [
+        JSON.stringify({ changes }),
+      ]);
     }
 
     function finishTrackResize(event, commit) {
@@ -384,9 +384,7 @@
       clearTrackResizeClasses();
       releasePointerCapture(current);
       if (commit !== false) {
-        for (const action of current.actions || []) {
-          commitTrackResizeAction(action);
-        }
+        commitTrackResizeActions(current.actions || []);
         schedulePlotRerenderForTrackResize();
         schedulePlotRerenderForTrackResize(80);
         schedulePlotRerenderForTrackResize(180);

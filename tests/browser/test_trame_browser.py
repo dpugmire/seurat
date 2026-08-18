@@ -1,7 +1,9 @@
 """Characterize Seurat behavior in a mounted Vue client."""
 
 import io
+import json
 import os
+from pathlib import Path
 
 import pytest
 from PIL import Image
@@ -54,6 +56,53 @@ def _drag(page, locator, delta_x=0, delta_y=0, release=True, button="left"):
         page.mouse.up(button=button)
 
 
+def test_canvas_layout_shared_conformance_fixtures(page, seurat_server):
+    _open_app(page, seurat_server)
+    fixture_path = (
+        Path(__file__).resolve().parents[1]
+        / "fixtures"
+        / "canvas_layout_conformance.json"
+    )
+    cases = json.loads(fixture_path.read_text(encoding="utf-8"))["cases"]
+
+    results = page.evaluate(
+        """cases => cases.map(testCase => {
+            const layout = window.seuratCanvasLayout;
+            const args = testCase.arguments;
+            if (testCase.operation === 'horizontal_resize_push') {
+                return layout.horizontalResizePush(
+                    testCase.items, args.priority_id, args.original_right, args.columns
+                );
+            }
+            if (testCase.operation === 'insertion_zone') {
+                return layout.insertionZone(
+                    testCase.items,
+                    args.dragged_id,
+                    args.pointer_x,
+                    args.pointer_y,
+                    { xTolerance: args.x_tolerance, yTolerance: args.y_tolerance }
+                );
+            }
+            if (testCase.operation === 'apply_column_insertion') {
+                return layout.applyColumnInsertion(testCase.items, {
+                    draggedId: args.dragged_id,
+                    seam: args.seam,
+                    anchorY: args.anchor_y,
+                    moveIds: args.move_ids,
+                    width: args.width,
+                    height: args.height,
+                    mode: args.mode,
+                    columns: args.columns,
+                });
+            }
+            throw new Error(`Unknown operation: ${testCase.operation}`);
+        })""",
+        cases,
+    )
+
+    assert results == [test_case["expected"] for test_case in cases]
+
+
 def test_app_mounts_and_renders_structural_ui(page, seurat_server):
     console_errors, page_errors, response_errors = _open_app(page, seurat_server)
 
@@ -69,6 +118,9 @@ def test_app_mounts_and_renders_structural_ui(page, seurat_server):
         state="attached"
     )
     page.locator('[data-seurat-resize-runtime="mounted"]').wait_for(
+        state="attached"
+    )
+    page.locator('[data-seurat-history-runtime="mounted"]').wait_for(
         state="attached"
     )
     assert (
@@ -111,6 +163,10 @@ def test_app_mounts_and_renders_structural_ui(page, seurat_server):
         page.locator('.v-application[data-seurat-resize-runtime-owner="mounted"]').count()
         == 1
     )
+    assert (
+        page.locator('.v-application[data-seurat-history-runtime-owner="mounted"]').count()
+        == 1
+    )
     assert page.evaluate(
         """() => {
             const runtimes = window.seurat && window.seurat.runtimes;
@@ -123,6 +179,7 @@ def test_app_mounts_and_renders_structural_ui(page, seurat_server):
                 && runtimes.canvas === window.seuratCanvasRuntime
                 && runtimes.interaction === window.seuratInteractionRuntime
                 && runtimes.resize === window.seuratResizeRuntime
+                && runtimes.history === window.seuratHistoryRuntime
             );
         }"""
     )
@@ -173,6 +230,102 @@ def test_workspace_tabs_and_split_panes_preserve_grid_content(
         ".seurat-workspace-active-grid.seurat-workspace-slot-first"
     ).wait_for(state="visible")
     assert page.locator(".seurat-workspace-grid-preview").count() == 1
+
+    assert page_errors == []
+    assert console_errors == [], response_errors
+
+
+def test_workspace_undo_redo_buttons_and_shortcuts(page, seurat_server):
+    console_errors, page_errors, response_errors = _open_app(page, seurat_server)
+    undo_button, redo_button = page.locator(".seurat-history-button").all()
+    assert undo_button.is_disabled()
+    assert redo_button.is_disabled()
+
+    page.get_by_role("button", name="New tab").click()
+    page.get_by_role("tab", name="View 2").wait_for(state="visible")
+    assert not undo_button.is_disabled()
+    assert "Undo Add tab" in undo_button.get_attribute("title")
+
+    undo_button.click()
+    page.wait_for_function(
+        "document.querySelectorAll('.seurat-workspace-tab').length === 1"
+    )
+    assert not redo_button.is_disabled()
+    assert "Redo Add tab" in redo_button.get_attribute("title")
+
+    page.locator(".seurat-content-column").focus()
+    page.keyboard.press("Control+Shift+Z")
+    page.get_by_role("tab", name="View 2").wait_for(state="visible")
+    assert page.get_by_role("tab", name="View 1").get_attribute(
+        "aria-selected"
+    ) == "true"
+    page.keyboard.press("Control+Z")
+    page.wait_for_function(
+        "document.querySelectorAll('.seurat-workspace-tab').length === 1"
+    )
+
+    page.get_by_role("button", name="New tab").click()
+    page.get_by_role("tab", name="View 2").wait_for(state="visible")
+    query_field = page.get_by_placeholder(
+        "e.g. var == 'rho' and source_dataset == 'hll_128/output.bp'"
+    )
+    query_field.fill("density")
+    query_field.press("Control+Z")
+    assert page.locator(".seurat-workspace-tab").count() == 2
+
+    assert page_errors == []
+    assert console_errors == [], response_errors
+
+
+def test_plot_undo_after_timeline_scrub(page, seurat_server):
+    console_errors, page_errors, response_errors = _open_app(page, seurat_server)
+    undo_button, redo_button = page.locator(".seurat-history-button").all()
+
+    page.get_by_role("button", name="Settings", exact=True).click()
+    page.get_by_role("button", name="Freeform", exact=True).click()
+    canvas = page.locator(".seurat-freeform-canvas")
+    canvas.wait_for(state="visible")
+    tiles = canvas.locator(":scope > .seurat-dropcell")
+    assert tiles.count() == 2
+
+    page.locator('[data-item="internal_energy"]').drag_to(
+        canvas,
+        target_position={"x": 540, "y": 340},
+    )
+    page.wait_for_function(
+        "document.querySelectorAll("
+        "'.seurat-freeform-canvas > .seurat-dropcell').length === 3"
+    )
+    assert "Undo Add plot" in undo_button.get_attribute("title")
+
+    slider = page.locator("#seurat-vcr-step-slider")
+    slider_bounds = slider.bounding_box()
+    assert slider_bounds is not None
+    slider.click(
+        position={
+            "x": slider_bounds["width"] * 0.7,
+            "y": slider_bounds["height"] * 0.5,
+        }
+    )
+    assert int(slider.input_value()) > 0
+
+    undo_button.click()
+    page.wait_for_function(
+        "document.querySelectorAll("
+        "'.seurat-freeform-canvas > .seurat-dropcell').length === 2"
+    )
+    redo_button.click()
+    page.wait_for_function(
+        "document.querySelectorAll("
+        "'.seurat-freeform-canvas > .seurat-dropcell').length === 3"
+    )
+
+    slider.focus()
+    slider.press("Control+Z")
+    page.wait_for_function(
+        "document.querySelectorAll("
+        "'.seurat-freeform-canvas > .seurat-dropcell').length === 2"
+    )
 
     assert page_errors == []
     assert console_errors == [], response_errors
@@ -2448,15 +2601,29 @@ def test_fit_grid_column_resize_updates_track_weights(page, seurat_server):
     _open_app(page, seurat_server)
 
     grid = page.locator(".seurat-main-grid")
-    grid.evaluate(
-        """grid => {
-            grid.setAttribute('data-grid-sizing-mode', 'fit');
-            grid.setAttribute('data-grid-column-weights', '1,1,1');
-            grid.style.gridTemplateColumns = [1, 1, 1]
-                .map(() => 'minmax(180px, 1fr)')
-                .join(' ');
-        }"""
+    page.get_by_role("button", name="Settings", exact=True).click()
+    page.get_by_role("button", name="Fit window", exact=True).click()
+    page.get_by_role("button", name="Settings", exact=True).click()
+    page.wait_for_function(
+        "document.querySelector('.seurat-main-grid')"
+        ".getAttribute('data-grid-sizing-mode') === 'fit'"
     )
+    initial_weights = [
+        float(value)
+        for value in grid.get_attribute("data-grid-column-weights").split(",")
+    ]
+    plot = page.locator('.seurat-dropcell[data-cell-index="0"] .seurat-plot1d')
+    page.wait_for_function(
+        "() => { const plot = document.querySelector('.seurat-plot1d');"
+        " const svg = plot && plot.querySelector('svg');"
+        " if (!plot || !svg || !plot.__seuratPlotMeta) return false;"
+        " const bounds = plot.getBoundingClientRect();"
+        " const viewBox = svg.viewBox.baseVal;"
+        " return Math.abs(viewBox.width - Math.round(bounds.width)) < 1"
+        " && Math.abs(viewBox.height - Math.round(bounds.height)) < 1; }"
+    )
+    initial_plot_width = plot.evaluate("plot => plot.__seuratPlotMeta.plotW")
+    undo_button, redo_button = page.locator(".seurat-history-button").all()
     handle = page.locator(
         '.seurat-dropcell[data-cell-index="0"] '
         '.seurat-grid-col-resize-handle[data-resize-edge="right"]'
@@ -2475,6 +2642,32 @@ def test_fit_grid_column_resize_updates_track_weights(page, seurat_server):
     assert weights[1] < 1
     assert weights[0] + weights[1] == pytest.approx(2, abs=0.001)
     assert weights[2] == pytest.approx(1)
+    page.wait_for_function(
+        "width => document.querySelector('.seurat-plot1d')"
+        ".__seuratPlotMeta.plotW > width",
+        arg=initial_plot_width,
+    )
+
+    undo_button.click()
+    page.wait_for_function(
+        "expected => document.querySelector('.seurat-main-grid')"
+        ".dataset.gridColumnWeights.split(',').map(Number)"
+        ".every((value, i) => Math.abs(value - expected[i]) < 0.000001)",
+        arg=initial_weights,
+    )
+    page.wait_for_function(
+        "width => Math.abs(document.querySelector('.seurat-plot1d')"
+        ".__seuratPlotMeta.plotW - width) < 1",
+        arg=initial_plot_width,
+    )
+
+    redo_button.click()
+    page.wait_for_function(
+        "expected => document.querySelector('.seurat-main-grid')"
+        ".dataset.gridColumnWeights.split(',').map(Number)"
+        ".every((value, i) => Math.abs(value - expected[i]) < 0.000001)",
+        arg=weights,
+    )
 
 
 def test_grid_row_resize_updates_track_state(page, seurat_server):
@@ -2516,6 +2709,152 @@ def test_grid_corner_resize_updates_both_track_axes(page, seurat_server):
     row_sizes = [float(value) for value in grid.get_attribute("data-grid-row-sizes").split(",")]
     assert column_sizes[0] == pytest.approx(310, abs=2)
     assert row_sizes[0] == pytest.approx(377, abs=2)
+
+
+@pytest.mark.parametrize("layout_mode", ["uniform", "spanning"])
+def test_grid_corner_resize_undo_redo_restores_both_axes(
+    page, seurat_server, layout_mode
+):
+    console_errors, page_errors, response_errors = _open_app(page, seurat_server)
+    if layout_mode == "spanning":
+        page.get_by_role("button", name="Settings", exact=True).click()
+        page.get_by_role("button", name="Spanning", exact=True).click()
+
+    grid = page.locator(".seurat-main-grid")
+    plot = page.locator('.seurat-dropcell[data-cell-index="0"] .seurat-plot1d')
+    undo_button, redo_button = page.locator(".seurat-history-button").all()
+    page.wait_for_function(
+        "() => { const plot = document.querySelector('.seurat-plot1d');"
+        " const svg = plot && plot.querySelector('svg');"
+        " if (!plot || !svg || !plot.__seuratPlotMeta) return false;"
+        " const bounds = plot.getBoundingClientRect();"
+        " const viewBox = svg.viewBox.baseVal;"
+        " return Math.abs(viewBox.width - Math.round(bounds.width)) < 1"
+        " && Math.abs(viewBox.height - Math.round(bounds.height)) < 1; }"
+    )
+    initial_columns = [
+        float(value)
+        for value in grid.get_attribute("data-grid-column-sizes").split(",")
+    ]
+    initial_rows = [
+        float(value)
+        for value in grid.get_attribute("data-grid-row-sizes").split(",")
+    ]
+    initial_plot_bounds = plot.bounding_box()
+    assert initial_plot_bounds is not None
+
+    handle = page.locator(
+        '.seurat-dropcell[data-cell-index="0"] .seurat-grid-corner-bottom-right'
+    )
+    _drag(page, handle, delta_x=30, delta_y=25)
+    page.wait_for_function(
+        "(() => { const grid = document.querySelector('.seurat-main-grid');"
+        " return Number(grid.dataset.gridColumnSizes.split(',')[0]) > 300"
+        " && Number(grid.dataset.gridRowSizes.split(',')[0]) > 370; })()"
+    )
+    resized_columns = [
+        float(value)
+        for value in grid.get_attribute("data-grid-column-sizes").split(",")
+    ]
+    resized_rows = [
+        float(value)
+        for value in grid.get_attribute("data-grid-row-sizes").split(",")
+    ]
+    page.wait_for_function(
+        "initial => { const plot = document.querySelector('.seurat-plot1d');"
+        " const svg = plot && plot.querySelector('svg');"
+        " if (!plot || !svg) return false;"
+        " const bounds = plot.getBoundingClientRect();"
+        " const viewBox = svg.viewBox.baseVal;"
+        " return bounds.width > initial.width && bounds.height > initial.height"
+        " && Math.abs(viewBox.width - Math.round(bounds.width)) < 1"
+        " && Math.abs(viewBox.height - Math.round(bounds.height)) < 1; }",
+        arg=initial_plot_bounds,
+    )
+    assert "Undo Resize grid track" in undo_button.get_attribute("title")
+
+    undo_button.click()
+    page.wait_for_function(
+        "expected => { const grid = document.querySelector('.seurat-main-grid');"
+        " const columns = grid.dataset.gridColumnSizes.split(',').map(Number);"
+        " const rows = grid.dataset.gridRowSizes.split(',').map(Number);"
+        " return columns.every((value, i) => Math.abs(value - expected.columns[i]) < 0.01)"
+        " && rows.every((value, i) => Math.abs(value - expected.rows[i]) < 0.01); }",
+        arg={"columns": initial_columns, "rows": initial_rows},
+    )
+    page.wait_for_function(
+        "initial => { const plot = document.querySelector('.seurat-plot1d');"
+        " const svg = plot && plot.querySelector('svg');"
+        " if (!plot || !svg) return false;"
+        " const bounds = plot.getBoundingClientRect();"
+        " const viewBox = svg.viewBox.baseVal;"
+        " return Math.abs(bounds.width - initial.width) < 1"
+        " && Math.abs(bounds.height - initial.height) < 1"
+        " && Math.abs(viewBox.width - Math.round(bounds.width)) < 1"
+        " && Math.abs(viewBox.height - Math.round(bounds.height)) < 1; }",
+        arg=initial_plot_bounds,
+    )
+
+    redo_button.click()
+    page.wait_for_function(
+        "expected => { const grid = document.querySelector('.seurat-main-grid');"
+        " const columns = grid.dataset.gridColumnSizes.split(',').map(Number);"
+        " const rows = grid.dataset.gridRowSizes.split(',').map(Number);"
+        " return columns.every((value, i) => Math.abs(value - expected.columns[i]) < 0.01)"
+        " && rows.every((value, i) => Math.abs(value - expected.rows[i]) < 0.01); }",
+        arg={"columns": resized_columns, "rows": resized_rows},
+    )
+
+    assert page_errors == []
+    assert console_errors == [], response_errors
+
+
+def test_freeform_resize_undo_redo_restores_geometry_and_plot(page, seurat_server):
+    console_errors, page_errors, response_errors = _open_app(
+        page, seurat_server, "freeform-resize"
+    )
+    canvas = page.locator(".seurat-freeform-canvas")
+    tile = canvas.locator('[data-tile-id="tile-1"]')
+    plot = tile.locator(".seurat-plot1d")
+    undo_button, redo_button = page.locator(".seurat-history-button").all()
+    canvas_width = canvas.evaluate("element => element.clientWidth")
+    initial_plot_width = plot.evaluate("plot => plot.__seuratPlotMeta.plotW")
+
+    _drag(
+        page,
+        tile.locator('[data-resize-edge="right"]'),
+        delta_x=2 * canvas_width / 24,
+    )
+    page.wait_for_function(
+        "document.querySelector('[data-tile-id=\"tile-1\"]')"
+        ".getAttribute('data-canvas-w') === '10'"
+    )
+    page.wait_for_function(
+        "width => document.querySelector('.seurat-plot1d')"
+        ".__seuratPlotMeta.plotW > width",
+        arg=initial_plot_width,
+    )
+    assert "Undo Move or resize plot" in undo_button.get_attribute("title")
+
+    undo_button.click()
+    page.wait_for_function(
+        "document.querySelector('[data-tile-id=\"tile-1\"]')"
+        ".getAttribute('data-canvas-w') === '8'"
+    )
+    page.wait_for_function(
+        "width => Math.abs(document.querySelector('.seurat-plot1d')"
+        ".__seuratPlotMeta.plotW - width) < 1",
+        arg=initial_plot_width,
+    )
+
+    redo_button.click()
+    page.wait_for_function(
+        "document.querySelector('[data-tile-id=\"tile-1\"]')"
+        ".getAttribute('data-canvas-w') === '10'"
+    )
+
+    assert page_errors == []
+    assert console_errors == [], response_errors
 
 
 def test_resize_runtime_cleans_up_and_mount_is_idempotent(page, seurat_server):
@@ -2577,7 +2916,7 @@ def test_resize_runtime_cleans_up_and_mount_is_idempotent(page, seurat_server):
     )
     _drag(page, grid_handle, delta_x=20)
     assert page.evaluate(
-        "window.__seuratResizeTriggerCounts.set_grid_track_sizes_trigger"
+        "window.__seuratResizeTriggerCounts.commit_grid_track_resize_trigger"
     ) == 1
     assert not grid.evaluate("grid => grid.classList.contains('is-resizing')")
     assert not page.locator("body").evaluate(

@@ -29,3 +29,10 @@ class ResizeRuntime(AbstractElement):
 
     def __init__(self, children=None, **kwargs):
         super().__init__("seurat-resize-runtime", children, **kwargs)
+
+
+class HistoryRuntime(AbstractElement):
+    """Lifecycle owner for workspace undo/redo keyboard shortcuts."""
+
+    def __init__(self, children=None, **kwargs):
+        super().__init__("seurat-history-runtime", children, **kwargs)
