@@ -544,6 +544,21 @@
     syncTimer: null,
     lastTickMs: 0,
   };
+
+  function updateGridVcrToggleButton() {
+    const button = gridRuntimeQuery('[data-vcr-action="toggle"]');
+    if (!button) return;
+    const label = gridVcrState.playing ? "Pause all" : "Play all";
+    button.textContent = gridVcrState.playing ? "⏸" : "▶";
+    button.setAttribute("title", label);
+    button.setAttribute("aria-label", label);
+  }
+
+  function setGridVcrPlaying(playing) {
+    gridVcrState.playing = !!playing;
+    updateGridVcrToggleButton();
+  }
+
   let gridMediaSyncTimer = null;
   let gridMediaObserver = null;
 
@@ -806,7 +821,7 @@
         gridVcrState.syncTime = nextTime;
         updateVcrTimeLabelFromSeconds(nextTime, videos, plots);
         if (nextPosition >= Math.max(0, timeline.length - 1)) {
-          gridVcrState.playing = false;
+          setGridVcrPlaying(false);
           stopSyncTimer();
         }
         return;
@@ -814,7 +829,7 @@
 
       const count = getCommonImageSequenceFrameCount(sequences);
       if (count === null || count <= 0) {
-        gridVcrState.playing = false;
+        setGridVcrPlaying(false);
         stopSyncTimer();
         updateVcrTimeLabelFromSeconds(0, videos, plots);
         return;
@@ -826,11 +841,11 @@
       gridVcrState.lastTickMs = now;
       const fps = inferFpsForImageSequences(sequences);
       const nextPosition = Math.min(Math.max(0, count - 1), Number(gridVcrState.syncTime || 0) + dt * fps);
-      const nextFrame = setImageSequenceFrame(Math.floor(nextPosition + 1e-9), sequences);
+      setImageSequenceFrame(Math.floor(nextPosition + 1e-9), sequences);
       gridVcrState.syncTime = nextPosition;
-      updateVcrTimeLabelFromSeconds(nextFrame, videos, plots);
+      updateVcrTimeLabelFromSeconds(nextPosition, videos, plots);
       if (nextPosition >= Math.max(0, count - 1)) {
-        gridVcrState.playing = false;
+        setGridVcrPlaying(false);
         stopSyncTimer();
       }
       return;
@@ -838,7 +853,7 @@
 
     if (!videos.length) {
       if (!plots.length) {
-        gridVcrState.playing = false;
+        setGridVcrPlaying(false);
         stopSyncTimer();
         updateVcrTimeLabelFromSeconds(0, []);
         return;
@@ -854,7 +869,7 @@
       gridVcrState.syncTime = next;
       updateVcrTimeLabelFromSeconds(next, [], plots);
       if (next >= (bounds.end - 1e-9)) {
-        gridVcrState.playing = false;
+        setGridVcrPlaying(false);
         stopSyncTimer();
       }
       return;
@@ -867,7 +882,7 @@
       pauseAllVideos(videos);
       const stopAt = setAllVideoTimes(videos, commonEnd);
       gridVcrState.syncTime = stopAt;
-      gridVcrState.playing = false;
+      setGridVcrPlaying(false);
       stopSyncTimer();
       updateVcrTimeLabelFromSeconds(stopAt, videos);
       return;
@@ -909,6 +924,11 @@
   }
 
   function syncGridMediaToCurrentVcrTime() {
+    // The playback timer already re-queries and synchronizes all grid media.
+    // Resyncing from the slider during playback discards fractional progress
+    // whenever Vue updates an observed media attribute between timer ticks.
+    if (gridVcrState.playing) return;
+
     const sequences = getGridImageSequences();
     const videos = getGridVideos();
     const plots = getGridPlots();
@@ -1198,7 +1218,7 @@
         : timeline[0];
       applyPhysicalTimelineTime(base, sequences, videos, plots);
       gridVcrState.timelinePosition = timelineIndexNearest(base, timeline);
-      gridVcrState.playing = true;
+      setGridVcrPlaying(true);
       gridVcrState.lastTickMs = (window.performance && window.performance.now) ? window.performance.now() : Date.now();
       startSyncTimer();
       return;
@@ -1211,7 +1231,7 @@
       gridVcrState.syncTime = frame;
       gridVcrState.timelinePosition = frame;
       updateVcrTimeLabelFromSeconds(frame, videos, plots);
-      gridVcrState.playing = true;
+      setGridVcrPlaying(true);
       gridVcrState.lastTickMs = (window.performance && window.performance.now) ? window.performance.now() : Date.now();
       startSyncTimer();
       return;
@@ -1222,7 +1242,7 @@
     );
     gridVcrState.syncTime = base;
     updateVcrTimeLabelFromSeconds(base, videos, plots);
-    gridVcrState.playing = true;
+    setGridVcrPlaying(true);
     gridVcrState.lastTickMs = (window.performance && window.performance.now) ? window.performance.now() : Date.now();
     if (videos.length) playAllVideos(videos);
     startSyncTimer();
@@ -1247,7 +1267,7 @@
         : clampTimeForMedia(videos.length ? getReferenceTime(videos) : gridVcrState.syncTime, videos, plots);
       gridVcrState.timelinePosition = gridVcrState.syncTime;
     }
-    gridVcrState.playing = false;
+    setGridVcrPlaying(false);
     stopSyncTimer();
     pauseAllVideos(videos);
     updateVcrTimeLabelFromSeconds(gridVcrState.syncTime, videos, plots);
@@ -1261,7 +1281,7 @@
       updateVcrTimeLabelFromSeconds(0, []);
       return;
     }
-    gridVcrState.playing = false;
+    setGridVcrPlaying(false);
     stopSyncTimer();
     pauseAllVideos(videos);
     const timeline = getPhysicalTimeline(sequences, plots);
@@ -1301,6 +1321,11 @@
     }
     if (a === "back") {
       stepAllVideosByFrames(-1);
+      return;
+    }
+    if (a === "toggle") {
+      if (gridVcrState.playing) pauseAllAtCurrentTime();
+      else playAllFromSyncTime();
       return;
     }
     if (a === "play") {
@@ -1358,7 +1383,7 @@
     if (!isGridVideo(target) || !gridVcrState.playing) return;
     const videos = getGridVideos();
     if (!videos.length) return;
-    gridVcrState.playing = false;
+    setGridVcrPlaying(false);
     stopSyncTimer();
     pauseAllVideos(videos);
     const endTime = getCommonEndTime(videos);
@@ -1412,6 +1437,7 @@
     if (runtimeRoot) unmountTimelineRuntime(runtimeRoot);
     runtimeRoot = root;
     root.setAttribute("data-seurat-timeline-runtime-owner", "mounted");
+    updateGridVcrToggleButton();
     root.addEventListener("input", onGridRuntimeSlider, true);
     root.addEventListener("change", onGridRuntimeSlider, true);
     root.addEventListener("click", onGridRuntimeClick);

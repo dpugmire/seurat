@@ -3257,6 +3257,70 @@ def test_schema_less_timeline_uses_step_indices(page, seurat_server):
     assert image.get_attribute("data-current-frame") == "1"
 
 
+def test_schema_less_timeline_play_advances_frames(page, seurat_server):
+    _open_app(page, seurat_server, mode="step")
+
+    image = page.locator('img[data-grid-image-sequence="1"]')
+    play_toggle = page.locator('[data-vcr-action="toggle"]')
+    assert image.get_attribute("data-current-frame") == "0"
+    assert play_toggle.get_attribute("title") == "Play all"
+
+    play_toggle.click()
+    assert play_toggle.get_attribute("title") == "Pause all"
+    page.wait_for_function(
+        "Number(document.querySelector('img[data-grid-image-sequence=\"1\"]')"
+        ".getAttribute('data-current-frame')) > 0"
+    )
+    assert play_toggle.get_attribute("title") == "Pause all"
+    assert play_toggle.text_content() == "⏸"
+
+    play_toggle.click()
+    paused_frame = image.get_attribute("data-current-frame")
+    page.wait_for_timeout(750)
+
+    assert image.get_attribute("data-current-frame") == paused_frame
+    assert play_toggle.get_attribute("title") == "Play all"
+    assert play_toggle.text_content() == "▶"
+
+
+def test_schema_less_timeline_play_survives_media_attribute_updates(
+    page, seurat_server
+):
+    _open_app(page, seurat_server, mode="step")
+
+    image = page.locator('img[data-grid-image-sequence="1"]')
+    play_toggle = page.locator('[data-vcr-action="toggle"]')
+    page.evaluate(
+        """() => {
+            window.__seuratPlayMutationTimer = window.setInterval(() => {
+                const image = document.querySelector(
+                    'img[data-grid-image-sequence="1"]'
+                );
+                const frameCount = image.getAttribute("data-frame-count");
+                image.setAttribute(
+                    "data-frame-count",
+                    frameCount === "35" ? "035" : "35"
+                );
+            }, 50);
+        }"""
+    )
+
+    try:
+        play_toggle.click()
+        page.wait_for_function(
+            "Number(document.querySelector('img[data-grid-image-sequence=\"1\"]')"
+            ".getAttribute('data-current-frame')) > 0",
+            timeout=3000,
+        )
+    finally:
+        page.evaluate(
+            """() => {
+                window.clearInterval(window.__seuratPlayMutationTimer);
+                delete window.__seuratPlayMutationTimer;
+            }"""
+        )
+
+
 def test_schema_less_timeline_cursor_uses_step_not_normalized_progress(
     page, seurat_server
 ):
