@@ -83,6 +83,45 @@ class CampaignSchemaTests(unittest.TestCase):
         self.assertEqual(layout["file_groups"]["simulations"]["time"], {"variable": "wtime"})
         self.assertEqual(layout["file_groups"]["analyses"]["time"], {"variable": "wtime"})
 
+    def test_append_step_index_time_is_inferred_from_adios_steps(self):
+        datasets = ["sources/a.bp", "sources/b.bp"]
+        schema = {
+            "schema_version": 1,
+            "name": "step-index-demo",
+            "files": {
+                "sources": {
+                    "role": "time_series",
+                    "mode": "append",
+                    "pattern": "sources/*.bp",
+                    "time": {"index": "step_index"},
+                }
+            },
+        }
+        variables = {
+            f"{dataset}/field": {"AvailableStepsCount": "3"}
+            for dataset in datasets
+        }
+        layout = _interpret_campaign_schema(schema, datasets, {})
+        context = _build_schema_time_context(
+            layout,
+            FakeReader({}),
+            variables,
+        )
+
+        self.assertEqual(
+            context["group_metadata"]["sources"]["schema_num_timesteps"],
+            3,
+        )
+        for dataset in datasets:
+            self.assertEqual(
+                context["dataset_metadata"][dataset]["time_values"],
+                [0, 1, 2],
+            )
+            self.assertEqual(
+                context["dataset_metadata"][dataset]["time_source"],
+                "index:step_index",
+            )
+
     def test_append_mode_requires_exactly_one_selector(self):
         for group in (
             {"role": "time_series", "mode": "append"},

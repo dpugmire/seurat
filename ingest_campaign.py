@@ -56,6 +56,13 @@ _VISUALIZATION_API_TABLES = {
     "visualization_item",
     "dataset",
 }
+_UNIFIED_VARIABLE_TABLES = {
+    "logical_variable",
+    "variable_derivation_edge",
+    "variable_chunk",
+    "variable_chunk_source_step",
+    "dataset",
+}
 _CAMPAIGN_SCHEMA_TABLES = {
     "dataset",
     "replica",
@@ -1141,7 +1148,32 @@ def _build_schema_time_context(
                     if not vars_dict or time_path in vars_dict:
                         group_time_values = _read_numeric_array(fr, time_path, (vars_dict or {}).get(time_path))
         elif "index" in time_spec:
-            time_source = f"index:{str(time_spec.get('index', '') or '').strip()}"
+            time_index_name = str(time_spec.get("index", "") or "").strip()
+            time_source = f"index:{time_index_name}"
+            if mode == "append" and time_index_name == "step_index":
+                for dataset in datasets:
+                    step_counts: List[int] = []
+                    for varinfo in _schema_dataset_variables(
+                        vars_dict or {},
+                        dataset,
+                    ).values():
+                        if not isinstance(varinfo, dict):
+                            continue
+                        try:
+                            count = int(
+                                str(
+                                    varinfo.get("AvailableStepsCount", "0")
+                                    or "0"
+                                )
+                            )
+                        except Exception:
+                            count = 0
+                        if count > 0:
+                            step_counts.append(count)
+                    if step_counts:
+                        append_time_values[dataset] = list(
+                            range(max(step_counts))
+                        )
 
         group_num_timesteps = len(datasets)
         if mode == "append":
@@ -1186,6 +1218,8 @@ def _build_schema_time_context(
                 metadata["schema_associations"] = dict(group.get("associations") or {})
             if time_source:
                 metadata["time_source"] = time_source
+            if mode == "append" and dataset_time_values:
+                metadata["time_values"] = list(dataset_time_values)
 
             if "variable" in time_spec:
                 time_var = str(time_spec.get("variable", "") or "").strip()
@@ -1199,8 +1233,6 @@ def _build_schema_time_context(
                             values = _read_numeric_array(fr, time_path, (vars_dict or {}).get(time_path))
                         if values:
                             metadata["physical_time"] = values[0]
-                elif mode == "append" and dataset_time_values:
-                    metadata["time_values"] = list(dataset_time_values)
             elif str(time_spec.get("index", "") or "").strip() == "step_index" and isinstance(step_index, int):
                 metadata["time_index"] = step_index
 
@@ -1961,6 +1993,135 @@ def _load_visualization_api_index(campaign_path: str) -> Dict[str, Dict[str, Any
         con.close()
 
 
+def _load_unified_representation_index(
+    campaign_path: str,
+) -> Dict[str, Dict[str, Any]]:
+    """Load image and scalar-field chunks from the unified variable graph."""
+
+    path = Path(campaign_path).expanduser()
+    if not path.exists():
+        return {}
+
+    try:
+        con = sqlite3.connect(str(path))
+        con.row_factory = sqlite3.Row
+    except sqlite3.Error as e:
+        print(f"[warn] could not open ACA SQLite metadata for unified variables: {e}")
+        return {}
+
+    try:
+        available_tables = _sqlite_table_names(con)
+        if not _UNIFIED_VARIABLE_TABLES.issubset(available_tables):
+            return {}
+
+        rows = con.execute(
+            """
+            select
+                derived.variableid as derived_variable_id,
+                derived.name as derived_variable_name,
+                derived.representation_kind as representation_kind,
+                derived.representation_metadata as representation_metadata,
+                derived_dataset.name as derived_dataset_name,
+                chunk.chunkid as chunk_id,
+                chunk.chunk_index as chunk_index,
+                payload.name as payload_name,
+                payload.uuid as payload_uuid,
+                payload.fileformat as payload_fileformat,
+                edge.edgeid as edge_id,
+                edge.role as source_role,
+                source.name as source_variable_name,
+                source_dataset.name as source_dataset_name,
+                mapping.source_step as source_step
+            from logical_variable as derived
+            join dataset as derived_dataset on derived_dataset.rowid = derived.datasetid
+            join variable_chunk as chunk on chunk.variableid = derived.variableid
+            join dataset as payload on payload.rowid = chunk.payload_datasetid
+            left join variable_derivation_edge as edge
+                on edge.derived_variable_id = derived.variableid
+            left join logical_variable as source
+                on source.variableid = edge.source_variable_id
+            left join dataset as source_dataset
+                on source_dataset.rowid = source.datasetid
+            left join variable_chunk_source_step as mapping
+                on mapping.chunkid = chunk.chunkid and mapping.edgeid = edge.edgeid
+            where lower(derived.representation_kind) in ('image', 'scalar_field')
+              and derived_dataset.deltime = 0
+              and payload.deltime = 0
+            order by derived.variableid, chunk.chunk_index, edge.edgeid
+            """
+        )
+
+        chunks: Dict[tuple[int, int], Dict[str, Any]] = {}
+        for row in rows:
+            derived_id = int(row["derived_variable_id"])
+            chunk_id = int(row["chunk_id"])
+            key = (derived_id, chunk_id)
+            metadata = _json_object_or_empty(row["representation_metadata"])
+            representation_kind = str(row["representation_kind"] or "").strip().lower()
+            item_type = "IMAGE" if representation_kind == "image" else SCALAR_FIELD_ITEM_TYPE
+            visualization_name = str(metadata.get("visualization_name", "") or "").strip()
+            if not visualization_name:
+                visualization_name = str(row["derived_variable_name"] or "").strip("/").rsplit("/", 1)[-1]
+
+            entry = chunks.setdefault(
+                key,
+                {
+                    "sequence_id": derived_id,
+                    "sequence_name": (
+                        f"{str(row['derived_dataset_name'] or '').strip('/')}"
+                        f"/{str(row['derived_variable_name'] or '').strip('/')}"
+                    ),
+                    "visualization_name": visualization_name,
+                    "visualization_kind": str(
+                        metadata.get("visualization_kind", "") or representation_kind
+                    ),
+                    "sequence_metadata": metadata,
+                    "item_order": int(row["chunk_index"]),
+                    "item_type": item_type,
+                    "item_uuid": str(row["payload_uuid"] or ""),
+                    "item_metadata": {
+                        "source_step": (
+                            int(row["source_step"])
+                            if row["source_step"] is not None
+                            else int(row["chunk_index"])
+                        )
+                    },
+                    "item_dataset_name": str(row["payload_name"] or "").strip("/"),
+                    "item_file_format": str(row["payload_fileformat"] or ""),
+                    "scalar_field_metadata": (
+                        metadata if item_type == SCALAR_FIELD_ITEM_TYPE else {}
+                    ),
+                    "variables": [],
+                    "association_source": "unified-variable",
+                },
+            )
+
+            source_variable = str(row["source_variable_name"] or "").strip()
+            if source_variable:
+                variable_spec = {
+                    "name": source_variable,
+                    "role": str(row["source_role"] or "source"),
+                    "source_dataset": str(row["source_dataset_name"] or ""),
+                }
+                if variable_spec not in entry["variables"]:
+                    entry["variables"].append(variable_spec)
+
+        index: Dict[str, Dict[str, Any]] = {}
+        for entry in chunks.values():
+            variables = _normalize_visualization_variables(entry.get("variables", []))
+            entry["variables"] = variables
+            entry["display_variables"] = _display_visualization_variables(variables)
+            item_name = str(entry.get("item_dataset_name", "") or "").strip("/")
+            if item_name:
+                index[item_name] = entry
+        return index
+    except sqlite3.Error as e:
+        print(f"[warn] could not read unified variable metadata: {e}")
+        return {}
+    finally:
+        con.close()
+
+
 def _lookup_visualization_api_image(
     varpath: str,
     visualization_api_index: Dict[str, Dict[str, Any]],
@@ -2159,6 +2320,10 @@ def parse_campaign(
     visualization_api_index = _load_visualization_api_index(campaign_path)
     if visualization_api_index:
         print("visualization API item associations:", len(visualization_api_index))
+    unified_representation_index = _load_unified_representation_index(campaign_path)
+    if unified_representation_index:
+        print("unified variable representation chunks:", len(unified_representation_index))
+        visualization_api_index.update(unified_representation_index)
 
     dataset_rows = _load_campaign_dataset_rows(campaign_path)
     dataset_names = [row["name"] for row in dataset_rows if row.get("name")]
@@ -2277,7 +2442,13 @@ def parse_campaign(
                                     "source_dataset": str(api_var.get("source_dataset", "") or ""),
                                 }
                             )
-                    association_source = "visualization-api"
+                    association_source = str(
+                        visualization_api_entry.get(
+                            "association_source",
+                            "visualization-api",
+                        )
+                        or "visualization-api"
+                    )
 
                 if image_assoc_schema is not None:
                     assoc = _match_image_association(varpath, image_assoc_schema)
@@ -2342,6 +2513,8 @@ def parse_campaign(
                         item_order_value = int(visualization_api_entry.get("item_order", 0) or 0)
                     except Exception:
                         item_order_value = None
+                    if frame_index_value is None and item_order_value is not None:
+                        frame_index_value = item_order_value
                     filtered_records = [
                         record
                         for record in image_variable_records
@@ -2526,7 +2699,13 @@ def parse_campaign(
             "movie_cache": 1,
             "frame_index": int(visualization_api_entry.get("item_order", 0) or 0),
             "image_storage": "aca",
-            "association_source": "visualization-api",
+            "association_source": str(
+                visualization_api_entry.get(
+                    "association_source",
+                    "visualization-api",
+                )
+                or "visualization-api"
+            ),
             "association_rule_id": "",
             "visualization_sequence_name": str(visualization_api_entry.get("sequence_name", "") or ""),
             "visualization_kind": str(visualization_api_entry.get("visualization_kind", "") or ""),

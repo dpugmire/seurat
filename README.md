@@ -115,6 +115,7 @@ Requirements (at minimum):
 
 - Python deps: `trame`, `trame-vuetify`, `adios2`, `numpy`, `Pillow`.
 - Optional for YAML campaign and image-association schemas: `pyyaml`.
+- Optional for synthetic demo campaigns: `hpc-campaign` and `python-dateutil`.
 - `ffmpeg` available on PATH for movie preview tiles.
 
 Image sequence bytes are loaded lazily from the ACA file when a preview tile is
@@ -125,6 +126,12 @@ Install the Python dependencies from this repo:
 
 ```bash
 python -m pip install -e ".[schema]"
+```
+
+Include the demo dependencies to use the synthetic campaign launcher:
+
+```bash
+python -m pip install -e ".[schema,demo]"
 ```
 
 Install the browser-test dependencies and Chromium with:
@@ -155,12 +162,23 @@ Example:
 ```bash
 python app.py campaign.aca
 
+# Generate an ephemeral synthetic campaign and launch it
+python app.py --demo
+# Equivalent after an editable install: seurat --demo
+
 # Optional: supply a campaign schema when schema.yaml is not embedded
 python app.py campaign.aca --campaign-schema schema.yaml
 
 # Optional: pass image association schema text/YAML
 python app.py campaign.aca --image-association-schema image_variable_map.yaml
 ```
+
+Demo mode creates 20 time steps for five deterministic sources. Each source
+contains three 1D profiles and three 2D scalar fields; every 2D field has both
+heatmap images and a `scalar_field` representation. The campaign, source data,
+rendered images, scalar payloads, and Seurat sidecar are kept in one temporary
+directory and removed when the viewer exits normally. `--demo` is mutually
+exclusive with a campaign path and external schema options.
 
 ## Natural-Language Viewer Assistant
 
@@ -333,7 +351,10 @@ M3D-C1 example is `data/schema_examples/code_m3dc1.yaml` in hpc-campaign.
 
 Visualization association notes:
 
-- Campaigns created with the new hpc-campaign visualization API are associated through the ACA `visualization_*` metadata tables.
+- Unified hpc-campaign image and scalar-field representations are associated
+  through the ACA `logical_variable` and `variable_*` graph tables.
+- Campaigns created with the earlier hpc-campaign visualization API remain
+  associated through the ACA `visualization_*` metadata tables.
 - Seurat treats `variable_id` as a source-independent variable identity. Different source datasets for that same variable remain separate through the `source_dataset` field.
 - For visualization API images, `variable_id` comes from `visualization_variable.variable_name`.
 - Legacy image path parsing is still used as a fallback for older campaigns.

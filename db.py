@@ -377,7 +377,6 @@ def _read_scalar_field_payload(
             where {where}
               and d.deltime = 0
               and r.deltime = 0
-              and d.fileformat = 'SCALAR_FIELD'
               and f.data is not null
             order by r.rowid, f.fileid
             limit 1
