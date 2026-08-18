@@ -22,7 +22,13 @@ from ui import build_ui
 
 from . import module as seurat_module
 from .backends import LocalCampaignBackend
-from .demo_campaign import DemoDependencyError, temporary_demo_campaign
+from .demo_campaign import (
+    DEFAULT_DEMO_SOURCE_COUNT,
+    MAX_DEMO_SOURCE_COUNT,
+    DemoConfig,
+    DemoDependencyError,
+    temporary_demo_campaign,
+)
 from .learning import InteractionLog
 from .query_assistant import make_chat_completions_query_translator
 from .state import init_state
@@ -30,6 +36,15 @@ from .state import init_state
 
 def _expanded_path(path):
     return str(Path(path).expanduser()) if path else ""
+
+
+def _demo_source_count(value):
+    count = int(value)
+    if not 1 <= count <= MAX_DEMO_SOURCE_COUNT:
+        raise argparse.ArgumentTypeError(
+            f"demo source count must be between 1 and {MAX_DEMO_SOURCE_COUNT}"
+        )
+    return count
 
 
 class SeuratApp(TrameApp):
@@ -115,8 +130,14 @@ def build_parser():
     )
     parser.add_argument(
         "--demo",
-        action="store_true",
-        help="Generate an ephemeral synthetic campaign and launch the viewer.",
+        nargs="?",
+        const=DEFAULT_DEMO_SOURCE_COUNT,
+        type=_demo_source_count,
+        metavar="SOURCE_COUNT",
+        help=(
+            "Generate an ephemeral synthetic campaign with SOURCE_COUNT sources "
+            f"(default: {DEFAULT_DEMO_SOURCE_COUNT}, maximum: {MAX_DEMO_SOURCE_COUNT})."
+        ),
     )
     parser.add_argument(
         "--image-association-schema",
@@ -141,7 +162,9 @@ def main(argv=None):
 
     if args.demo:
         try:
-            with temporary_demo_campaign() as demo:
+            with temporary_demo_campaign(
+                config=DemoConfig(source_count=args.demo)
+            ) as demo:
                 collection = open_sqlite_collection(
                     str(demo.campaign_path),
                     db_path=str(demo.sidecar_path),

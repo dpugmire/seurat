@@ -164,6 +164,8 @@ python app.py campaign.aca
 
 # Generate an ephemeral synthetic campaign and launch it
 python app.py --demo
+# Optionally choose a source count from 1 through 49
+python app.py --demo 12
 # Equivalent after an editable install: seurat --demo
 
 # Optional: supply a campaign schema when schema.yaml is not embedded
@@ -173,12 +175,15 @@ python app.py campaign.aca --campaign-schema schema.yaml
 python app.py campaign.aca --image-association-schema image_variable_map.yaml
 ```
 
-Demo mode creates 20 time steps for five deterministic sources. Each source
-contains three 1D profiles and three 2D scalar fields; every 2D field has both
-heatmap images and a `scalar_field` representation. The campaign, source data,
-rendered images, scalar payloads, and Seurat sidecar are kept in one temporary
-directory and removed when the viewer exits normally. `--demo` is mutually
-exclusive with a campaign path and external schema options.
+Demo mode creates 20 time steps for five deterministic sources by default;
+`--demo SOURCE_COUNT` accepts counts from 1 through 49. Each source contains
+three 1D profiles, two scalar time series, and three 2D scalar fields. The
+scalar time series track the moving pulse's circular centroid and the damped
+mode's mean squared amplitude. Every 2D field has both heatmap images and a
+`scalar_field` representation. The campaign, source data, rendered images,
+scalar payloads, and Seurat sidecar are kept in one temporary directory and
+removed when the viewer exits normally. `--demo` is mutually exclusive with a
+campaign path and external schema options.
 
 ## Natural-Language Viewer Assistant
 

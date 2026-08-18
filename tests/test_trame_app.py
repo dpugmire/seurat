@@ -132,8 +132,18 @@ class SeuratAppTests(unittest.TestCase):
         self.assertFalse(args.demo)
 
         demo_args = build_parser().parse_args(["--demo"])
-        self.assertTrue(demo_args.demo)
+        self.assertEqual(demo_args.demo, 5)
         self.assertIsNone(demo_args.campaign_path)
+
+        counted_demo_args = build_parser().parse_args(["--demo", "12"])
+        self.assertEqual(counted_demo_args.demo, 12)
+        self.assertIsNone(counted_demo_args.campaign_path)
+
+        for invalid_count in ("0", "50"):
+            with self.subTest(invalid_count=invalid_count), self.assertRaises(
+                SystemExit
+            ):
+                build_parser().parse_args(["--demo", invalid_count])
 
     def test_demo_cli_launches_generated_campaign_and_closes_sidecar(self):
         generated = SimpleNamespace(
@@ -142,7 +152,8 @@ class SeuratAppTests(unittest.TestCase):
         )
 
         @contextmanager
-        def demo_context():
+        def demo_context(*, config):
+            self.assertEqual(config.source_count, 5)
             yield generated
 
         collection = MagicMock()
