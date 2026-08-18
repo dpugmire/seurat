@@ -72,6 +72,7 @@ class SeuratAppTests(unittest.TestCase):
                 f"{seurat_module.BASE_URL}/seurat-canvas-runtime.js",
                 f"{seurat_module.BASE_URL}/seurat-interaction-runtime.js",
                 f"{seurat_module.BASE_URL}/seurat-resize-runtime.js",
+                f"{seurat_module.BASE_URL}/seurat-history-runtime.js",
             ],
         )
         self.assertEqual(
@@ -81,6 +82,7 @@ class SeuratAppTests(unittest.TestCase):
                 "seuratCanvasRuntime",
                 "seuratInteractionRuntime",
                 "seuratResizeRuntime",
+                "seuratHistoryRuntime",
             ],
         )
         self.assertEqual(

@@ -21,6 +21,7 @@ from controllers import _variable_groups_from_navigation, attach_controllers
 from db import CampaignDb
 from query_parser import python_query_to_filters, python_query_to_mongo
 from seurat.controllers.catalog import _filter_variable_groups
+from seurat.controllers.composer import CONTROLLER_TYPES
 from seurat.models.workspace_state import parse_workspace_document, workspace_json
 from sqlite_store import SQLiteCampaignCollection
 from state_init import init_state
@@ -477,6 +478,8 @@ class CampaignDbNavigationTests(unittest.TestCase):
                 "update_plugin_option_value",
                 "update_scalar_field_contour_color",
                 "validate_query_proposal",
+                "undo_workspace",
+                "redo_workspace",
             },
         )
         self.assertEqual(
@@ -485,6 +488,7 @@ class CampaignDbNavigationTests(unittest.TestCase):
                 "add_var_to_canvas_trigger",
                 "assign_var_to_grid_cell_trigger",
                 "commit_canvas_layout_trigger",
+                "commit_grid_track_resize_trigger",
                 "hide_context_menu_trigger",
                 "move_grid_cell_trigger",
                 "move_workspace_canvas_tile_trigger",
@@ -498,6 +502,8 @@ class CampaignDbNavigationTests(unittest.TestCase):
                 "show_cell_context_menu",
                 "show_item_context_menu",
                 "show_tab_context_menu",
+                "undo_workspace_trigger",
+                "redo_workspace_trigger",
             },
         )
         self.assertEqual(
@@ -510,6 +516,25 @@ class CampaignDbNavigationTests(unittest.TestCase):
             },
         )
         self.assertEqual(len(controller.on_server_ready.callbacks), 1)
+
+        owner = controller.actions["undo_workspace"].__self__
+        for controller_type in CONTROLLER_TYPES:
+            action_methods = dict(controller_type.ACTION_BINDINGS)
+            for action_name in getattr(controller_type, "HISTORY_ACTIONS", {}):
+                callback = controller.actions[action_name]
+                self.assertTrue(hasattr(callback, "__wrapped__"), action_name)
+                self.assertEqual(
+                    callback.__wrapped__,
+                    getattr(owner, action_methods[action_name]),
+                )
+            trigger_methods = dict(controller_type.TRIGGER_BINDINGS)
+            for trigger_name in getattr(controller_type, "HISTORY_TRIGGERS", {}):
+                callback = controller.triggers[trigger_name]
+                self.assertTrue(hasattr(callback, "__wrapped__"), trigger_name)
+                self.assertEqual(
+                    callback.__wrapped__,
+                    getattr(owner, trigger_methods[trigger_name]),
+                )
 
     def test_workspace_tabs_preserve_independent_grid_state(self):
         state, controller = self.make_controller()
@@ -526,6 +551,136 @@ class CampaignDbNavigationTests(unittest.TestCase):
 
         self.assertEqual(state.workspaceActiveTabId, "tab-1")
         self.assertEqual(state.gridCells[0]["variable_id"], "density")
+
+    def test_workspace_tab_edits_support_undo_redo(self):
+        state, controller = self.make_controller()
+
+        controller.actions["add_workspace_tab"]("pane-1")
+
+        self.assertEqual(len(state.workspacePanes[0]["tabs"]), 2)
+        self.assertTrue(state.workspaceCanUndo)
+        self.assertEqual(state.workspaceUndoLabel, "Add tab")
+        self.assertTrue(controller.actions["undo_workspace"]())
+        self.assertEqual(len(state.workspacePanes[0]["tabs"]), 1)
+        self.assertEqual(state.workspaceActiveTabId, "tab-1")
+        self.assertTrue(state.workspaceCanRedo)
+
+        self.assertTrue(controller.actions["redo_workspace"]())
+        self.assertEqual(len(state.workspacePanes[0]["tabs"]), 2)
+        self.assertEqual(state.workspaceActiveTabId, "tab-1")
+
+    def test_canvas_geometry_undo_preserves_transient_view_controls(self):
+        state, controller = self.make_controller()
+        controller.actions["add_var_to_grid"]("density")
+        controller.actions["set_grid_layout_mode"]("freeform")
+        cell = state.gridCells[0]
+        before = (
+            cell["canvas_x"],
+            cell["canvas_y"],
+            cell["canvas_w"],
+            cell["canvas_h"],
+        )
+        payload = json.dumps(
+            [
+                {
+                    "tile_id": cell["tile_id"],
+                    "x": 10,
+                    "y": 4,
+                    "w": cell["canvas_w"],
+                    "h": cell["canvas_h"],
+                }
+            ]
+        )
+        controller.triggers["commit_canvas_layout_trigger"](
+            payload,
+            cell["tile_id"],
+            state.workspaceActivePaneId,
+            state.workspaceActiveTabId,
+        )
+        state.canvasShowGrid = True
+        state.canvasZoom = 0.5
+        state.canvasFitToView = True
+        state.canvasDefaultTileWidth = 9
+
+        self.assertTrue(controller.actions["undo_workspace"]())
+
+        restored = state.gridCells[0]
+        self.assertEqual(
+            (
+                restored["canvas_x"],
+                restored["canvas_y"],
+                restored["canvas_w"],
+                restored["canvas_h"],
+            ),
+            before,
+        )
+        self.assertTrue(state.canvasShowGrid)
+        self.assertEqual(state.canvasZoom, 0.5)
+        self.assertTrue(state.canvasFitToView)
+        self.assertEqual(state.canvasDefaultTileWidth, 9)
+
+    def test_canvas_snap_toggle_is_transient_and_does_not_create_history(self):
+        state, controller = self.make_controller()
+        owner = controller.actions["undo_workspace"].__self__
+        before_entry_count = len(owner.history.undo_entries)
+
+        controller.actions["set_canvas_snap_to_grid"](False)
+
+        self.assertFalse(state.canvasSnapToGrid)
+        self.assertEqual(len(owner.history.undo_entries), before_entry_count)
+
+    def test_grid_track_resize_commits_all_axes_as_one_history_entry(self):
+        state, controller = self.make_controller()
+        controller.actions["set_grid_layout_mode"]("uniform")
+        before_columns = list(state.gridColumnSizes)
+        before_rows = list(state.gridRowSizes)
+        resized_columns = [before_columns[0] + 30, *before_columns[1:]]
+        resized_rows = [before_rows[0] + 25, *before_rows[1:]]
+        owner = controller.actions["undo_workspace"].__self__
+        before_entry_count = len(owner.history.undo_entries)
+
+        controller.triggers["commit_grid_track_resize_trigger"](
+            json.dumps(
+                {
+                    "changes": [
+                        {
+                            "axis": "column",
+                            "kind": "sizes",
+                            "values": resized_columns,
+                        },
+                        {
+                            "axis": "row",
+                            "kind": "sizes",
+                            "values": resized_rows,
+                        },
+                    ]
+                }
+            )
+        )
+
+        self.assertEqual(state.gridColumnSizes, resized_columns)
+        self.assertEqual(state.gridRowSizes, resized_rows)
+        self.assertEqual(len(owner.history.undo_entries), before_entry_count + 1)
+        self.assertEqual(state.workspaceUndoLabel, "Resize grid track")
+
+        self.assertTrue(controller.actions["undo_workspace"]())
+        self.assertEqual(state.gridColumnSizes, before_columns)
+        self.assertEqual(state.gridRowSizes, before_rows)
+
+        self.assertTrue(controller.actions["redo_workspace"]())
+        self.assertEqual(state.gridColumnSizes, resized_columns)
+        self.assertEqual(state.gridRowSizes, resized_rows)
+
+    def test_new_workspace_edit_clears_redo_stack(self):
+        state, controller = self.make_controller()
+        controller.actions["add_workspace_tab"]("pane-1")
+        controller.actions["undo_workspace"]()
+        self.assertTrue(state.workspaceCanRedo)
+
+        controller.actions["rename_workspace_tab"]("pane-1", "tab-1", "Analysis")
+
+        self.assertFalse(state.workspaceCanRedo)
+        self.assertEqual(state.workspaceUndoLabel, "Rename tab")
 
     def test_canvas_default_tile_width_is_shared_across_workspace_tabs(self):
         state, controller = self.make_controller()
@@ -744,6 +899,18 @@ class CampaignDbNavigationTests(unittest.TestCase):
         )
         source_grid = state.workspacePanes[0]["tabs"][0]["grid"]
         self.assertEqual(source_grid["cells"], [])
+        self.assertTrue(controller.actions["undo_workspace"]())
+        self.assertEqual(state.workspaceActivePaneId, "pane-2")
+        self.assertEqual(state.gridCells, [])
+        source_grid = state.workspacePanes[0]["tabs"][0]["grid"]
+        self.assertEqual(source_grid["cells"][0]["variable_id"], "density")
+
+        self.assertTrue(controller.actions["redo_workspace"]())
+        self.assertEqual(state.workspaceActivePaneId, "pane-2")
+        self.assertEqual(state.gridCells[0]["variable_id"], "density")
+        self.assertEqual(
+            state.workspacePanes[0]["tabs"][0]["grid"]["cells"], []
+        )
 
     def test_server_ready_lifecycle_reingests_and_refreshes_catalog(self):
         state = RecordingState()
@@ -900,6 +1067,8 @@ class CampaignDbNavigationTests(unittest.TestCase):
             f"Loaded: {state_path.resolve()}",
         )
         self.assertEqual(state.workspaceStateError, "")
+        self.assertFalse(state.workspaceCanUndo)
+        self.assertFalse(state.workspaceCanRedo)
 
         state.queryText = "var == 'density'"
         controller.actions["save_workspace_state"]()

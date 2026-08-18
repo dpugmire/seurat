@@ -13,6 +13,7 @@ if str(REPOSITORY_ROOT) not in sys.path:
 
 from seurat import module as seurat_module  # noqa: E402
 from seurat.controllers.catalog import _filter_variable_groups  # noqa: E402
+from seurat.history import WorkspaceMutationCoordinator  # noqa: E402
 from seurat.models import canvas_layout  # noqa: E402
 from seurat.models.grid import (  # noqa: E402
     cell_has_content,
@@ -766,6 +767,9 @@ def build_fixture_server(mode):
             )
         state.gridSizingMode = "static"
 
+    def set_grid_sizing_mode(mode):
+        state.gridSizingMode = "fit" if str(mode or "") == "fit" else "static"
+
     def set_grid_track_weights(axis, weights):
         axis = str(axis)
         if axis == "column":
@@ -780,6 +784,23 @@ def build_fixture_server(mode):
                 f"minmax(212px, {value:g}fr)" for value in state.gridRowWeights
             )
         state.gridSizingMode = "fit"
+
+    def commit_grid_track_resize(resize_payload):
+        payload = json.loads(str(resize_payload or "{}"))
+        changes = payload.get("changes", [])
+        applied_axes = set()
+        for change in changes[:2]:
+            axis = str(change.get("axis", "") or "").strip().lower()
+            if axis not in {"column", "row"} or axis in applied_axes:
+                continue
+            kind = str(change.get("kind", "") or "").strip().lower()
+            if kind == "sizes":
+                set_grid_track_sizes(axis, change.get("values", []))
+            elif kind == "weights":
+                set_grid_track_weights(axis, change.get("values", []))
+            else:
+                continue
+            applied_axes.add(axis)
 
     def show_cell_context_menu(cell_index, x, y):
         index = int(cell_index)
@@ -1039,18 +1060,66 @@ def build_fixture_server(mode):
         state.sourceDialogTitle = "Sources: internal_energy"
         state.showSourcesModal = not bool(state.showSourcesModal)
 
+    def capture_fixture_history():
+        layout = deepcopy(state.workspaceLayout)
+        _pane, tab = active_pane_and_tab(layout)
+        if tab is not None:
+            tab["grid"] = grid_snapshot(state)
+        return {"workspace": layout}
+
+    def restore_fixture_history(snapshot):
+        current_pane_id = str(state.workspaceActivePaneId or "")
+        current_tab_id = str(state.workspaceActiveTabId or "")
+        layout = deepcopy(snapshot["workspace"])
+        focused_pane, focused_tab = pane_and_tab(
+            layout, current_pane_id, current_tab_id
+        )
+        if focused_pane is not None and focused_tab is not None:
+            focused_pane["active_tab_id"] = current_tab_id
+            layout["active_pane_id"] = current_pane_id
+            layout["active_tab_id"] = current_tab_id
+        load_active_workspace_grid(layout)
+        state.canvasLayoutRevision = int(state.canvasLayoutRevision or 0) + 1
+
+    fixture_history = WorkspaceMutationCoordinator(
+        state,
+        capture_fixture_history,
+        restore_fixture_history,
+    )
+
+    def history_edit(label, callback):
+        def wrapped(*args, **kwargs):
+            with fixture_history.transaction(label):
+                return callback(*args, **kwargs)
+
+        return wrapped
+
     server.controller.add("toggle_variable_group")(toggle_variable_group)
     server.controller.add("activate_workspace_tab")(activate_workspace_tab)
-    server.controller.add("add_workspace_tab")(add_workspace_tab)
-    server.controller.add("rename_workspace_tab")(rename_workspace_tab)
-    server.controller.add("close_workspace_tab")(close_workspace_tab)
+    server.controller.add("add_workspace_tab")(
+        history_edit("Add tab", add_workspace_tab)
+    )
+    server.controller.add("rename_workspace_tab")(
+        history_edit("Rename tab", rename_workspace_tab)
+    )
+    server.controller.add("close_workspace_tab")(
+        history_edit("Close tab", close_workspace_tab)
+    )
     server.controller.add("context_menu_tab_rename")(context_menu_tab_rename)
     server.controller.add("context_menu_tab_close")(context_menu_tab_close)
-    server.controller.add("split_workspace_pane")(split_workspace_pane)
-    server.controller.add("close_workspace_pane")(close_workspace_pane)
-    server.controller.add("move_workspace_tab")(move_workspace_tab)
+    server.controller.add("split_workspace_pane")(
+        history_edit("Split pane", split_workspace_pane)
+    )
+    server.controller.add("close_workspace_pane")(
+        history_edit("Close pane", close_workspace_pane)
+    )
+    server.controller.add("move_workspace_tab")(
+        history_edit("Move tab", move_workspace_tab)
+    )
     server.controller.add("set_active_grid_cell")(set_active_grid_cell)
-    server.controller.add("set_grid_layout_mode")(set_grid_layout_mode)
+    server.controller.add("set_grid_layout_mode")(
+        history_edit("Change layout mode", set_grid_layout_mode)
+    )
     server.controller.add("set_canvas_snap_to_grid")(set_canvas_snap_to_grid)
     server.controller.add("set_canvas_nudge_others")(set_canvas_nudge_others)
     server.controller.add("set_canvas_show_grid")(set_canvas_show_grid)
@@ -1059,12 +1128,25 @@ def build_fixture_server(mode):
         adjust_canvas_default_tile_width
     )
     server.controller.add("set_canvas_fit_to_view")(set_canvas_fit_to_view)
-    server.controller.add("set_canvas_columns")(set_canvas_columns)
-    server.controller.add("set_grid_layout_size")(set_grid_layout_size)
-    server.controller.trigger("commit_canvas_layout_trigger")(
-        commit_canvas_layout
+    server.controller.add("set_canvas_columns")(
+        history_edit("Change canvas columns", set_canvas_columns)
     )
-    server.controller.trigger("add_var_to_canvas_trigger")(add_var_to_canvas)
+    server.controller.add("set_grid_layout_size")(
+        history_edit("Resize grid", set_grid_layout_size)
+    )
+    server.controller.add("set_grid_sizing_mode")(
+        history_edit("Change grid sizing mode", set_grid_sizing_mode)
+    )
+    server.controller.add("undo_workspace")(fixture_history.undo)
+    server.controller.add("redo_workspace")(fixture_history.redo)
+    server.controller.trigger("commit_canvas_layout_trigger")(
+        history_edit("Move or resize plot", commit_canvas_layout)
+    )
+    server.controller.trigger("add_var_to_canvas_trigger")(
+        history_edit("Add plot", add_var_to_canvas)
+    )
+    server.controller.trigger("undo_workspace_trigger")(fixture_history.undo)
+    server.controller.trigger("redo_workspace_trigger")(fixture_history.redo)
     server.controller.trigger("sync_canvas_fit_zoom_trigger")(
         sync_canvas_fit_zoom
     )
@@ -1073,20 +1155,29 @@ def build_fixture_server(mode):
     )
     server.controller.trigger("move_grid_cell_trigger")(move_grid_cell)
     server.controller.trigger("move_workspace_grid_cell_trigger")(
-        move_workspace_grid_cell
+        history_edit("Move plot between panes", move_workspace_grid_cell)
     )
     server.controller.trigger("move_workspace_canvas_tile_trigger")(
-        move_workspace_canvas_tile
+        history_edit("Move plot between panes", move_workspace_canvas_tile)
     )
-    server.controller.trigger("move_workspace_tab_trigger")(move_workspace_tab)
+    server.controller.trigger("move_workspace_tab_trigger")(
+        history_edit("Move tab", move_workspace_tab)
+    )
     server.controller.trigger("reorder_workspace_tab_trigger")(
-        reorder_workspace_tab
+        history_edit("Reorder tab", reorder_workspace_tab)
     )
     server.controller.trigger("resize_workspace_split_trigger")(
-        resize_workspace_split
+        history_edit("Resize pane", resize_workspace_split)
     )
-    server.controller.trigger("set_grid_track_sizes_trigger")(set_grid_track_sizes)
-    server.controller.trigger("set_grid_track_weights_trigger")(set_grid_track_weights)
+    server.controller.trigger("set_grid_track_sizes_trigger")(
+        history_edit("Resize grid track", set_grid_track_sizes)
+    )
+    server.controller.trigger("set_grid_track_weights_trigger")(
+        history_edit("Resize grid track", set_grid_track_weights)
+    )
+    server.controller.trigger("commit_grid_track_resize_trigger")(
+        history_edit("Resize grid track", commit_grid_track_resize)
+    )
     server.controller.trigger("show_item_context_menu")(show_item_context_menu)
     server.controller.trigger("show_cell_context_menu")(show_cell_context_menu)
     server.controller.trigger("show_tab_context_menu")(show_tab_context_menu)

@@ -4,6 +4,7 @@ from . import (
     catalog,
     context_menu,
     grid,
+    history,
     query_assistant,
     sources,
     visualization,
@@ -19,6 +20,7 @@ STATE_SECTIONS = (
     ("grid", grid.defaults),
     ("context_menu", context_menu.defaults),
     ("workspace", workspace.defaults),
+    ("history", history.defaults),
 )
 
 

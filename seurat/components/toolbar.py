@@ -8,6 +8,38 @@ from trame.widgets import vuetify3 as vuetify
 class QueryToolbar(TrameComponent):
     def build(self):
         ctrl = self.ctrl
+        with html.Div(
+            classes="seurat-history-controls",
+            raw_attrs=['aria-label="Workspace history"'],
+        ):
+            html.Button(
+                "↶",
+                classes="seurat-history-button",
+                click=ctrl.undo_workspace,
+                raw_attrs=[
+                    'type="button"',
+                    ':disabled="!workspaceCanUndo"',
+                    ':aria-label="workspaceCanUndo ? (\'Undo \' + workspaceUndoLabel) : \'Nothing to undo\'"',
+                    ':title="workspaceCanUndo ? (\'Undo \' + workspaceUndoLabel + \' (Ctrl/Cmd+Z)\') : \'Nothing to undo\'"',
+                ],
+            )
+            html.Button(
+                "↷",
+                classes="seurat-history-button",
+                click=ctrl.redo_workspace,
+                raw_attrs=[
+                    'type="button"',
+                    ':disabled="!workspaceCanRedo"',
+                    ':aria-label="workspaceCanRedo ? (\'Redo \' + workspaceRedoLabel) : \'Nothing to redo\'"',
+                    ':title="workspaceCanRedo ? (\'Redo \' + workspaceRedoLabel + \' (Ctrl/Cmd+Shift+Z)\') : \'Nothing to redo\'"',
+                ],
+            )
+        with vuetify.Template(v_if="workspaceHistoryError"):
+            html.Span(
+                "{{ workspaceHistoryError }}",
+                classes="seurat-history-error",
+                title=("workspaceHistoryError",),
+            )
         html.Span("Advanced Query:", class_="text-caption ml-4")
         vuetify.VBtn(
             "?",

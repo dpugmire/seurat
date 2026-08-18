@@ -1179,6 +1179,13 @@
         "data-plot-settings",
         "data-canvas-w",
         "data-canvas-h",
+        "data-canvas-revision",
+        "data-layout-mode",
+        "data-grid-sizing-mode",
+        "data-grid-column-sizes",
+        "data-grid-row-sizes",
+        "data-grid-column-weights",
+        "data-grid-row-weights",
       ],
     });
     observePlot1dSizes();

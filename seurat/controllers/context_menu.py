@@ -45,6 +45,21 @@ class ContextMenuControllerMixin:
         ("show_tab_context_menu", "show_tab_context_menu"),
     )
     STATE_CHANGE_BINDINGS = ()
+    HISTORY_ACTIONS = {
+        "context_menu_item_add": "Add plot",
+        "context_menu_tab_rename": "Rename tab",
+        "context_menu_tab_close": "Close tab",
+        "context_menu_cell_clear": "Remove plot",
+        "context_menu_cell_select": "Assign plot",
+        "context_menu_cell_span_right": "Resize plot",
+        "context_menu_cell_span_down": "Resize plot",
+        "context_menu_cell_shrink_width": "Resize plot",
+        "context_menu_cell_shrink_height": "Resize plot",
+        "context_menu_cell_reset_span": "Reset plot size",
+        "context_menu_cell_pick_visualization": "Change visualization",
+        "context_menu_cell_run_source_plugin": "Change visualization",
+    }
+    HISTORY_TRIGGERS = {}
 
     def clear_context_menu_state(self) -> None:
         self.state.contextMenuVisible = False

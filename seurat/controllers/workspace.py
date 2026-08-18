@@ -35,7 +35,10 @@ from seurat.models.workspace_layout import (
 from seurat.models.workspace_state import (
     WorkspaceStateError,
     default_workspace_filename,
+    history_document,
     parse_workspace_document,
+    validate_history_document,
+    validate_live_history_state,
     validate_workspace_campaign,
     workspace_json,
 )
@@ -43,6 +46,27 @@ from seurat.state import clear_right_panes
 
 
 MAX_WORKSPACE_STATE_BYTES = 5 * 1024 * 1024
+
+_HISTORY_TRANSIENT_GRID_FIELDS = (
+    "canvas_snap_to_grid",
+    "canvas_nudge_others",
+    "canvas_show_grid",
+    "canvas_zoom",
+    "canvas_fit_to_view",
+    "active_cell",
+    "selected_cells",
+    "selected_cell_map",
+)
+_HISTORY_TRANSIENT_GRID_DEFAULTS = {
+    "canvas_snap_to_grid": True,
+    "canvas_nudge_others": True,
+    "canvas_show_grid": False,
+    "canvas_zoom": canvas_layout.CANVAS_ZOOM_DEFAULT,
+    "canvas_fit_to_view": False,
+    "active_cell": -1,
+    "selected_cells": [],
+    "selected_cell_map": {},
+}
 
 
 class WorkspaceControllerMixin:
@@ -66,6 +90,120 @@ class WorkspaceControllerMixin:
         ("resize_workspace_split_trigger", "resize_workspace_split"),
     )
     STATE_CHANGE_BINDINGS = ()
+    HISTORY_ACTIONS = {
+        "add_workspace_tab": "Add tab",
+        "rename_workspace_tab": "Rename tab",
+        "close_workspace_tab": "Close tab",
+        "split_workspace_pane": "Split pane",
+        "close_workspace_pane": "Close pane",
+        "move_workspace_tab": "Move tab",
+    }
+    HISTORY_TRIGGERS = {
+        "move_workspace_grid_cell_trigger": "Move plot between panes",
+        "move_workspace_canvas_tile_trigger": "Move plot between panes",
+        "move_workspace_tab_trigger": "Move tab",
+        "reorder_workspace_tab_trigger": "Reorder tab",
+        "resize_workspace_split_trigger": "Resize pane",
+    }
+
+    def capture_workspace_history(self) -> Dict[str, Any]:
+        return history_document(self.state)
+
+    def validate_workspace_history(self) -> None:
+        validate_live_history_state(self.state)
+
+    @staticmethod
+    def _workspace_grids_by_tab(layout: Mapping[str, Any]) -> Dict[str, Any]:
+        result = {}
+        for pane in list(layout.get("panes", []) or []):
+            for tab in list(pane.get("tabs", []) or []):
+                tab_id = str(tab.get("id", "") or "")
+                grid = tab.get("grid", {})
+                if tab_id and isinstance(grid, Mapping):
+                    result[tab_id] = grid
+        return result
+
+    def restore_workspace_history(self, document: Mapping[str, Any]) -> None:
+        """Restore one validated semantic snapshot and rebuild derived tiles."""
+
+        validated = validate_history_document(document)
+        current_layout = self._stash_active_workspace_grid()
+        current_pane_id = str(current_layout.get("active_pane_id", "") or "")
+        current_tab_id = str(current_layout.get("active_tab_id", "") or "")
+        current_grids = self._workspace_grids_by_tab(current_layout)
+        saved_workspace = validated["workspace"]
+
+        panes = []
+        for saved_pane in list(saved_workspace.get("panes", []) or []):
+            tabs = []
+            for saved_tab in list(saved_pane.get("tabs", []) or []):
+                tab_id = str(saved_tab.get("id", "") or "")
+                runtime = self._runtime_grid_from_document(
+                    saved_tab.get("grid", {})
+                )
+                current = current_grids.get(
+                    tab_id, _HISTORY_TRANSIENT_GRID_DEFAULTS
+                )
+                for field in _HISTORY_TRANSIENT_GRID_FIELDS:
+                    if field in current:
+                        runtime[field] = deepcopy(current[field])
+                runtime["canvas_layout_revision"] = int(
+                    current.get("canvas_layout_revision", 0) or 0
+                ) + 1
+                runtime["needs_refresh"] = True
+                tabs.append(
+                    {
+                        "id": tab_id,
+                        "title": normalized_tab_title(
+                            saved_tab.get("title", ""), "View"
+                        ),
+                        "grid": runtime,
+                    }
+                )
+            panes.append(
+                {
+                    "id": str(saved_pane.get("id", "") or ""),
+                    "active_tab_id": str(
+                        saved_pane.get("active_tab_id", "") or ""
+                    ),
+                    "tabs": tabs,
+                }
+            )
+
+        layout = {
+            "root": deepcopy(saved_workspace.get("root", {})),
+            "split_direction": str(
+                saved_workspace.get("split_direction", "none") or "none"
+            ),
+            "split_ratio": float(
+                saved_workspace.get("split_ratio", 0.5) or 0.5
+            ),
+            "active_pane_id": str(
+                saved_workspace.get("active_pane_id", "") or ""
+            ),
+            "active_tab_id": str(
+                saved_workspace.get("active_tab_id", "") or ""
+            ),
+            "panes": panes,
+        }
+        layout["root"] = normalized_workspace_root(layout)
+        focused_pane, focused_tab = pane_and_tab(
+            layout, current_pane_id, current_tab_id
+        )
+        if focused_pane is not None and focused_tab is not None:
+            focused_pane["active_tab_id"] = current_tab_id
+            layout["active_pane_id"] = current_pane_id
+            layout["active_tab_id"] = current_tab_id
+        self._publish_workspace_layout(layout)
+        if not self._activate_workspace_target(
+            layout["active_pane_id"],
+            layout["active_tab_id"],
+            stash=False,
+        ):
+            raise WorkspaceStateError(
+                "History snapshot does not contain its active workspace tab"
+            )
+        self.clear_context_menu_state()
 
     def _workspace_layout(self) -> Dict[str, Any]:
         layout = getattr(self.state, "workspaceLayout", {})
@@ -939,6 +1077,7 @@ class WorkspaceControllerMixin:
         self.state.workspaceStatePath = str(source)
         self.state.workspaceStateStatus = f"Loaded: {source}"
         self.state.workspaceStateError = ""
+        self.history.clear()
         self._interaction_query_id = ""
         self.clear_interaction_assignment()
         if str(self.state.queryText or "").strip():

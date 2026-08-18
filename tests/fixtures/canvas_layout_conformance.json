@@ -1,0 +1,45 @@
+{
+  "cases": [
+    {
+      "name": "horizontal resize pushes neighbors",
+      "operation": "horizontal_resize_push",
+      "items": [
+        {"tile_id": "moving", "tile_type": "plot", "x": 0, "y": 0, "w": 8, "h": 6},
+        {"tile_id": "right", "tile_type": "plot", "x": 4, "y": 0, "w": 4, "h": 6},
+        {"tile_id": "far-right", "tile_type": "plot", "x": 8, "y": 0, "w": 4, "h": 6}
+      ],
+      "arguments": {"priority_id": "moving", "original_right": 4, "columns": 24},
+      "expected": [
+        {"tile_id": "moving", "tile_type": "plot", "x": 0, "y": 0, "w": 8, "h": 6},
+        {"tile_id": "right", "tile_type": "plot", "x": 8, "y": 0, "w": 4, "h": 6},
+        {"tile_id": "far-right", "tile_type": "plot", "x": 12, "y": 0, "w": 4, "h": 6}
+      ]
+    },
+    {
+      "name": "shared vertical seam wins near corner",
+      "operation": "insertion_zone",
+      "items": [
+        {"tile_id": "left", "tile_type": "plot", "x": 0, "y": 0, "w": 10, "h": 8},
+        {"tile_id": "right", "tile_type": "plot", "x": 10, "y": 0, "w": 10, "h": 8},
+        {"tile_id": "moving", "tile_type": "plot", "x": 0, "y": 10, "w": 8, "h": 6}
+      ],
+      "arguments": {"dragged_id": "moving", "pointer_x": 9.8, "pointer_y": 0.1, "x_tolerance": 0.3, "y_tolerance": 0.3},
+      "expected": {"orientation": "column", "seam": 10, "anchor_x": 10, "anchor_y": 0, "edge": "shared"}
+    },
+    {
+      "name": "column insertion pushes connected tiles",
+      "operation": "apply_column_insertion",
+      "items": [
+        {"tile_id": "moving", "tile_type": "plot", "x": 0, "y": 8, "w": 4, "h": 3},
+        {"tile_id": "a", "tile_type": "plot", "x": 8, "y": 0, "w": 4, "h": 5},
+        {"tile_id": "b", "tile_type": "plot", "x": 12, "y": 4, "w": 4, "h": 5}
+      ],
+      "arguments": {"dragged_id": "moving", "seam": 8, "anchor_y": 2, "move_ids": ["a", "b"], "width": 4, "height": 3, "mode": "push", "columns": 24},
+      "expected": [
+        {"tile_id": "moving", "tile_type": "plot", "x": 8, "y": 2, "w": 4, "h": 3},
+        {"tile_id": "a", "tile_type": "plot", "x": 12, "y": 0, "w": 4, "h": 5},
+        {"tile_id": "b", "tile_type": "plot", "x": 16, "y": 4, "w": 4, "h": 5}
+      ]
+    }
+  ]
+}

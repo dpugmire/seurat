@@ -1,4 +1,5 @@
 import json
+import math
 import unittest
 from types import SimpleNamespace
 
@@ -7,6 +8,7 @@ from seurat.models.workspace_state import (
     WORKSPACE_VERSION,
     WorkspaceStateError,
     default_workspace_filename,
+    history_document,
     parse_workspace_document,
     validate_workspace_campaign,
     workspace_document,
@@ -118,6 +120,59 @@ class WorkspaceStateTests(unittest.TestCase):
         self.assertNotIn("frame_sources", cell)
         self.assertNotIn("visualization_options", cell)
         self.assertNotIn("status", cell)
+
+    def test_history_document_excludes_transient_and_render_state(self):
+        state = self.make_state()
+        state.gridLayoutMode = "freeform"
+        state.canvasSnapToGrid = False
+        state.canvasNudgeOthers = False
+        state.canvasShowGrid = True
+        state.canvasZoom = 0.5
+        state.canvasFitToView = True
+        state.canvasCols = 48
+        state.gridCells = [
+            {
+                **state.gridCells[0],
+                "tile_id": "tile-density",
+                "canvas_x": 30.25,
+                "canvas_y": 1.5,
+                "canvas_w": 12.5,
+                "canvas_h": 8.5,
+            }
+        ]
+
+        document = history_document(state)
+        grid = document["workspace"]["panes"][0]["tabs"][0]["grid"]
+        cell = grid["cells"][0]
+
+        self.assertEqual(grid["canvas_columns"], 48)
+        self.assertFalse(grid["canvas_snap_to_grid"])
+        self.assertNotIn("canvas_nudge_others", grid)
+        self.assertNotIn("canvas_show_grid", grid)
+        self.assertNotIn("canvas_zoom", grid)
+        self.assertNotIn("canvas_fit_to_view", grid)
+        self.assertNotIn("active_cell", grid)
+        self.assertNotIn("selected_cells", grid)
+        self.assertEqual(cell["canvas_x"], 30.25)
+        self.assertNotIn("src", cell)
+        self.assertNotIn("plot", cell)
+
+    def test_history_preserves_non_finite_values_without_weakening_workspace_json(self):
+        state = self.make_state()
+        state.gridCells[0]["plugin_options"] = {
+            "not_available": float("nan"),
+            "unbounded": float("inf"),
+        }
+
+        document = history_document(state)
+        options = document["workspace"]["panes"][0]["tabs"][0]["grid"][
+            "cells"
+        ][0]["plugin_options"]
+
+        self.assertTrue(math.isnan(options["not_available"]))
+        self.assertTrue(math.isinf(options["unbounded"]))
+        with self.assertRaisesRegex(WorkspaceStateError, "not JSON serializable"):
+            workspace_json(state, "/campaign/example.aca")
 
     def test_json_round_trip_accepts_utf8_bytes(self):
         content = workspace_json(

@@ -15,11 +15,14 @@ from seurat.models.workspace_layout import (
     normalized_workspace_root,
 )
 from seurat.models import canvas_layout
+from seurat.models import grid as grid_model
 from seurat.models.grid import DEFAULT_GRID_LAYOUT_MODE, cell_has_content
 
 
 WORKSPACE_FORMAT = "seurat-workspace"
 WORKSPACE_VERSION = 2
+HISTORY_FORMAT = "seurat-workspace-history"
+HISTORY_VERSION = 1
 
 _CELL_FIELDS = (
     "variable_id",
@@ -81,19 +84,37 @@ def _json_copy(value: Any, description: str) -> Any:
         ) from e
 
 
+def _history_copy(value: Any, description: str) -> Any:
+    """Return a session-only JSON-shaped copy that preserves NaN/Infinity."""
+
+    try:
+        encoded = json.dumps(value, allow_nan=True)
+        return json.loads(encoded)
+    except (TypeError, ValueError) as e:
+        raise WorkspaceStateError(
+            f"{description} is not history serializable: {e}"
+        ) from e
+
+
 def _invalid_json_constant(constant: str):
     raise ValueError(f"Invalid JSON number {constant}")
 
 
-def _cell_state(cell: Dict[str, Any], index: int) -> Dict[str, Any]:
+def _cell_state(
+    cell: Dict[str, Any], index: int, *, for_history: bool = False
+) -> Dict[str, Any]:
+    copy_value = _history_copy if for_history else _json_copy
     return {
-        field: _json_copy(cell[field], f"Grid cell {index + 1} field {field}")
+        field: copy_value(cell[field], f"Grid cell {index + 1} field {field}")
         for field in _CELL_FIELDS
         if field in cell
     }
 
 
-def _grid_document(grid: Dict[str, Any]) -> Dict[str, Any]:
+def _grid_document(
+    grid: Dict[str, Any], *, for_history: bool = False
+) -> Dict[str, Any]:
+    copy_value = _history_copy if for_history else _json_copy
     layout_mode = str(
         grid.get("layout_mode", DEFAULT_GRID_LAYOUT_MODE)
         or DEFAULT_GRID_LAYOUT_MODE
@@ -125,29 +146,33 @@ def _grid_document(grid: Dict[str, Any]) -> Dict[str, Any]:
         "sizing_mode": str(grid.get("sizing_mode", "static") or "static"),
         "cell_size": grid.get("cell_size", 300),
         "fit_minimum_cell_size": grid.get("fit_minimum_cell_size", 180),
-        "column_sizes": _json_copy(
+        "column_sizes": copy_value(
             grid.get("column_sizes", []), "Grid column sizes"
         ),
-        "row_sizes": _json_copy(grid.get("row_sizes", []), "Grid row sizes"),
-        "column_weights": _json_copy(
+        "row_sizes": copy_value(grid.get("row_sizes", []), "Grid row sizes"),
+        "column_weights": copy_value(
             grid.get("column_weights", []), "Grid column weights"
         ),
-        "row_weights": _json_copy(
+        "row_weights": copy_value(
             grid.get("row_weights", []), "Grid row weights"
         ),
         "cells": [
-            _cell_state(cell if isinstance(cell, dict) else {}, index)
+            _cell_state(
+                cell if isinstance(cell, dict) else {},
+                index,
+                for_history=for_history,
+            )
             for index, cell in enumerate(raw_cells)
         ],
         "active_cell": grid.get("active_cell", -1),
-        "selected_cells": _json_copy(
+        "selected_cells": copy_value(
             grid.get("selected_cells", []), "Selected grid cells"
         ),
         "timeline_driver_cell": grid.get("timeline_driver_cell", -1),
     }
 
 
-def _workspace_document(state) -> Dict[str, Any]:
+def _workspace_document(state, *, for_history: bool = False) -> Dict[str, Any]:
     layout = deepcopy(_state_value(state, "workspaceLayout", {}) or {})
     if not isinstance(layout, dict) or not layout.get("panes"):
         return {}
@@ -167,7 +192,7 @@ def _workspace_document(state) -> Dict[str, Any]:
                 {
                     "id": str(tab.get("id", "") or f"tab-{tab_index + 1}"),
                     "title": str(tab.get("title", "") or f"View {tab_index + 1}"),
-                    "grid": _grid_document(grid),
+                    "grid": _grid_document(grid, for_history=for_history),
                 }
             )
         panes.append(
@@ -187,6 +212,78 @@ def _workspace_document(state) -> Dict[str, Any]:
         "active_tab_id": str(layout.get("active_tab_id", "") or ""),
         "panes": panes,
     }
+
+
+def _history_workspace(state, *, normalize: bool) -> Dict[str, Any]:
+    workspace = _workspace_document(state, for_history=True)
+    for pane in list(workspace.get("panes", []) or []):
+        for tab in list(pane.get("tabs", []) or []):
+            grid = dict(tab.get("grid", {}) or {})
+            grid.pop("canvas_nudge_others", None)
+            grid.pop("canvas_show_grid", None)
+            grid.pop("canvas_zoom", None)
+            grid.pop("canvas_fit_to_view", None)
+            grid.pop("active_cell", None)
+            grid.pop("selected_cells", None)
+            grid["canvas_snap_to_grid"] = False
+            if normalize and str(grid.get("layout_mode", "")) == "freeform":
+                normalized = grid_model.normalize_freeform_cells(
+                    list(grid.get("cells", []) or []),
+                    snap=False,
+                    columns=canvas_layout.normalize_columns(
+                        grid.get("canvas_columns", canvas_layout.CANVAS_COLUMNS)
+                    ),
+                )
+                grid["cells"] = [
+                    _cell_state(cell, index, for_history=True)
+                    for index, cell in enumerate(normalized)
+                ]
+            tab["grid"] = grid
+    return workspace
+
+
+def history_document(state) -> Dict[str, Any]:
+    """Return the compact semantic workspace subset used by undo/redo.
+
+    View controls and selection are intentionally omitted.  Geometry is
+    validated without snapping so a history entry can preserve fractional
+    coordinates even if the user's current snap preference later changes.
+    """
+
+    document = {
+        "format": HISTORY_FORMAT,
+        "version": HISTORY_VERSION,
+        "workspace": _history_workspace(state, normalize=True),
+    }
+    validate_history_document(document)
+    return document
+
+
+def validate_live_history_state(state) -> None:
+    """Validate live history-relevant state without repairing its geometry."""
+
+    validate_history_document(
+        {
+            "format": HISTORY_FORMAT,
+            "version": HISTORY_VERSION,
+            "workspace": _history_workspace(state, normalize=False),
+        }
+    )
+
+
+def validate_history_document(value: Any) -> Dict[str, Any]:
+    """Validate and return an in-memory undo/redo snapshot."""
+
+    document = _require_mapping(value, "History snapshot")
+    if document.get("format") != HISTORY_FORMAT:
+        raise WorkspaceStateError("Unsupported history snapshot format")
+    if document.get("version") != HISTORY_VERSION:
+        raise WorkspaceStateError(
+            "Unsupported history snapshot version: "
+            f"{document.get('version')!r}; expected {HISTORY_VERSION}"
+        )
+    _validate_workspace_layout(document.get("workspace"))
+    return _history_copy(document, "History snapshot")
 
 
 def default_workspace_filename(campaign_path: str) -> str:
@@ -354,16 +451,22 @@ def _validate_grid_document(grid: Any, description: str) -> None:
                 f"{description}.cells[{index}] must be a JSON object"
             )
     if layout_mode == "freeform":
+        columns = canvas_layout.normalize_columns(
+            grid.get("canvas_columns", canvas_layout.CANVAS_COLUMNS)
+        )
         geometries = [
             canvas_layout.geometry_from_cell(
                 cell,
                 fallback_id="",
                 fallback_index=index,
                 snap=bool(grid.get("canvas_snap_to_grid", True)),
+                columns=columns,
             )
             for index, cell in enumerate(cells)
         ]
-        valid, message = canvas_layout.validate_layout(geometries)
+        valid, message = canvas_layout.validate_layout(
+            geometries, columns=columns
+        )
         if not valid:
             raise WorkspaceStateError(f"{description}: {message}")
 
