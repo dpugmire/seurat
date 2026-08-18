@@ -473,6 +473,100 @@ def split_workspace(
     return result, new_pane_id
 
 
+def split_workspace_tab(
+    layout: Mapping[str, Any],
+    direction: str,
+    snapshot: Mapping[str, Any],
+    source_pane_id: str,
+    tab_id: str,
+    target_pane_id: str = "",
+) -> Tuple[Dict[str, Any], Optional[str]]:
+    """Move a tab into a new pane split from an existing pane."""
+
+    result = deepcopy(dict(layout))
+    panes = list(result.get("panes", []) or [])
+    if len(panes) >= MAX_WORKSPACE_PANES:
+        return result, None
+
+    root = normalized_workspace_root(result)
+    target_id = str(target_pane_id or source_pane_id or "")
+    if target_id not in workspace_pane_ids({"root": root}):
+        return result, None
+
+    source = next(
+        (
+            pane
+            for pane in panes
+            if str(pane.get("id", "")) == str(source_pane_id or "")
+        ),
+        None,
+    )
+    if source is None:
+        return result, None
+    source_tabs = list(source.get("tabs", []) or [])
+    tab_index = next(
+        (
+            index
+            for index, tab in enumerate(source_tabs)
+            if str(tab.get("id", "")) == str(tab_id or "")
+        ),
+        -1,
+    )
+    if tab_index < 0:
+        return result, None
+
+    pane_ids = [str(pane.get("id", "")) for pane in panes]
+    tab_ids = [
+        str(tab.get("id", ""))
+        for pane in panes
+        for tab in list(pane.get("tabs", []) or [])
+    ]
+    moved_tab = source_tabs.pop(tab_index)
+    if source_tabs:
+        source["tabs"] = source_tabs
+        if str(source.get("active_tab_id", "")) == str(tab_id or ""):
+            source["active_tab_id"] = source_tabs[
+                min(tab_index, len(source_tabs) - 1)
+            ]["id"]
+    else:
+        replacement_tab_id = _next_identifier("tab", tab_ids)
+        replacement_tab = {
+            "id": replacement_tab_id,
+            "title": f"View {len(tab_ids) + 1}",
+            "grid": empty_grid_snapshot(snapshot),
+        }
+        source["tabs"] = [replacement_tab]
+        source["active_tab_id"] = replacement_tab_id
+
+    new_pane_id = _next_identifier("pane", pane_ids)
+    panes.append(
+        {
+            "id": new_pane_id,
+            "active_tab_id": moved_tab["id"],
+            "tabs": [moved_tab],
+        }
+    )
+    split_id = _next_identifier("split", _split_ids(root))
+    replacement = {
+        "kind": "split",
+        "id": split_id,
+        "direction": (
+            "vertical" if str(direction) == "vertical" else "horizontal"
+        ),
+        "ratio": 0.5,
+        "first": _pane_leaf(target_id),
+        "second": _pane_leaf(new_pane_id),
+    }
+    root, replaced = _replace_pane_leaf(root, target_id, replacement)
+    if not replaced:
+        return deepcopy(dict(layout)), None
+    result["panes"] = _ordered_panes(panes, root)
+    _set_workspace_root(result, root)
+    result["active_pane_id"] = new_pane_id
+    result["active_tab_id"] = moved_tab["id"]
+    return result, new_pane_id
+
+
 def close_workspace_tab(
     layout: Mapping[str, Any], pane_id: str, tab_id: str
 ) -> Dict[str, Any]:

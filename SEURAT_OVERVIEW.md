@@ -119,13 +119,16 @@ settings, plugin options, help, and assistant proposal review.
 The workspace is represented by a bounded binary split tree. Its leaves are
 panes, each pane owns one or more tabs, and each tab owns a complete grid
 snapshot. Any pane can be split right or down, up to four panes. Split ratios
-are proportional so they survive window-size changes.
+are proportional so they survive window-size changes. Dragging a divider
+resizes the affected panes live with pane outlines and a proportional readout.
 
-Tabs can be created, renamed, closed, reordered, and moved between panes. A tab
-owns its layout mode, tile contents, canvas or grid geometry, selection,
-timeline-driver cell, sizing options, and visualization settings. Campaign
-selection, query state, catalog state, current timestep, and the default size
-for newly dropped plots are shared across the workspace.
+Tabs can be created, renamed, closed, reordered, and moved between panes.
+Dragging a tab to the right or bottom edge of a pane previews and creates a new
+split containing that tab. Tab renaming and closing remain available through
+the tab context menu. A tab owns its layout mode, tile contents, canvas or grid
+geometry, selection, timeline-driver cell, sizing options, and visualization
+settings. Campaign selection, query state, catalog state, current timestep,
+and the default size for newly dropped plots are shared across the workspace.
 
 ### Layout modes
 
