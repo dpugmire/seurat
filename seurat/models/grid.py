@@ -2,9 +2,25 @@
 
 from typing import Any, Dict, List, Optional, Tuple
 
+from . import canvas_layout
+
 
 GridCell = Dict[str, Any]
-GRID_LAYOUT_FIELDS = ("grid_row", "grid_col", "row_span", "col_span", "grid_hidden")
+GRID_LAYOUT_MODES = ("uniform", "spanning", "freeform")
+DEFAULT_GRID_LAYOUT_MODE = "freeform"
+GRID_LAYOUT_FIELDS = (
+    "grid_row",
+    "grid_col",
+    "row_span",
+    "col_span",
+    "grid_hidden",
+    "tile_id",
+    "tile_type",
+    "canvas_x",
+    "canvas_y",
+    "canvas_w",
+    "canvas_h",
+)
 
 
 def clamp_int(value, default: int, minimum: int, maximum: int) -> int:
@@ -54,6 +70,12 @@ def empty_grid_cell() -> GridCell:
         "row_span": 1,
         "col_span": 1,
         "grid_hidden": False,
+        "tile_id": "",
+        "tile_type": "plot",
+        "canvas_x": 0,
+        "canvas_y": 0,
+        "canvas_w": canvas_layout.CANVAS_DEFAULT_SIZE[0],
+        "canvas_h": canvas_layout.CANVAS_DEFAULT_SIZE[1],
         "status": "empty",
         "note": "",
     }
@@ -111,6 +133,48 @@ def cell_has_content(cell: GridCell) -> bool:
     if cell.get("plot"):
         return True
     return str(cell.get("status", "") or "") not in {"", "empty"}
+
+
+def normalize_freeform_cells(
+    raw_cells,
+    snap: bool = True,
+    columns: int = canvas_layout.CANVAS_COLUMNS,
+) -> List[GridCell]:
+    """Return a compact collection of visible canvas tiles."""
+
+    cells: List[GridCell] = []
+    geometries: List[Dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for raw_item in list(raw_cells or []):
+        base = empty_grid_cell()
+        if isinstance(raw_item, dict):
+            base.update(raw_item)
+        if bool(base.get("grid_hidden", False)) or not cell_has_content(base):
+            continue
+        fallback_index = len(cells)
+        fallback_id = f"tile-{fallback_index + 1}"
+        item = canvas_layout.geometry_from_cell(
+            base,
+            fallback_id=fallback_id,
+            fallback_index=fallback_index,
+            snap=snap,
+            columns=columns,
+        )
+        candidate_id = str(item["tile_id"] or fallback_id)
+        if candidate_id in seen_ids:
+            suffix = 2
+            while f"{candidate_id}-{suffix}" in seen_ids:
+                suffix += 1
+            candidate_id = f"{candidate_id}-{suffix}"
+            item["tile_id"] = candidate_id
+        seen_ids.add(candidate_id)
+        if any(canvas_layout.overlaps(item, existing) for existing in geometries):
+            item = canvas_layout.nearest_free(item, geometries, columns=columns)
+        base = canvas_layout.geometry_to_cell(base, item)
+        base["grid_hidden"] = False
+        cells.append(base)
+        geometries.append(item)
+    return cells
 
 
 def preserve_grid_geometry(cell: GridCell, existing: GridCell) -> GridCell:
@@ -239,10 +303,21 @@ def normalize_grid_cells(
     raw_cells,
     rows: int,
     cols: int,
-    layout_mode: str = "uniform",
+    layout_mode: str = DEFAULT_GRID_LAYOUT_MODE,
+    canvas_snap: bool = True,
+    canvas_columns: int = canvas_layout.CANVAS_COLUMNS,
 ) -> List[GridCell]:
+    if str(layout_mode or DEFAULT_GRID_LAYOUT_MODE).strip().lower() == "freeform":
+        return normalize_freeform_cells(
+            raw_cells,
+            snap=bool(canvas_snap),
+            columns=canvas_columns,
+        )
     count = rows * cols
-    spanning = str(layout_mode or "uniform").strip().lower() == "spanning"
+    spanning = (
+        str(layout_mode or DEFAULT_GRID_LAYOUT_MODE).strip().lower()
+        == "spanning"
+    )
     raw_items = list(raw_cells or [])
     items = raw_items if spanning else raw_items[:count]
     cells: List[GridCell] = []

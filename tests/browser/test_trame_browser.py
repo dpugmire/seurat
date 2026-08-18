@@ -65,6 +65,9 @@ def test_app_mounts_and_renders_structural_ui(page, seurat_server):
     page.locator('[data-seurat-interaction-runtime="mounted"]').wait_for(
         state="attached"
     )
+    page.locator('[data-seurat-canvas-runtime="mounted"]').wait_for(
+        state="attached"
+    )
     page.locator('[data-seurat-resize-runtime="mounted"]').wait_for(
         state="attached"
     )
@@ -94,6 +97,12 @@ def test_app_mounts_and_renders_structural_ui(page, seurat_server):
     )
     assert (
         page.locator(
+            '.v-application[data-seurat-canvas-runtime-owner="1"]'
+        ).count()
+        == 1
+    )
+    assert (
+        page.locator(
             '.v-application[data-seurat-interaction-runtime-owner="mounted"]'
         ).count()
         == 1
@@ -111,6 +120,7 @@ def test_app_mounts_and_renders_structural_ui(page, seurat_server):
                 && runtimes.media === window.seuratMediaRuntime
                 && runtimes.plot === window.seuratPlotRuntime
                 && runtimes.timeline === window.seuratTimelineRuntime
+                && runtimes.canvas === window.seuratCanvasRuntime
                 && runtimes.interaction === window.seuratInteractionRuntime
                 && runtimes.resize === window.seuratResizeRuntime
             );
@@ -179,6 +189,9 @@ def test_visualization_drop_on_inactive_pane_moves_and_activates_it(
     pane_one_bar.get_by_role("button", name="Pane and tab actions").click()
     page.get_by_text("Split right", exact=True).click()
     page.get_by_role("tab", name="View 2").wait_for(state="visible")
+    page.get_by_role("button", name="Settings", exact=True).click()
+    page.get_by_role("button", name="Uniform", exact=True).click()
+    page.get_by_role("button", name="Settings", exact=True).click()
     page.get_by_role("tab", name="View 1").click()
 
     source_grid = page.locator(
@@ -469,6 +482,9 @@ def test_workspace_tabs_preserve_independent_grid_track_sizes(
     )
     first_bar.get_by_role("button", name="New tab").click()
     page.get_by_role("tab", name="View 2").wait_for(state="visible")
+    page.get_by_role("button", name="Settings", exact=True).click()
+    page.get_by_role("button", name="Uniform", exact=True).click()
+    page.get_by_role("button", name="Settings", exact=True).click()
 
     grid = page.locator(".seurat-workspace-active-grid")
     original_sizes = grid.get_attribute("data-grid-column-sizes")
@@ -1224,6 +1240,789 @@ def test_grid_selection_assignment_and_layout_controls(page, seurat_server):
     page.get_by_role("button", name="Grid size 1 x 3 ▾", exact=True).click()
     page.get_by_role("button", name="2 x 2", exact=True).click()
     page.wait_for_function("document.querySelectorAll('.seurat-dropcell').length === 4")
+
+
+def test_freeform_canvas_drag_resize_toggles_and_variable_drop(page, seurat_server):
+    console_errors, page_errors, response_errors = _open_app(page, seurat_server)
+
+    page.get_by_role("button", name="Settings", exact=True).click()
+    page.get_by_role("button", name="Freeform", exact=True).click()
+    canvas = page.locator(".seurat-freeform-canvas")
+    canvas.wait_for(state="visible")
+    tiles = canvas.locator(":scope > .seurat-dropcell")
+    assert tiles.count() == 2
+    assert canvas.evaluate("element => getComputedStyle(element).backgroundImage") == "none"
+    page.wait_for_function(
+        """() => {
+            const canvas = document.querySelector('.seurat-freeform-canvas');
+            const first = document.querySelector('[data-tile-id="tile-1"]');
+            const second = document.querySelector('[data-tile-id="tile-2"]');
+            if (!canvas || !first || !second) return false;
+            const firstBounds = first.getBoundingClientRect();
+            const secondBounds = second.getBoundingClientRect();
+            const expectedWidth = canvas.clientWidth * 10 / 24 - 4;
+            return Math.abs(firstBounds.width - expectedWidth) < 1
+                && secondBounds.left > firstBounds.left;
+        }"""
+    )
+    first_bounds = tiles.nth(0).bounding_box()
+    second_bounds = tiles.nth(1).bounding_box()
+    assert first_bounds is not None
+    assert second_bounds is not None
+    gutter = second_bounds["x"] - (first_bounds["x"] + first_bounds["width"])
+    assert 3 <= gutter <= 5
+    assert page.get_by_role("button", name="Snap to grid", exact=True).get_attribute(
+        "aria-pressed"
+    ) == "true"
+    assert page.get_by_role("button", name="Nudge others", exact=True).get_attribute(
+        "aria-pressed"
+    ) == "true"
+
+    page.get_by_role("button", name="Settings", exact=True).click()
+    first = canvas.locator('[data-tile-id="tile-1"]')
+    _drag(page, first.locator(".seurat-tile-header"), delta_y=9 * 24)
+    page.wait_for_function(
+        "document.querySelector('[data-tile-id=\"tile-1\"]')"
+        ".getAttribute('data-canvas-y') === '9'"
+    )
+
+    second = canvas.locator('[data-tile-id="tile-2"]')
+    _drag(
+        page,
+        second.locator(".seurat-canvas-resize-handle"),
+        delta_x=90,
+        delta_y=48,
+    )
+    page.wait_for_function(
+        "document.querySelector('[data-tile-id=\"tile-2\"]')"
+        ".getAttribute('data-canvas-w') === '12'"
+    )
+    assert second.get_attribute("data-canvas-h") == "10"
+    page.wait_for_function(
+        "() => { const canvas = document.querySelector("
+        "'.seurat-freeform-canvas'); const tile = document.querySelector("
+        "'[data-tile-id=\"tile-2\"]'); return canvas && tile"
+        " && Math.abs(tile.getBoundingClientRect().width"
+        " - (canvas.clientWidth * 12 / 24 - 4)) < 1; }"
+    )
+    canvas_width = canvas.evaluate("element => element.clientWidth")
+    _drag(
+        page,
+        second.locator(".seurat-canvas-resize-handle"),
+        delta_x=-11 * canvas_width / 24,
+    )
+    page.wait_for_function(
+        "document.querySelector('[data-tile-id=\"tile-2\"]')"
+        ".getAttribute('data-canvas-w') === '2'"
+    )
+
+    variable = page.locator('[data-item="internal_energy"]')
+    variable.drag_to(canvas, target_position={"x": 540, "y": 340})
+    page.wait_for_function(
+        "document.querySelectorAll('.seurat-freeform-canvas > .seurat-dropcell').length === 3"
+    )
+    added = canvas.locator('[data-tile-id="tile-3"]')
+    added_bounds = added.bounding_box()
+    assert added_bounds is not None
+    assert added.get_attribute("data-canvas-w") == "2"
+    assert abs(added_bounds["width"] - added_bounds["height"]) <= 13
+
+    page.get_by_role("button", name="Settings", exact=True).click()
+    page.get_by_role("button", name="Show grid", exact=True).click()
+    page.wait_for_function(
+        "document.querySelector('.seurat-freeform-canvas')"
+        ".classList.contains('show-grid')"
+    )
+    overlay = canvas.locator(".seurat-canvas-grid-overlay")
+    overlay.wait_for(state="visible")
+    vertical_lines = overlay.locator(".seurat-canvas-grid-line.is-vertical")
+    horizontal_lines = overlay.locator(".seurat-canvas-grid-line.is-horizontal")
+    assert vertical_lines.count() == 23
+    assert horizontal_lines.count() >= 12
+    assert overlay.evaluate("element => getComputedStyle(element).backgroundImage") == "none"
+    assert vertical_lines.first.evaluate(
+        "element => getComputedStyle(element).backgroundColor"
+    ) == "rgba(54, 75, 98, 0.38)"
+    assert vertical_lines.nth(3).evaluate(
+        "element => getComputedStyle(element).backgroundColor"
+    ) == "rgba(40, 62, 86, 0.58)"
+
+    rendered_line = Image.open(
+        io.BytesIO(vertical_lines.first.screenshot())
+    ).convert("RGB")
+    assert min(
+        sum(rendered_line.getpixel((x, y)))
+        for x in range(rendered_line.width)
+        for y in range(rendered_line.height)
+    ) <= 650
+
+    before_columns_bounds = added.bounding_box()
+    assert before_columns_bounds is not None
+    page.get_by_role("button", name="48 columns", exact=True).click()
+    page.wait_for_function(
+        "document.querySelector('.seurat-freeform-canvas')"
+        ".getAttribute('data-canvas-cols') === '48'"
+    )
+    page.wait_for_timeout(180)
+    after_columns_bounds = added.bounding_box()
+    assert after_columns_bounds is not None
+    assert abs(after_columns_bounds["width"] - before_columns_bounds["width"]) <= 2
+    assert overlay.get_attribute("data-grid-columns") == "48"
+    assert vertical_lines.count() == 47
+
+    for columns in (12, 24, 36):
+        page.get_by_role("button", name=f"{columns} columns", exact=True).click()
+        page.wait_for_function(
+            "columns => document.querySelector('.seurat-freeform-canvas')"
+            ".getAttribute('data-canvas-cols') === String(columns)",
+            arg=columns,
+        )
+        assert overlay.get_attribute("data-grid-columns") == str(columns)
+        assert vertical_lines.count() == columns - 1
+        overlay_bounds = overlay.bounding_box()
+        first_line_bounds = vertical_lines.first.bounding_box()
+        assert overlay_bounds is not None
+        assert first_line_bounds is not None
+        assert abs(
+            first_line_bounds["x"]
+            - overlay_bounds["x"]
+            - overlay_bounds["width"] / columns
+        ) <= 1.5
+    assert page_errors == []
+    assert console_errors == [], response_errors
+
+
+def test_freeform_new_plot_size_is_shared_across_workspace_tabs(
+    page, seurat_server
+):
+    console_errors, page_errors, response_errors = _open_app(page, seurat_server)
+
+    page.get_by_role("button", name="Settings", exact=True).click()
+    page.get_by_role("button", name="Freeform", exact=True).click()
+    increase = page.get_by_role("button", name="Increase new plot size")
+    increase.click()
+    increase.click()
+    page.get_by_text("4 columns", exact=True).wait_for(state="visible")
+    page.get_by_role("button", name="Settings", exact=True).click()
+
+    first_bar = page.locator(
+        ".seurat-workspace-tab-bar.seurat-workspace-slot-first"
+    )
+    first_bar.get_by_role("button", name="New tab").click()
+    page.get_by_role("tab", name="View 2").wait_for(state="visible")
+
+    canvas = page.locator(".seurat-freeform-canvas")
+    canvas.wait_for(state="visible")
+    assert canvas.get_attribute("data-canvas-default-tile-width") == "4"
+    page.get_by_role("button", name="Settings", exact=True).click()
+    page.get_by_text("4 columns", exact=True).wait_for(state="visible")
+    page.get_by_role("button", name="Settings", exact=True).click()
+
+    page.locator('[data-item="internal_energy"]').drag_to(
+        canvas,
+        target_position={"x": 260, "y": 180},
+    )
+    page.wait_for_function(
+        "document.querySelectorAll('.seurat-freeform-canvas > .seurat-dropcell').length === 1"
+    )
+    added = canvas.locator('[data-tile-id="tile-1"]')
+    assert added.get_attribute("data-canvas-w") == "4"
+    added_bounds = added.bounding_box()
+    assert added_bounds is not None
+    assert abs(added_bounds["width"] - added_bounds["height"]) <= 13
+
+    page.get_by_role("tab", name="View 1").click()
+    page.get_by_role("button", name="Settings", exact=True).click()
+    page.get_by_text("4 columns", exact=True).wait_for(state="visible")
+    assert page_errors == []
+    assert console_errors == [], response_errors
+
+
+def test_freeform_crowded_drop_preserves_configured_plot_size(
+    page, seurat_server
+):
+    console_errors, page_errors, response_errors = _open_app(
+        page, seurat_server, "freeform-column-seam"
+    )
+
+    page.get_by_role("button", name="Settings", exact=True).click()
+    increase = page.get_by_role("button", name="Increase new plot size")
+    for _ in range(10):
+        increase.click()
+    page.get_by_text("12 columns", exact=True).wait_for(state="visible")
+    page.get_by_role("button", name="Settings", exact=True).click()
+
+    canvas = page.locator(".seurat-freeform-canvas")
+    canvas.wait_for(state="visible")
+    assert canvas.get_attribute("data-canvas-default-tile-width") == "12"
+    canvas_width = canvas.evaluate("element => element.clientWidth")
+    page.locator('[data-item="internal_energy"]').drag_to(
+        canvas,
+        target_position={"x": 10 * canvas_width / 24, "y": 4 * 24},
+    )
+    page.wait_for_function(
+        "document.querySelectorAll("
+        "'.seurat-freeform-canvas > .seurat-dropcell').length === 3"
+    )
+
+    added = canvas.locator('[data-tile-id="tile-3"]')
+    assert added.get_attribute("data-canvas-w") == "12"
+    added_bounds = added.bounding_box()
+    assert added_bounds is not None
+    assert abs(added_bounds["width"] - added_bounds["height"]) <= 13
+    assert page_errors == []
+    assert console_errors == [], response_errors
+
+
+def test_freeform_canvas_zoom_fit_and_scaled_pointer_geometry(page, seurat_server):
+    console_errors, page_errors, response_errors = _open_app(page, seurat_server)
+
+    page.get_by_role("button", name="Settings", exact=True).click()
+    page.get_by_role("button", name="Freeform", exact=True).click()
+    page.get_by_role("button", name="Show grid", exact=True).click()
+    page.get_by_role("button", name="Settings", exact=True).click()
+
+    canvas = page.locator(".seurat-freeform-canvas")
+    canvas.wait_for(state="visible")
+    first = canvas.locator('[data-tile-id="tile-1"]')
+    page.wait_for_function(
+        "() => { const canvas = document.querySelector('.seurat-freeform-canvas');"
+        " const tile = document.querySelector('[data-tile-id=\"tile-1\"]');"
+        " if (!canvas || !tile) return false;"
+        " return Math.abs(tile.getBoundingClientRect().width"
+        " - (canvas.clientWidth * 10 / 24 - 4)) < 1; }"
+    )
+    original_bounds = first.bounding_box()
+    assert original_bounds is not None
+    assert float(canvas.get_attribute("data-canvas-effective-zoom")) == 1.0
+
+    page.get_by_role("button", name="Zoom out", exact=True).click()
+    page.wait_for_function(
+        "document.querySelector('.seurat-freeform-canvas')"
+        ".getAttribute('data-canvas-effective-zoom') === '0.75'"
+    )
+    page.wait_for_timeout(180)
+    zoomed_bounds = first.bounding_box()
+    assert zoomed_bounds is not None
+    assert abs(zoomed_bounds["width"] / original_bounds["width"] - 0.75) <= 0.02
+    assert first.get_attribute("data-canvas-w") == "10"
+    assert page.locator("[data-canvas-zoom-label]").inner_text() == "75%"
+
+    canvas_width = canvas.evaluate("element => element.clientWidth")
+    visual_column = canvas_width * 0.75 / 24
+    vertical_line = canvas.locator(
+        ".seurat-canvas-grid-line.is-vertical"
+    ).first.bounding_box()
+    canvas_bounds = canvas.bounding_box()
+    assert vertical_line is not None
+    assert canvas_bounds is not None
+    assert abs(vertical_line["x"] - canvas_bounds["x"] - visual_column) <= 1.5
+
+    _drag(
+        page,
+        first.locator(".seurat-tile-header"),
+        delta_y=3 * 24 * 0.75,
+    )
+    page.wait_for_function(
+        "document.querySelector('[data-tile-id=\"tile-1\"]')"
+        ".getAttribute('data-canvas-y') === '3'"
+    )
+
+    _drag(
+        page,
+        first.locator(".seurat-canvas-resize-handle"),
+        delta_x=2 * visual_column,
+        delta_y=2 * 24 * 0.75,
+    )
+    page.wait_for_function(
+        "document.querySelector('[data-tile-id=\"tile-1\"]')"
+        ".getAttribute('data-canvas-w') === '12'"
+    )
+    assert first.get_attribute("data-canvas-h") == "10"
+
+    _drag(
+        page,
+        first.locator(".seurat-tile-header"),
+        delta_y=12 * 24 * 0.75,
+    )
+    page.wait_for_function(
+        "document.querySelector('[data-tile-id=\"tile-1\"]')"
+        ".getAttribute('data-canvas-y') === '15'"
+    )
+
+    page.get_by_role("button", name="Fit", exact=True).click()
+    page.wait_for_function(
+        "() => { const canvas = document.querySelector('.seurat-freeform-canvas');"
+        " return canvas && canvas.getAttribute('data-canvas-fit') === '1'"
+        " && Number(canvas.getAttribute('data-canvas-effective-zoom')) < 0.75; }"
+    )
+    page.wait_for_timeout(180)
+    fit_zoom = float(canvas.get_attribute("data-canvas-effective-zoom"))
+    assert page.get_by_role("button", name="Fit", exact=True).get_attribute(
+        "aria-pressed"
+    ) == "true"
+    assert page.locator("[data-canvas-zoom-label]").inner_text() == (
+        f"{round(fit_zoom * 100)}%"
+    )
+
+    canvas_bounds = canvas.bounding_box()
+    assert canvas_bounds is not None
+    for tile in canvas.locator(":scope > .seurat-dropcell").all():
+        tile_bounds = tile.bounding_box()
+        assert tile_bounds is not None
+        assert tile_bounds["x"] >= canvas_bounds["x"] - 1
+        assert tile_bounds["y"] >= canvas_bounds["y"] - 1
+        assert tile_bounds["x"] + tile_bounds["width"] <= (
+            canvas_bounds["x"] + canvas_bounds["width"] + 1
+        )
+        assert tile_bounds["y"] + tile_bounds["height"] <= (
+            canvas_bounds["y"] + canvas_bounds["height"] + 1
+        )
+
+    _drag(
+        page,
+        first.locator(".seurat-tile-header"),
+        delta_y=-5 * 24 * fit_zoom,
+    )
+    page.wait_for_function(
+        "document.querySelector('[data-tile-id=\"tile-1\"]')"
+        ".getAttribute('data-canvas-y') === '10'"
+    )
+    page.wait_for_function(
+        "previous => Number(document.querySelector('.seurat-freeform-canvas')"
+        ".getAttribute('data-canvas-effective-zoom')) > previous",
+        arg=fit_zoom,
+    )
+    recomputed_fit_zoom = float(
+        canvas.get_attribute("data-canvas-effective-zoom")
+    )
+    assert recomputed_fit_zoom > fit_zoom
+    assert page.get_by_role("button", name="Fit", exact=True).get_attribute(
+        "aria-pressed"
+    ) == "true"
+
+    page.wait_for_function(
+        "() => { const canvas = document.querySelector('.seurat-freeform-canvas');"
+        " return Math.abs(Number(canvas.getAttribute('data-canvas-zoom'))"
+        " - Number(canvas.getAttribute('data-canvas-effective-zoom'))) < 0.002; }"
+    )
+    page.get_by_role("button", name="Zoom in", exact=True).click()
+    page.wait_for_function(
+        "document.querySelector('.seurat-freeform-canvas')"
+        ".getAttribute('data-canvas-fit') === '0'"
+    )
+    assert abs(
+        float(canvas.get_attribute("data-canvas-effective-zoom"))
+        - min(2.0, recomputed_fit_zoom + 0.25)
+    ) <= 0.002
+    assert page.get_by_role("button", name="Fit", exact=True).get_attribute(
+        "aria-pressed"
+    ) == "false"
+    assert page_errors == []
+    assert console_errors == [], response_errors
+
+
+def test_freeform_canvas_resize_preview_and_directional_handles(
+    page, seurat_server
+):
+    console_errors, page_errors, response_errors = _open_app(
+        page, seurat_server, "freeform-resize"
+    )
+
+    canvas = page.locator(".seurat-freeform-canvas")
+    tile = canvas.locator('[data-tile-id="tile-1"]')
+    placeholder = canvas.locator(":scope > .seurat-canvas-placeholder")
+    canvas.wait_for(state="visible")
+    page.wait_for_function(
+        "document.querySelectorAll('[data-tile-id=\"tile-1\"] "
+        ".seurat-canvas-resize-zone').length === 8"
+    )
+    handles = tile.locator(".seurat-canvas-resize-zone")
+    assert handles.count() == 8
+    assert tile.locator(".seurat-canvas-resize-handle").count() == 1
+
+    expected_cursors = {
+        "top": "ns-resize",
+        "right": "ew-resize",
+        "bottom": "ns-resize",
+        "left": "ew-resize",
+        "top-left": "nwse-resize",
+        "top-right": "nesw-resize",
+        "bottom-left": "nesw-resize",
+        "bottom-right": "nwse-resize",
+    }
+    for edge, cursor in expected_cursors.items():
+        handle = tile.locator(f'[data-resize-edge="{edge}"]')
+        assert handle.count() == 1
+        assert handle.evaluate(
+            "element => getComputedStyle(element).cursor"
+        ) == cursor
+    close_button = tile.locator(".seurat-cell-close")
+    assert close_button.evaluate(
+        "button => { const bounds = button.getBoundingClientRect();"
+        " const hit = document.elementFromPoint("
+        "bounds.left + bounds.width / 2, bounds.top + bounds.height / 2);"
+        " return hit === button || (hit && hit.closest('.seurat-cell-close')"
+        " === button); }"
+    )
+
+    canvas_width = canvas.evaluate("element => element.clientWidth")
+    column_width = canvas_width / 24
+
+    right_handle = tile.locator('[data-resize-edge="right"]')
+    original_bounds = tile.bounding_box()
+    assert original_bounds is not None
+    _drag(page, right_handle, delta_x=-2 * column_width, release=False)
+    placeholder.wait_for(state="visible")
+    preview_bounds = placeholder.bounding_box()
+    assert preview_bounds is not None
+    assert preview_bounds["width"] < original_bounds["width"]
+    assert int(
+        placeholder.evaluate("element => getComputedStyle(element).zIndex")
+    ) > int(tile.evaluate("element => getComputedStyle(element).zIndex"))
+    page.mouse.up()
+    page.wait_for_function(
+        "document.querySelector('[data-tile-id=\"tile-1\"]')"
+        ".getAttribute('data-canvas-w') === '6'"
+    )
+    page.wait_for_timeout(180)
+    _drag(page, right_handle, delta_x=2 * column_width)
+    page.wait_for_function(
+        "document.querySelector('[data-tile-id=\"tile-1\"]')"
+        ".getAttribute('data-canvas-w') === '8'"
+    )
+    page.wait_for_timeout(180)
+
+    edge_cases = (
+        ("top", 0, 2, (6, 6, 8, 6)),
+        ("bottom", 0, -2, (6, 4, 8, 6)),
+        ("left", 2, 0, (8, 4, 6, 8)),
+    )
+    for edge, dx, dy, expected in edge_cases:
+        handle = tile.locator(f'[data-resize-edge="{edge}"]')
+        _drag(
+            page,
+            handle,
+            delta_x=dx * column_width,
+            delta_y=dy * 24,
+        )
+        page.wait_for_function(
+            "expected => { const tile = document.querySelector("
+            "'[data-tile-id=\"tile-1\"]'); return tile"
+            " && Number(tile.dataset.canvasX) === expected[0]"
+            " && Number(tile.dataset.canvasY) === expected[1]"
+            " && Number(tile.dataset.canvasW) === expected[2]"
+            " && Number(tile.dataset.canvasH) === expected[3]; }",
+            arg=list(expected),
+        )
+        page.wait_for_timeout(180)
+        _drag(
+            page,
+            handle,
+            delta_x=-dx * column_width,
+            delta_y=-dy * 24,
+        )
+        page.wait_for_function(
+            "() => { const tile = document.querySelector("
+            "'[data-tile-id=\"tile-1\"]'); return tile"
+            " && tile.dataset.canvasX === '6'"
+            " && tile.dataset.canvasY === '4'"
+            " && tile.dataset.canvasW === '8'"
+            " && tile.dataset.canvasH === '8'; }"
+        )
+        page.wait_for_timeout(180)
+
+    corner_cases = (
+        ("top-left", 1, 1, (7, 5, 7, 7)),
+        ("top-right", -1, 1, (6, 5, 7, 7)),
+        ("bottom-left", 1, -1, (7, 4, 7, 7)),
+        ("bottom-right", -1, -1, (6, 4, 7, 7)),
+    )
+    for edge, dx, dy, expected in corner_cases:
+        handle = tile.locator(f'[data-resize-edge="{edge}"]')
+        _drag(
+            page,
+            handle,
+            delta_x=dx * column_width,
+            delta_y=dy * 24,
+        )
+        page.wait_for_function(
+            "expected => { const tile = document.querySelector("
+            "'[data-tile-id=\"tile-1\"]'); return tile"
+            " && Number(tile.dataset.canvasX) === expected[0]"
+            " && Number(tile.dataset.canvasY) === expected[1]"
+            " && Number(tile.dataset.canvasW) === expected[2]"
+            " && Number(tile.dataset.canvasH) === expected[3]; }",
+            arg=list(expected),
+        )
+        page.wait_for_timeout(180)
+        _drag(
+            page,
+            handle,
+            delta_x=-dx * column_width,
+            delta_y=-dy * 24,
+        )
+        page.wait_for_function(
+            "() => { const tile = document.querySelector("
+            "'[data-tile-id=\"tile-1\"]'); return tile"
+            " && tile.dataset.canvasX === '6'"
+            " && tile.dataset.canvasY === '4'"
+            " && tile.dataset.canvasW === '8'"
+            " && tile.dataset.canvasH === '8'; }"
+        )
+        page.wait_for_timeout(180)
+
+    assert page_errors == []
+    assert console_errors == [], response_errors
+
+
+def test_freeform_1d_plot_redraws_at_resized_dimensions(page, seurat_server):
+    console_errors, page_errors, response_errors = _open_app(
+        page, seurat_server, "freeform-resize"
+    )
+
+    canvas = page.locator(".seurat-freeform-canvas")
+    tile = canvas.locator('[data-tile-id="tile-1"]')
+    plot = tile.locator(".seurat-plot1d")
+    plot.locator("svg").wait_for(state="visible")
+    page.evaluate(
+        """() => {
+            const runtime = window.seuratPlotRuntime;
+            const original = runtime.scheduleRender;
+            window.__seuratPlotResizeRenderRequests = 0;
+            runtime.scheduleRender = function() {
+                window.__seuratPlotResizeRenderRequests += 1;
+                return original();
+            };
+        }"""
+    )
+
+    def plot_metrics():
+        return plot.evaluate(
+            """element => {
+                const bounds = element.getBoundingClientRect();
+                const viewBox = element.querySelector('svg').viewBox.baseVal;
+                return {
+                    width: bounds.width,
+                    height: bounds.height,
+                    view_width: viewBox.width,
+                    view_height: viewBox.height,
+                    series_path: element.querySelector('svg > path')?.getAttribute('d') || '',
+                };
+            }"""
+        )
+
+    initial = plot_metrics()
+    assert initial["view_width"] == pytest.approx(initial["width"], abs=1.5)
+    assert initial["view_height"] == pytest.approx(initial["height"], abs=1.5)
+
+    canvas_width = canvas.evaluate("element => element.clientWidth")
+    _drag(
+        page,
+        tile.locator('[data-resize-edge="right"]'),
+        delta_x=-2 * canvas_width / 24,
+    )
+    page.wait_for_function(
+        "document.querySelector('[data-tile-id=\"tile-1\"]')"
+        ".getAttribute('data-canvas-w') === '6'"
+    )
+    page.wait_for_function(
+        "previous => { const plot = document.querySelector("
+        "'[data-tile-id=\"tile-1\"] .seurat-plot1d');"
+        " const bounds = plot.getBoundingClientRect();"
+        " const viewBox = plot.querySelector('svg').viewBox.baseVal;"
+        " return bounds.width < previous"
+        " && Math.abs(viewBox.width - bounds.width) < 1.5; }",
+        arg=initial["view_width"],
+    )
+    narrower = plot_metrics()
+    assert narrower["view_width"] < initial["view_width"]
+    assert narrower["view_width"] == pytest.approx(narrower["width"], abs=1.5)
+    assert narrower["view_height"] == pytest.approx(narrower["height"], abs=1.5)
+    assert narrower["series_path"] != initial["series_path"]
+    assert page.evaluate("window.__seuratPlotResizeRenderRequests") > 0
+
+    _drag(
+        page,
+        tile.locator('[data-resize-edge="bottom"]'),
+        delta_y=-2 * 24,
+    )
+    page.wait_for_function(
+        "document.querySelector('[data-tile-id=\"tile-1\"]')"
+        ".getAttribute('data-canvas-h') === '6'"
+    )
+    page.wait_for_function(
+        "previous => { const plot = document.querySelector("
+        "'[data-tile-id=\"tile-1\"] .seurat-plot1d');"
+        " const bounds = plot.getBoundingClientRect();"
+        " const viewBox = plot.querySelector('svg').viewBox.baseVal;"
+        " return bounds.height < previous"
+        " && Math.abs(viewBox.height - bounds.height) < 1.5; }",
+        arg=narrower["view_height"],
+    )
+    shorter = plot_metrics()
+    assert shorter["view_height"] < narrower["view_height"], (narrower, shorter)
+    assert shorter["view_width"] == pytest.approx(shorter["width"], abs=1.5)
+    assert shorter["view_height"] == pytest.approx(shorter["height"], abs=1.5)
+    assert shorter["series_path"] != narrower["series_path"]
+
+    assert page_errors == []
+    assert console_errors == [], response_errors
+
+
+def test_freeform_vertical_seam_inserts_tile_between_neighbors(page, seurat_server):
+    console_errors, page_errors, response_errors = _open_app(page, seurat_server)
+
+    page.get_by_role("button", name="Settings", exact=True).click()
+    page.get_by_role("button", name="Freeform", exact=True).click()
+    page.get_by_role("button", name="Settings", exact=True).click()
+    canvas = page.locator(".seurat-freeform-canvas")
+    variable = page.locator('[data-item="internal_energy"]')
+    canvas_width = canvas.evaluate("element => element.clientWidth")
+    variable.drag_to(
+        canvas,
+        target_position={"x": 9.8 * canvas_width / 24, "y": 0.1 * 24},
+    )
+    page.wait_for_function(
+        "document.querySelectorAll('.seurat-freeform-canvas > .seurat-dropcell').length === 3"
+    )
+
+    moving = canvas.locator('[data-tile-id="tile-3"]')
+    page.wait_for_function(
+        "document.querySelector('[data-tile-id=\"tile-3\"]')"
+        ".getAttribute('data-canvas-x') === '10'"
+    )
+
+    right = canvas.locator('[data-tile-id="tile-2"]')
+    inserted_right = int(moving.get_attribute("data-canvas-x")) + int(
+        moving.get_attribute("data-canvas-w")
+    )
+    assert int(right.get_attribute("data-canvas-x")) == inserted_right
+    assert int(right.get_attribute("data-canvas-w")) >= 2
+    assert (
+        int(right.get_attribute("data-canvas-x"))
+        + int(right.get_attribute("data-canvas-w"))
+        <= 24
+    )
+    assert page_errors == []
+    assert console_errors == [], response_errors
+
+
+def test_freeform_width_resize_pushes_right_neighbor_horizontally(page, seurat_server):
+    console_errors, page_errors, response_errors = _open_app(
+        page,
+        seurat_server,
+        "freeform-column-seam",
+    )
+
+    canvas = page.locator(".seurat-freeform-canvas")
+    first = canvas.locator('[data-tile-id="tile-1"]')
+    second = canvas.locator('[data-tile-id="tile-2"]')
+    canvas_width = canvas.evaluate("element => element.clientWidth")
+
+    _drag(
+        page,
+        first.locator(".seurat-canvas-resize-handle"),
+        delta_x=2 * canvas_width / 24,
+    )
+    page.wait_for_function(
+        "document.querySelector('[data-tile-id=\"tile-1\"]')"
+        ".getAttribute('data-canvas-w') === '12' && "
+        "document.querySelector('[data-tile-id=\"tile-2\"]')"
+        ".getAttribute('data-canvas-x') === '12'"
+    )
+
+    assert first.get_attribute("data-canvas-y") == "0"
+    assert second.get_attribute("data-canvas-y") == "0"
+    assert page_errors == []
+    assert console_errors == [], response_errors
+
+
+def test_freeform_horizontal_seam_inserts_tile_between_neighbors(page, seurat_server):
+    console_errors, page_errors, response_errors = _open_app(
+        page,
+        seurat_server,
+        "freeform-row-seam",
+    )
+
+    canvas = page.locator(".seurat-freeform-canvas")
+    first = canvas.locator('[data-tile-id="tile-1"]')
+    canvas_width = canvas.evaluate("element => element.clientWidth")
+
+    variable = page.locator('[data-item="internal_energy"]')
+    variable.drag_to(
+        canvas,
+        target_position={"x": 10.1 * canvas_width / 24, "y": 7.8 * 24},
+    )
+    page.wait_for_function(
+        "document.querySelectorAll('.seurat-freeform-canvas > .seurat-dropcell').length === 3"
+    )
+    moving = canvas.locator('[data-tile-id="tile-3"]')
+    page.wait_for_function(
+        "document.querySelector('[data-tile-id=\"tile-3\"]')"
+        ".getAttribute('data-canvas-y') === '8'"
+    )
+
+    inserted_height = int(moving.get_attribute("data-canvas-h"))
+    assert moving.get_attribute("data-canvas-x") == "10"
+    assert first.get_attribute("data-canvas-y") == str(8 + inserted_height)
+    assert page_errors == []
+    assert console_errors == [], response_errors
+
+
+def test_freeform_tile_moves_to_another_freeform_pane(page, seurat_server):
+    console_errors, page_errors, response_errors = _open_app(page, seurat_server)
+
+    page.get_by_role("button", name="Settings", exact=True).click()
+    page.get_by_role("button", name="Freeform", exact=True).click()
+    page.get_by_role("button", name="Settings", exact=True).click()
+    pane_one_bar = page.locator(
+        '.seurat-workspace-tab-bar[data-pane-frame-id="pane-1"]'
+    )
+    pane_one_bar.get_by_role("button", name="Pane and tab actions").click()
+    page.get_by_text("Split right", exact=True).click()
+    page.get_by_role("tab", name="View 2").wait_for(state="visible")
+    page.get_by_role("tab", name="View 1").click()
+
+    source = page.locator(
+        '.seurat-freeform-canvas[data-pane-id="pane-1"] '
+        '.seurat-dropcell[data-tile-id="tile-1"] .seurat-tile-header'
+    )
+    destination = page.locator(
+        '.seurat-freeform-preview[data-pane-id="pane-2"]'
+    )
+    source_bounds = source.bounding_box()
+    destination_bounds = destination.bounding_box()
+    assert source_bounds is not None
+    assert destination_bounds is not None
+    source_center_x = source_bounds["x"] + source_bounds["width"] / 2
+    source_center_y = source_bounds["y"] + source_bounds["height"] / 2
+    destination_center_x = (
+        destination_bounds["x"] + destination_bounds["width"] / 2
+    )
+    destination_center_y = (
+        destination_bounds["y"] + destination_bounds["height"] / 2
+    )
+    _drag(
+        page,
+        source,
+        delta_x=destination_center_x - source_center_x,
+        delta_y=destination_center_y - source_center_y,
+    )
+
+    destination_grid = page.locator(
+        '.seurat-freeform-canvas[data-pane-id="pane-2"]'
+    )
+    destination_grid.wait_for(state="visible")
+    assert destination_grid.locator(
+        ':scope > .seurat-dropcell[data-tile-id="tile-1"]'
+    ).count() == 1
+    assert page.locator(
+        '.seurat-freeform-preview[data-pane-id="pane-1"] > .seurat-dropcell'
+    ).count() == 1
+    assert page.locator(".seurat-canvas-cross-pane-ghost").count() == 0
+    assert page_errors == []
+    assert console_errors == [], response_errors
 
 
 def test_cell_context_menu_opens(page, seurat_server):

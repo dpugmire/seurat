@@ -14,10 +14,12 @@ from seurat.models.workspace_layout import (
     grid_snapshot,
     normalized_workspace_root,
 )
+from seurat.models import canvas_layout
+from seurat.models.grid import DEFAULT_GRID_LAYOUT_MODE, cell_has_content
 
 
 WORKSPACE_FORMAT = "seurat-workspace"
-WORKSPACE_VERSION = 1
+WORKSPACE_VERSION = 2
 
 _CELL_FIELDS = (
     "variable_id",
@@ -52,6 +54,12 @@ _CELL_FIELDS = (
     "row_span",
     "col_span",
     "grid_hidden",
+    "tile_id",
+    "tile_type",
+    "canvas_x",
+    "canvas_y",
+    "canvas_w",
+    "canvas_h",
 )
 
 
@@ -86,11 +94,34 @@ def _cell_state(cell: Dict[str, Any], index: int) -> Dict[str, Any]:
 
 
 def _grid_document(grid: Dict[str, Any]) -> Dict[str, Any]:
+    layout_mode = str(
+        grid.get("layout_mode", DEFAULT_GRID_LAYOUT_MODE)
+        or DEFAULT_GRID_LAYOUT_MODE
+    )
     raw_cells = list(grid.get("cells", []) or [])
+    if layout_mode == "freeform":
+        raw_cells = [
+            cell
+            for cell in raw_cells
+            if isinstance(cell, dict) and cell_has_content(cell)
+        ]
     return {
         "rows": grid.get("rows", 3),
         "columns": grid.get("columns", 3),
-        "layout_mode": str(grid.get("layout_mode", "uniform") or "uniform"),
+        "layout_mode": layout_mode,
+        "canvas_columns": grid.get(
+            "canvas_columns", canvas_layout.CANVAS_COLUMNS
+        ),
+        "canvas_row_height": grid.get(
+            "canvas_row_height", canvas_layout.CANVAS_ROW_HEIGHT
+        ),
+        "canvas_snap_to_grid": bool(grid.get("canvas_snap_to_grid", True)),
+        "canvas_nudge_others": bool(grid.get("canvas_nudge_others", True)),
+        "canvas_show_grid": bool(grid.get("canvas_show_grid", False)),
+        "canvas_zoom": canvas_layout.normalize_zoom(
+            grid.get("canvas_zoom", canvas_layout.CANVAS_ZOOM_DEFAULT)
+        ),
+        "canvas_fit_to_view": bool(grid.get("canvas_fit_to_view", False)),
         "sizing_mode": str(grid.get("sizing_mode", "static") or "static"),
         "cell_size": grid.get("cell_size", 300),
         "fit_minimum_cell_size": grid.get("fit_minimum_cell_size", 180),
@@ -214,6 +245,13 @@ def workspace_document(state, campaign_path: str) -> Dict[str, Any]:
                 "scalar_plot_policy": str(
                     _state_value(state, "scalarPlotPolicy", "always") or "always"
                 ),
+                "canvas_default_tile_width": canvas_layout.normalize_drop_width(
+                    _state_value(
+                        state,
+                        "canvasDefaultTileWidth",
+                        canvas_layout.CANVAS_DEFAULT_DROP_WIDTH,
+                    )
+                ),
             },
         },
     }
@@ -298,15 +336,36 @@ def _validate_grid_document(grid: Any, description: str) -> None:
     cells = grid.get("cells")
     if not isinstance(cells, list):
         raise WorkspaceStateError(f"{description}.cells must be a JSON array")
-    if len(cells) > 64:
-        raise WorkspaceStateError(
-            f"{description}.cells exceeds the 8x8 grid limit"
+    layout_mode = str(
+        grid.get("layout_mode", DEFAULT_GRID_LAYOUT_MODE)
+        or DEFAULT_GRID_LAYOUT_MODE
+    )
+    limit = canvas_layout.CANVAS_MAX_TILES if layout_mode == "freeform" else 64
+    if len(cells) > limit:
+        label = (
+            f"{limit}-tile limit"
+            if layout_mode == "freeform"
+            else "8x8 grid limit"
         )
+        raise WorkspaceStateError(f"{description}.cells exceeds the {label}")
     for index, cell in enumerate(cells):
         if not isinstance(cell, dict):
             raise WorkspaceStateError(
                 f"{description}.cells[{index}] must be a JSON object"
             )
+    if layout_mode == "freeform":
+        geometries = [
+            canvas_layout.geometry_from_cell(
+                cell,
+                fallback_id="",
+                fallback_index=index,
+                snap=bool(grid.get("canvas_snap_to_grid", True)),
+            )
+            for index, cell in enumerate(cells)
+        ]
+        valid, message = canvas_layout.validate_layout(geometries)
+        if not valid:
+            raise WorkspaceStateError(f"{description}: {message}")
 
 
 def _validate_workspace_layout(value: Any) -> None:

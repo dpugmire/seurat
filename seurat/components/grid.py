@@ -4,6 +4,7 @@ from trame.app import TrameComponent
 from trame.widgets import html
 from trame.widgets import vuetify3 as vuetify
 
+from seurat.models import canvas_layout
 from seurat.widgets import GridRuntime
 
 from .dialogs import (
@@ -85,19 +86,65 @@ def _build_grid_size_picker(ctrl):
                         )
 
 
+def _build_canvas_zoom_controls(ctrl):
+    with vuetify.Template(v_if="gridLayoutMode === 'freeform'"):
+        with html.Div(
+            classes="seurat-canvas-zoom-controls",
+            raw_attrs=['aria-label="Canvas zoom controls"'],
+        ):
+            html.Button(
+                "−",
+                classes="seurat-canvas-zoom-button",
+                click=(ctrl.adjust_canvas_zoom, "[-0.25]"),
+                raw_attrs=[
+                    'type="button"',
+                    'aria-label="Zoom out"',
+                    ':disabled="!canvasFitToView && Number(canvasZoom || 1) <= 0.25"',
+                ],
+                title="Zoom out",
+            )
+            html.Span(
+                "{{ Math.round(Number(canvasZoom || 1) * 100) + '%' }}",
+                classes="seurat-canvas-zoom-value",
+                raw_attrs=['data-canvas-zoom-label="1"'],
+            )
+            html.Button(
+                "+",
+                classes="seurat-canvas-zoom-button",
+                click=(ctrl.adjust_canvas_zoom, "[0.25]"),
+                raw_attrs=[
+                    'type="button"',
+                    'aria-label="Zoom in"',
+                    ':disabled="!canvasFitToView && Number(canvasZoom || 1) >= 2"',
+                ],
+                title="Zoom in",
+            )
+            html.Button(
+                "Fit",
+                classes="seurat-canvas-fit-button",
+                click=(ctrl.set_canvas_fit_to_view, "[true]"),
+                raw_attrs=[
+                    'type="button"',
+                    ':aria-pressed="canvasFitToView ? \'true\' : \'false\'"',
+                    ':class="{ active: canvasFitToView }"',
+                ],
+                title="Fit all tiles in the canvas",
+            )
+
+
 def _build_grid_settings_popover(ctrl):
     html.Div("Settings", classes="seurat-toolbar-popover-title")
     with html.Div(classes="seurat-settings-section"):
         html.Div("Layout", classes="seurat-settings-section-title")
         html.Div("Cell layout", classes="seurat-grid-sizing-section-label")
-        with html.Div(classes="seurat-grid-sizing-mode"):
+        with html.Div(classes="seurat-grid-sizing-mode seurat-layout-mode-selector"):
             html.Button(
                 "Uniform",
                 classes="seurat-grid-sizing-mode-btn",
                 click=(ctrl.set_grid_layout_mode, "['uniform']"),
                 raw_attrs=[
                     'type="button"',
-                    ':class="{ active: gridLayoutMode !== \'spanning\' }"',
+                    ':class="{ active: gridLayoutMode === \'uniform\' }"',
                 ],
                 title="Use one cell per grid slot",
             )
@@ -111,29 +158,123 @@ def _build_grid_settings_popover(ctrl):
                 ],
                 title="Allow cells to span multiple rows or columns",
             )
-        html.Div("Size mode", classes="seurat-grid-sizing-section-label")
-        with html.Div(classes="seurat-grid-sizing-mode"):
             html.Button(
-                "Static",
+                "Freeform",
                 classes="seurat-grid-sizing-mode-btn",
-                click=(ctrl.set_grid_sizing_mode, "['static']"),
+                click=(ctrl.set_grid_layout_mode, "['freeform']"),
                 raw_attrs=[
                     'type="button"',
-                    ':class="{ active: gridSizingMode !== \'fit\' }"',
+                    ':class="{ active: gridLayoutMode === \'freeform\' }"',
                 ],
-                title="Use fixed-size cells",
+                title="Place and resize tiles on a snapping canvas",
             )
-            html.Button(
-                "Fit window",
-                classes="seurat-grid-sizing-mode-btn",
-                click=(ctrl.set_grid_sizing_mode, "['fit']"),
-                raw_attrs=[
-                    'type="button"',
-                    ':class="{ active: gridSizingMode === \'fit\' }"',
-                ],
-                title="Resize cells to fill the grid viewport",
+        with vuetify.Template(v_if="gridLayoutMode === 'freeform'"):
+            html.Div("Canvas behavior", classes="seurat-grid-sizing-section-label")
+            with html.Div(classes="seurat-canvas-settings"):
+                html.Button(
+                    "Snap to grid",
+                    classes="seurat-canvas-toggle",
+                    click=(ctrl.set_canvas_snap_to_grid, "[!canvasSnapToGrid]"),
+                    raw_attrs=[
+                        'type="button"',
+                        ':aria-pressed="canvasSnapToGrid ? \'true\' : \'false\'"',
+                        ':class="{ active: canvasSnapToGrid }"',
+                    ],
+                )
+                html.Button(
+                    "Nudge others",
+                    classes="seurat-canvas-toggle",
+                    click=(ctrl.set_canvas_nudge_others, "[!canvasNudgeOthers]"),
+                    raw_attrs=[
+                        'type="button"',
+                        ':aria-pressed="canvasNudgeOthers ? \'true\' : \'false\'"',
+                        ':class="{ active: canvasNudgeOthers }"',
+                    ],
+                )
+                html.Button(
+                    "Show grid",
+                    classes="seurat-canvas-toggle",
+                    click=(ctrl.set_canvas_show_grid, "[!canvasShowGrid]"),
+                    raw_attrs=[
+                        'type="button"',
+                        ':aria-pressed="canvasShowGrid ? \'true\' : \'false\'"',
+                        ':class="{ active: canvasShowGrid }"',
+                    ],
+                )
+            html.Div("New plot size", classes="seurat-grid-sizing-section-label")
+            with html.Div(classes="seurat-size-stepper"):
+                html.Button(
+                    "−",
+                    classes="seurat-grid-layout-btn",
+                    click=(ctrl.adjust_canvas_default_tile_width, "[-1]"),
+                    raw_attrs=[
+                        'type="button"',
+                        'aria-label="Decrease new plot size"',
+                        ':disabled="Number(canvasDefaultTileWidth || 2) <= 2"',
+                    ],
+                    title="Decrease new plot size",
+                )
+                html.Span(
+                    "{{ Number(canvasDefaultTileWidth || 2) + ' columns' }}",
+                    classes="seurat-size-stepper-value seurat-canvas-default-size-value",
+                )
+                html.Button(
+                    "+",
+                    classes="seurat-grid-layout-btn",
+                    click=(ctrl.adjust_canvas_default_tile_width, "[1]"),
+                    raw_attrs=[
+                        'type="button"',
+                        'aria-label="Increase new plot size"',
+                        ':disabled="Number(canvasDefaultTileWidth || 2) >= 12"',
+                    ],
+                    title="Increase new plot size",
+                )
+            html.Div(
+                "Applies to drops in every tab; height stays square.",
+                classes="seurat-canvas-settings-hint",
             )
-        with vuetify.Template(v_if="gridSizingMode !== 'fit'"):
+            html.Div("Grid columns", classes="seurat-grid-sizing-section-label")
+            with html.Div(classes="seurat-canvas-column-options"):
+                for columns in canvas_layout.CANVAS_COLUMN_CHOICES:
+                    html.Button(
+                        str(columns),
+                        classes="seurat-canvas-column-option",
+                        click=(ctrl.set_canvas_columns, f"[{columns}]"),
+                        raw_attrs=[
+                            'type="button"',
+                            f'aria-label="{columns} columns"',
+                            f':aria-pressed="Number(canvasCols) === {columns} ? \'true\' : \'false\'"',
+                            f':class="{{ active: Number(canvasCols) === {columns} }}"',
+                        ],
+                    )
+            html.Div(
+                "Drag tile headers. Resize from any edge or corner.",
+                classes="seurat-canvas-settings-hint",
+            )
+        with vuetify.Template(v_if="gridLayoutMode !== 'freeform'"):
+            html.Div("Size mode", classes="seurat-grid-sizing-section-label")
+            with html.Div(classes="seurat-grid-sizing-mode"):
+                html.Button(
+                    "Static",
+                    classes="seurat-grid-sizing-mode-btn",
+                    click=(ctrl.set_grid_sizing_mode, "['static']"),
+                    raw_attrs=[
+                        'type="button"',
+                        ':class="{ active: gridSizingMode !== \'fit\' }"',
+                    ],
+                    title="Use fixed-size cells",
+                )
+                html.Button(
+                    "Fit window",
+                    classes="seurat-grid-sizing-mode-btn",
+                    click=(ctrl.set_grid_sizing_mode, "['fit']"),
+                    raw_attrs=[
+                        'type="button"',
+                        ':class="{ active: gridSizingMode === \'fit\' }"',
+                    ],
+                    title="Resize cells to fill the grid viewport",
+                )
+        with vuetify.Template(v_if="gridLayoutMode !== 'freeform' && gridSizingMode !== 'fit'"):
             html.Div("Cell size", classes="seurat-grid-sizing-section-label")
             with html.Div(classes="seurat-size-stepper"):
                 html.Button(
@@ -170,7 +311,7 @@ def _build_grid_settings_popover(ctrl):
                 raw_attrs=['type="button"'],
                 title="Reset all rows and columns to the current cell size",
             )
-        with vuetify.Template(v_if="gridSizingMode === 'fit'"):
+        with vuetify.Template(v_if="gridLayoutMode !== 'freeform' && gridSizingMode === 'fit'"):
             html.Div("Minimum cell size", classes="seurat-grid-sizing-section-label")
             with html.Div(classes="seurat-size-stepper"):
                 html.Button(
@@ -200,7 +341,8 @@ def _build_grid_settings_popover(ctrl):
                     title="Increase minimum cell size",
                 )
                 html.Span("px", classes="seurat-size-stepper-unit")
-        _build_grid_size_picker(ctrl)
+        with vuetify.Template(v_if="gridLayoutMode !== 'freeform'"):
+            _build_grid_size_picker(ctrl)
     with html.Div(classes="seurat-settings-section"):
         html.Div("Scalar plots", classes="seurat-settings-section-title")
         with html.Div(classes="seurat-settings-row"):
@@ -377,10 +519,19 @@ def _build_inactive_workspace_grids(ctrl):
                         classes="seurat-main-grid seurat-workspace-grid-preview",
                         click=(ctrl.activate_workspace_tab, "[pane.id, tab.id]"),
                         raw_attrs=[
-                            ":class=\"paneIndex === 0 ? 'seurat-workspace-slot-first' : 'seurat-workspace-slot-second'\"",
+                            ":class=\"[paneIndex === 0 ? 'seurat-workspace-slot-first' : 'seurat-workspace-slot-second', { 'seurat-freeform-preview': tab.grid.layout_mode === 'freeform' }]\"",
                             ':data-pane-frame-id="pane.id"',
+                            ':data-pane-id="pane.id"',
+                            ':data-tab-id="tab.id"',
+                            ':data-layout-mode="tab.grid.layout_mode"',
                             ':data-grid-cols="tab.grid.columns"',
                             ':data-grid-rows="tab.grid.rows"',
+                            ':data-canvas-cols="tab.grid.canvas_columns || 24"',
+                            ':data-canvas-row-height="tab.grid.canvas_row_height || 24"',
+                            ':data-canvas-snap="tab.grid.canvas_snap_to_grid === false ? 0 : 1"',
+                            ':data-canvas-nudge="tab.grid.canvas_nudge_others === false ? 0 : 1"',
+                            ':data-canvas-zoom="tab.grid.canvas_zoom || 1"',
+                            ':data-canvas-fit="tab.grid.canvas_fit_to_view ? 1 : 0"',
                             'role="button"',
                             'tabindex="0"',
                             ':aria-label="\'Activate \' + tab.title + \' pane\'"',
@@ -399,6 +550,44 @@ def _build_inactive_workspace_grids(ctrl):
                             " + 'min-height:0;overflow:auto;width:100%;height:100%;box-sizing:border-box;border:1px solid #cfcfcf;')\"",
                         ],
                     ):
+                        with html.Div(
+                            classes="seurat-canvas-grid-overlay",
+                            v_if="tab.grid.layout_mode === 'freeform' && tab.grid.canvas_show_grid",
+                            raw_attrs=[
+                                'aria-hidden="true"',
+                                ':data-grid-columns="tab.grid.canvas_columns || 24"',
+                                ":style=\"{ height: (((Math.max(12, Math.ceil(Math.max(0, ...(tab.grid.cells || []).map(tile => Number((tile && tile.canvas_y) || 0) + Number((tile && tile.canvas_h) || 0))))) * Number(tab.grid.canvas_row_height || 24)) + Number(tab.grid.canvas_row_height || 24)) + 'px') }\"",
+                            ],
+                        ):
+                            with vuetify.Template(
+                                v_for="line in Math.max(0, Number(tab.grid.canvas_columns || 24) - 1)",
+                                key="'vertical-' + line",
+                            ):
+                                html.Div(
+                                    classes="seurat-canvas-grid-line is-vertical",
+                                    raw_attrs=[
+                                        ':class="{ \'is-major\': line % 4 === 0 }"',
+                                        ':data-grid-line="line"',
+                                        ":style=\"{ left: ((line * 100 / Number(tab.grid.canvas_columns || 24)) + '%') }\"",
+                                    ],
+                                )
+                            with vuetify.Template(
+                                v_for="line in Math.max(12, Math.ceil(Math.max(0, ...(tab.grid.cells || []).map(tile => Number((tile && tile.canvas_y) || 0) + Number((tile && tile.canvas_h) || 0)))))",
+                                key="'horizontal-' + line",
+                            ):
+                                html.Div(
+                                    classes="seurat-canvas-grid-line is-horizontal",
+                                    raw_attrs=[
+                                        ':class="{ \'is-major\': line % 4 === 0 }"',
+                                        ':data-grid-line="line"',
+                                        ":style=\"{ top: ((line * Number(tab.grid.canvas_row_height || 24)) + 'px') }\"",
+                                    ],
+                                )
+                        html.Div(
+                            classes="seurat-canvas-placeholder seurat-canvas-preview-placeholder",
+                            v_if="tab.grid.layout_mode === 'freeform'",
+                            raw_attrs=['aria-hidden="true"'],
+                        )
                         with vuetify.Template(
                             v_for="(tile, i) in tab.grid.cells", key="i"
                         ):
@@ -409,9 +598,17 @@ def _build_inactive_workspace_grids(ctrl):
                                     ':data-pane-id="pane.id"',
                                     ':data-tab-id="tab.id"',
                                     ':data-cell-filled="((tile && tile.variable_name) ? 1 : 0)"',
-                                    ":style=\"((tab.grid.layout_mode === 'spanning')"
+                                    ':data-tile-id="(tile && tile.tile_id) || (\'tile-\' + (i + 1))"',
+                                    ':data-tile-type="(tile && tile.tile_type) || \'plot\'"',
+                                    ':data-canvas-x="Number((tile && tile.canvas_x) || 0)"',
+                                    ':data-canvas-y="Number((tile && tile.canvas_y) || 0)"',
+                                    ':data-canvas-w="Number((tile && tile.canvas_w) || 4)"',
+                                    ':data-canvas-h="Number((tile && tile.canvas_h) || 3)"',
+                                    ":style=\"((tab.grid.layout_mode === 'freeform')"
+                                    " ? ('position:absolute;left:calc(' + (Number((tile && tile.canvas_x) || 0) * 100 / Number(tab.grid.canvas_columns || 24)) + '% + 2px);top:' + ((Number((tile && tile.canvas_y) || 0) * Number(tab.grid.canvas_row_height || 24)) + 2) + 'px;width:calc(' + (Number((tile && tile.canvas_w) || 4) * 100 / Number(tab.grid.canvas_columns || 24)) + '% - 4px);height:' + ((Number((tile && tile.canvas_h) || 3) * Number(tab.grid.canvas_row_height || 24)) - 4) + 'px;border-radius:7px;box-shadow:0 2px 7px rgba(18,32,50,.14);')"
+                                    " : ((tab.grid.layout_mode === 'spanning')"
                                     " ? ('grid-row:' + Number((tile && tile.grid_row) || (Math.floor(i / tab.grid.columns) + 1)) + ' / span ' + Number((tile && tile.row_span) || 1) + ';grid-column:' + Number((tile && tile.grid_col) || ((i % tab.grid.columns) + 1)) + ' / span ' + Number((tile && tile.col_span) || 1) + ';')"
-                                    " : '')"
+                                    " : ''))"
                                     " + 'overflow:hidden;display:flex;flex-direction:column;position:relative;box-sizing:border-box;border:1px solid #cfcfcf;'"
                                     " + ((tab.grid.layout_mode === 'spanning' && tile && tile.grid_hidden) ? 'display:none;' : '')\"",
                                 ],
@@ -619,6 +816,7 @@ class GridWorkspace(TrameComponent):
                                 'title="Timestep (frame index)"',
                             ],
                         )
+                        _build_canvas_zoom_controls(ctrl)
                         _build_grid_layout_controls(ctrl)
                     with vuetify.Template(v_if="scalarPlotStatus"):
                         html.Div(
@@ -631,8 +829,11 @@ class GridWorkspace(TrameComponent):
                         classes="seurat-main-grid seurat-workspace-active-grid",
                         raw_attrs=[
                             ':key="workspaceActiveTabId"',
-                            ":class=\"workspacePanes.findIndex(pane => pane.id === workspaceActivePaneId) === 0 ? 'seurat-workspace-slot-first' : 'seurat-workspace-slot-second'\"",
+                            ":class=\"[workspacePanes.findIndex(pane => pane.id === workspaceActivePaneId) === 0 ? 'seurat-workspace-slot-first' : 'seurat-workspace-slot-second', { 'seurat-freeform-canvas': gridLayoutMode === 'freeform', 'show-grid': gridLayoutMode === 'freeform' && canvasShowGrid }]\"",
                             ':data-pane-frame-id="workspaceActivePaneId"',
+                            ':data-pane-id="workspaceActivePaneId"',
+                            ':data-tab-id="workspaceActiveTabId"',
+                            ':data-layout-mode="gridLayoutMode"',
                             ':data-grid-sizing-mode="gridSizingMode"',
                             ':data-grid-cols="gridCols"',
                             ':data-grid-rows="gridRows"',
@@ -648,6 +849,17 @@ class GridWorkspace(TrameComponent):
                             ':data-grid-fit-min-row-size="Number(gridFitMinCellSize || 180) + 32"',
                             ':data-grid-column-fallback="gridCellSize"',
                             ':data-grid-row-fallback="Number(gridCellSize || 300) + 32"',
+                            ':data-canvas-cols="canvasCols"',
+                            ':data-canvas-row-height="canvasRowHeight"',
+                            ':data-canvas-snap="canvasSnapToGrid ? 1 : 0"',
+                            ':data-canvas-nudge="canvasNudgeOthers ? 1 : 0"',
+                            ':data-canvas-zoom="canvasZoom"',
+                            ':data-canvas-fit="canvasFitToView ? 1 : 0"',
+                            ':data-canvas-default-tile-width="canvasDefaultTileWidth || 2"',
+                            ':data-canvas-dwell-ms="canvasDwellMs"',
+                            ':data-canvas-dead-zone="canvasSnapDeadZone"',
+                            ':data-canvas-transition-ms="canvasTransitionMs"',
+                            ':data-canvas-revision="canvasLayoutRevision"',
                         ],
                         style=(
                             "('display:grid;'"
@@ -669,12 +881,93 @@ class GridWorkspace(TrameComponent):
                             " + 'overflow:auto;'"
                             " + 'width:100%;'"
                             " + 'box-sizing:border-box;'"
+                            " + 'position:relative;'"
                             " + 'margin:4px 0 0 0;'"
                             " + 'border:1px solid #cfcfcf;')",
                         ),
                     ):
+                        html.Div(
+                            classes="seurat-canvas-extent",
+                            v_if="gridLayoutMode === 'freeform'",
+                            raw_attrs=[
+                                ":style=\"{ top: ((Math.max(12, ...(gridCells || []).map(tile => Number((tile && tile.canvas_y) || 0) + Number((tile && tile.canvas_h) || 0))) * Number(canvasRowHeight || 24)) + 24) + 'px' }\"",
+                            ],
+                        )
+                        with html.Div(
+                            classes="seurat-canvas-grid-overlay",
+                            v_if="gridLayoutMode === 'freeform' && canvasShowGrid",
+                            raw_attrs=[
+                                'aria-hidden="true"',
+                                ':data-grid-columns="canvasCols"',
+                                ":style=\"{ height: (((Math.max(12, Math.ceil(Math.max(0, ...(gridCells || []).map(tile => Number((tile && tile.canvas_y) || 0) + Number((tile && tile.canvas_h) || 0))))) * Number(canvasRowHeight || 24)) + Number(canvasRowHeight || 24)) + 'px') }\"",
+                            ],
+                        ):
+                            with vuetify.Template(
+                                v_for="line in Math.max(0, Number(canvasCols || 24) - 1)",
+                                key="'vertical-' + line",
+                            ):
+                                html.Div(
+                                    classes="seurat-canvas-grid-line is-vertical",
+                                    raw_attrs=[
+                                        ':class="{ \'is-major\': line % 4 === 0 }"',
+                                        ':data-grid-line="line"',
+                                        ":style=\"{ left: ((line * 100 / Number(canvasCols || 24)) + '%') }\"",
+                                    ],
+                                )
+                            with vuetify.Template(
+                                v_for="line in Math.max(12, Math.ceil(Math.max(0, ...(gridCells || []).map(tile => Number((tile && tile.canvas_y) || 0) + Number((tile && tile.canvas_h) || 0)))))",
+                                key="'horizontal-' + line",
+                            ):
+                                html.Div(
+                                    classes="seurat-canvas-grid-line is-horizontal",
+                                    raw_attrs=[
+                                        ':class="{ \'is-major\': line % 4 === 0 }"',
+                                        ':data-grid-line="line"',
+                                        ":style=\"{ top: ((line * Number(canvasRowHeight || 24)) + 'px') }\"",
+                                    ],
+                                )
+                        with vuetify.Template(
+                            v_if="gridLayoutMode === 'freeform' && !(gridCells || []).some(tile => tile && (tile.variable_name || tile.src || (tile.plot && Object.keys(tile.plot).length) || (tile.status && tile.status !== 'empty')))"
+                        ):
+                            with html.Div(classes="seurat-canvas-empty-state"):
+                                html.Div("Drop a variable anywhere", classes="seurat-canvas-empty-title")
+                                html.Div(
+                                    "Tiles will snap to a {{ canvasCols }}-column canvas.",
+                                    classes="seurat-canvas-empty-copy",
+                                )
+                        html.Div(
+                            classes="seurat-canvas-placeholder",
+                            v_if="gridLayoutMode === 'freeform'",
+                            raw_attrs=['aria-hidden="true"'],
+                        )
+                        html.Div(
+                            classes="seurat-canvas-insertion-caret",
+                            v_if="gridLayoutMode === 'freeform'",
+                            raw_attrs=['aria-hidden="true"'],
+                        )
+                        html.Div(
+                            classes="seurat-canvas-guide seurat-canvas-guide-v guide-v-1",
+                            v_if="gridLayoutMode === 'freeform'",
+                            raw_attrs=['aria-hidden="true"'],
+                        )
+                        html.Div(
+                            classes="seurat-canvas-guide seurat-canvas-guide-v guide-v-2",
+                            v_if="gridLayoutMode === 'freeform'",
+                            raw_attrs=['aria-hidden="true"'],
+                        )
+                        html.Div(
+                            classes="seurat-canvas-guide seurat-canvas-guide-h guide-h-1",
+                            v_if="gridLayoutMode === 'freeform'",
+                            raw_attrs=['aria-hidden="true"'],
+                        )
+                        html.Div(
+                            classes="seurat-canvas-guide seurat-canvas-guide-h guide-h-2",
+                            v_if="gridLayoutMode === 'freeform'",
+                            raw_attrs=['aria-hidden="true"'],
+                        )
                         with vuetify.Template(v_for="(tile, i) in gridCells", key="i"):
                             with html.Div(
+                                v_if="gridLayoutMode !== 'freeform' || (tile && (tile.variable_name || tile.src || (tile.plot && Object.keys(tile.plot).length) || (tile.status && tile.status !== 'empty')))",
                                 click=(
                                     ctrl.set_active_grid_cell,
                                     "[i, (($event && $event.target && $event.target.closest && $event.target.closest('.seurat-cell-close, .seurat-timeline-driver-btn, .seurat-grid-track-resize-handle')) ? 1 : 0), (($event && $event.shiftKey) ? 1 : 0)]",
@@ -687,22 +980,30 @@ class GridWorkspace(TrameComponent):
                                     ':data-cell-filled="((tile && tile.variable_name) ? 1 : 0)"',
                                     ':data-cell-active="(activeGridCell === i ? 1 : 0)"',
                                     ':data-timeline-driver="(timelineDriverCell === i ? 1 : 0)"',
+                                    ':data-tile-id="(tile && tile.tile_id) || (\'tile-\' + (i + 1))"',
+                                    ':data-tile-type="(tile && tile.tile_type) || \'plot\'"',
+                                    ':data-canvas-x="Number((tile && tile.canvas_x) || 0)"',
+                                    ':data-canvas-y="Number((tile && tile.canvas_y) || 0)"',
+                                    ':data-canvas-w="Number((tile && tile.canvas_w) || 4)"',
+                                    ':data-canvas-h="Number((tile && tile.canvas_h) || 3)"',
                                     ':aria-selected="activeGridCell === i ? \'true\' : \'false\'"',
-                                    ':draggable="!!(tile && tile.variable_name)"',
+                                    ':draggable="gridLayoutMode !== \'freeform\' && !!(tile && tile.variable_name)"',
                                 ],
                                 style=(
-                                    "((gridLayoutMode === 'spanning')"
+                                    "((gridLayoutMode === 'freeform')"
+                                    " ? ('position:absolute;left:calc(' + (Number((tile && tile.canvas_x) || 0) * 100 / Number(canvasCols || 24)) + '% + 2px);top:' + ((Number((tile && tile.canvas_y) || 0) * Number(canvasRowHeight || 24)) + 2) + 'px;width:calc(' + (Number((tile && tile.canvas_w) || 4) * 100 / Number(canvasCols || 24)) + '% - 4px);height:' + ((Number((tile && tile.canvas_h) || 3) * Number(canvasRowHeight || 24)) - 4) + 'px;')"
+                                    " : ((gridLayoutMode === 'spanning')"
                                     " ? ('grid-row:' + Number((tile && tile.grid_row) || (Math.floor(i / gridCols) + 1)) + ' / span ' + Number((tile && tile.row_span) || 1) + ';grid-column:' + Number((tile && tile.grid_col) || ((i % gridCols) + 1)) + ' / span ' + Number((tile && tile.col_span) || 1) + ';')"
-                                    " : '')"
+                                    " : ''))"
                                     " + ((gridLayoutMode === 'spanning')"
                                     " ? 'width:100%; height:100%; min-width:0; min-height:0;'"
-                                    " : ((gridSizingMode === 'fit')"
+                                    " : ((gridLayoutMode === 'freeform') ? 'min-width:0;min-height:0;' : ((gridSizingMode === 'fit')"
                                     " ? ('width:100%; height:100%; min-width:' + Number(gridFitMinCellSize || 180) + 'px; min-height:' + (Number(gridFitMinCellSize || 180) + 32) + 'px;')"
-                                    " : 'width:100%; height:100%; min-width:0; min-height:0;'))"
-                                    " + 'overflow:hidden; cursor:pointer; display:flex; flex-direction:column; position:relative; box-sizing:border-box;'"
-                                    " + ((gridLayoutMode === 'spanning') ? 'border:1px solid #cfcfcf;' : ('border-left:1px solid #cfcfcf; border-top:1px solid #cfcfcf;'"
+                                    " : 'width:100%; height:100%; min-width:0; min-height:0;')))"
+                                    " + 'overflow:hidden; cursor:pointer; display:flex; flex-direction:column; box-sizing:border-box;'"
+                                    " + ((gridLayoutMode === 'freeform') ? 'border:1px solid #b8c2cf;border-radius:7px;background:#fff;box-shadow:0 2px 8px rgba(18,32,50,.16);' : ((gridLayoutMode === 'spanning') ? 'position:relative;border:1px solid #cfcfcf;' : ('position:relative;border-left:1px solid #cfcfcf; border-top:1px solid #cfcfcf;'"
                                     " + (((i % gridCols) === (gridCols - 1)) ? 'border-right:1px solid #cfcfcf;' : '')"
-                                    " + ((i >= ((gridRows - 1) * gridCols)) ? 'border-bottom:1px solid #cfcfcf;' : '')))"
+                                    " + ((i >= ((gridRows - 1) * gridCols)) ? 'border-bottom:1px solid #cfcfcf;' : ''))))"
                                     " + ((activeGridCell === i) ? 'background:#e7f0ff; outline:3px solid #0d47a1; outline-offset:-3px; z-index:2;' : '')"
                                     " + ((gridLayoutMode === 'spanning' && tile && tile.grid_hidden) ? 'display:none;' : '')",
                                 ),
@@ -710,7 +1011,7 @@ class GridWorkspace(TrameComponent):
                                 html.Div(
                                     classes="seurat-grid-track-resize-handle seurat-grid-col-resize-handle seurat-grid-left-resize-handle",
                                     v_if=(
-                                        "gridSizingMode !== 'fit'"
+                                        "gridLayoutMode !== 'freeform' && gridSizingMode !== 'fit'"
                                         " && !(gridLayoutMode === 'spanning' && tile && tile.grid_hidden)"
                                         " && ((gridLayoutMode === 'spanning'"
                                         " ? Number((tile && tile.grid_col) || ((i % gridCols) + 1))"
@@ -727,7 +1028,8 @@ class GridWorkspace(TrameComponent):
                                 html.Div(
                                     classes="seurat-grid-track-resize-handle seurat-grid-col-resize-handle",
                                     v_if=(
-                                        "!(gridLayoutMode === 'spanning' && tile && tile.grid_hidden)"
+                                        "gridLayoutMode !== 'freeform'"
+                                        " && !(gridLayoutMode === 'spanning' && tile && tile.grid_hidden)"
                                         " && (gridSizingMode !== 'fit' || ((gridLayoutMode === 'spanning'"
                                         " ? (Number((tile && tile.grid_col) || ((i % gridCols) + 1)) + Number((tile && tile.col_span) || 1) - 1)"
                                         " : ((i % gridCols) + 1)) < Number(gridCols || 0)))"
@@ -743,7 +1045,7 @@ class GridWorkspace(TrameComponent):
                                 html.Div(
                                     classes="seurat-grid-track-resize-handle seurat-grid-row-resize-handle seurat-grid-top-resize-handle",
                                     v_if=(
-                                        "gridSizingMode !== 'fit'"
+                                        "gridLayoutMode !== 'freeform' && gridSizingMode !== 'fit'"
                                         " && !(gridLayoutMode === 'spanning' && tile && tile.grid_hidden)"
                                         " && ((gridLayoutMode === 'spanning'"
                                         " ? Number((tile && tile.grid_row) || (Math.floor(i / gridCols) + 1))"
@@ -760,7 +1062,8 @@ class GridWorkspace(TrameComponent):
                                 html.Div(
                                     classes="seurat-grid-track-resize-handle seurat-grid-row-resize-handle",
                                     v_if=(
-                                        "!(gridLayoutMode === 'spanning' && tile && tile.grid_hidden)"
+                                        "gridLayoutMode !== 'freeform'"
+                                        " && !(gridLayoutMode === 'spanning' && tile && tile.grid_hidden)"
                                         " && (gridSizingMode !== 'fit' || ((gridLayoutMode === 'spanning'"
                                         " ? (Number((tile && tile.grid_row) || (Math.floor(i / gridCols) + 1)) + Number((tile && tile.row_span) || 1) - 1)"
                                         " : (Math.floor(i / gridCols) + 1)) < Number(gridRows || 0)))"
@@ -776,7 +1079,8 @@ class GridWorkspace(TrameComponent):
                                 html.Div(
                                     classes="seurat-grid-track-resize-handle seurat-grid-corner-resize-handle seurat-grid-corner-bottom-left",
                                     v_if=(
-                                        "!(gridLayoutMode === 'spanning' && tile && tile.grid_hidden)"
+                                        "gridLayoutMode !== 'freeform'"
+                                        " && !(gridLayoutMode === 'spanning' && tile && tile.grid_hidden)"
                                         " && (gridSizingMode !== 'fit' || ("
                                         "((gridLayoutMode === 'spanning' ? Number((tile && tile.grid_col) || ((i % gridCols) + 1)) : ((i % gridCols) + 1)) > 1)"
                                         " && ((gridLayoutMode === 'spanning' ? (Number((tile && tile.grid_row) || (Math.floor(i / gridCols) + 1)) + Number((tile && tile.row_span) || 1) - 1) : (Math.floor(i / gridCols) + 1)) < Number(gridRows || 0))"
@@ -795,7 +1099,8 @@ class GridWorkspace(TrameComponent):
                                 html.Div(
                                     classes="seurat-grid-track-resize-handle seurat-grid-corner-resize-handle seurat-grid-corner-bottom-right",
                                     v_if=(
-                                        "!(gridLayoutMode === 'spanning' && tile && tile.grid_hidden)"
+                                        "gridLayoutMode !== 'freeform'"
+                                        " && !(gridLayoutMode === 'spanning' && tile && tile.grid_hidden)"
                                         " && (gridSizingMode !== 'fit' || ("
                                         "((gridLayoutMode === 'spanning' ? (Number((tile && tile.grid_col) || ((i % gridCols) + 1)) + Number((tile && tile.col_span) || 1) - 1) : ((i % gridCols) + 1)) < Number(gridCols || 0))"
                                         " && ((gridLayoutMode === 'spanning' ? (Number((tile && tile.grid_row) || (Math.floor(i / gridCols) + 1)) + Number((tile && tile.row_span) || 1) - 1) : (Math.floor(i / gridCols) + 1)) < Number(gridRows || 0))"
@@ -813,6 +1118,7 @@ class GridWorkspace(TrameComponent):
                                 )
                                 with vuetify.Template(v_if="tile && tile.variable_name"):
                                     with html.Div(
+                                        classes="seurat-tile-header",
                                         style=(
                                             "'display:flex;'"
                                             " + 'align-items:center;'"
@@ -1145,6 +1451,34 @@ class GridWorkspace(TrameComponent):
                                                         "color:#ddd;"
                                                     ),
                                                 )
+                                for resize_edge in (
+                                    "top",
+                                    "right",
+                                    "bottom",
+                                    "left",
+                                    "top-left",
+                                    "top-right",
+                                    "bottom-left",
+                                    "bottom-right",
+                                ):
+                                    handle_classes = (
+                                        "seurat-canvas-resize-zone "
+                                        f"is-{resize_edge}"
+                                    )
+                                    if resize_edge == "bottom-right":
+                                        handle_classes += (
+                                            " seurat-canvas-resize-handle"
+                                        )
+                                    html.Div(
+                                        classes=handle_classes,
+                                        v_if="gridLayoutMode === 'freeform' && tile && tile.variable_name",
+                                        raw_attrs=[
+                                            'role="separator"',
+                                            f'data-resize-edge="{resize_edge}"',
+                                            f'aria-label="Resize tile from {resize_edge.replace("-", " ")}"',
+                                            f'title="Resize from {resize_edge.replace("-", " ")}"',
+                                        ],
+                                    )
                                 with vuetify.Template(v_if="!(tile && tile.variable_name)"):
                                     with html.Div(classes="seurat-empty-cell"):
                                         html.Div("+", classes="seurat-empty-plus")

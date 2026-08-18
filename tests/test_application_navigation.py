@@ -1,3 +1,4 @@
+import json
 import sys
 import tempfile
 import types
@@ -327,6 +328,7 @@ class CampaignDbNavigationTests(unittest.TestCase):
     def make_controller(self, interaction_log=None):
         state = RecordingState()
         init_state(state, self.db)
+        state.gridLayoutMode = "uniform"
         state.variableLabelsById = {
             "density": "density",
             "temperature": "temperature",
@@ -368,6 +370,8 @@ class CampaignDbNavigationTests(unittest.TestCase):
             set(controller.actions),
             {
                 "activate_workspace_tab",
+                "adjust_canvas_default_tile_width",
+                "adjust_canvas_zoom",
                 "add_workspace_tab",
                 "add_grid_column",
                 "add_grid_row",
@@ -437,6 +441,11 @@ class CampaignDbNavigationTests(unittest.TestCase):
                 "select_source",
                 "select_var",
                 "set_active_grid_cell",
+                "set_canvas_nudge_others",
+                "set_canvas_columns",
+                "set_canvas_fit_to_view",
+                "set_canvas_show_grid",
+                "set_canvas_snap_to_grid",
                 "set_dragged_var",
                 "set_grid_cell_size",
                 "set_grid_fit_min_cell_size",
@@ -473,15 +482,19 @@ class CampaignDbNavigationTests(unittest.TestCase):
         self.assertEqual(
             set(controller.triggers),
             {
+                "add_var_to_canvas_trigger",
                 "assign_var_to_grid_cell_trigger",
+                "commit_canvas_layout_trigger",
                 "hide_context_menu_trigger",
                 "move_grid_cell_trigger",
+                "move_workspace_canvas_tile_trigger",
                 "move_workspace_grid_cell_trigger",
                 "move_workspace_tab_trigger",
                 "reorder_workspace_tab_trigger",
                 "resize_workspace_split_trigger",
                 "set_grid_track_sizes_trigger",
                 "set_grid_track_weights_trigger",
+                "sync_canvas_fit_zoom_trigger",
                 "show_cell_context_menu",
                 "show_item_context_menu",
                 "show_tab_context_menu",
@@ -506,12 +519,56 @@ class CampaignDbNavigationTests(unittest.TestCase):
         controller.actions["add_workspace_tab"]("pane-1")
 
         self.assertEqual(state.workspaceActiveTabId, "tab-2")
-        self.assertFalse(state.gridCells[0].get("variable_id"))
+        self.assertEqual(state.gridLayoutMode, "freeform")
+        self.assertEqual(state.gridCells, [])
 
         controller.actions["activate_workspace_tab"]("pane-1", "tab-1")
 
         self.assertEqual(state.workspaceActiveTabId, "tab-1")
         self.assertEqual(state.gridCells[0]["variable_id"], "density")
+
+    def test_canvas_default_tile_width_is_shared_across_workspace_tabs(self):
+        state, controller = self.make_controller()
+
+        controller.actions["adjust_canvas_default_tile_width"](3)
+        controller.actions["add_workspace_tab"]("pane-1")
+
+        self.assertEqual(state.canvasDefaultTileWidth, 5)
+        controller.actions["activate_workspace_tab"]("pane-1", "tab-1")
+        self.assertEqual(state.canvasDefaultTileWidth, 5)
+
+    def test_workspace_tabs_preserve_independent_canvas_column_counts(self):
+        state, controller = self.make_controller()
+        controller.actions["set_grid_layout_mode"]("freeform")
+        controller.actions["set_canvas_columns"](48)
+
+        controller.actions["add_workspace_tab"]("pane-1")
+        controller.actions["set_canvas_columns"](12)
+
+        controller.actions["activate_workspace_tab"]("pane-1", "tab-1")
+        self.assertEqual(state.canvasCols, 48)
+
+        controller.actions["activate_workspace_tab"]("pane-1", "tab-2")
+        self.assertEqual(state.canvasCols, 12)
+
+    def test_workspace_tabs_preserve_independent_canvas_zoom_and_fit(self):
+        state, controller = self.make_controller()
+        controller.actions["set_grid_layout_mode"]("freeform")
+        controller.actions["adjust_canvas_zoom"](-0.25)
+        controller.actions["set_canvas_fit_to_view"](True)
+
+        controller.actions["add_workspace_tab"]("pane-1")
+        controller.actions["adjust_canvas_zoom"](0.25)
+        self.assertEqual(state.canvasZoom, 1.0)
+        self.assertFalse(state.canvasFitToView)
+
+        controller.actions["activate_workspace_tab"]("pane-1", "tab-1")
+        self.assertEqual(state.canvasZoom, 0.75)
+        self.assertTrue(state.canvasFitToView)
+
+        controller.actions["activate_workspace_tab"]("pane-1", "tab-2")
+        self.assertEqual(state.canvasZoom, 1.0)
+        self.assertFalse(state.canvasFitToView)
 
     def test_tab_context_menu_renames_and_closes_target_tab(self):
         state, controller = self.make_controller()
@@ -630,6 +687,8 @@ class CampaignDbNavigationTests(unittest.TestCase):
         )
         state.timelineDriverCell = 0
         controller.actions["split_workspace_pane"]("horizontal", "pane-1")
+        controller.actions["set_grid_layout_mode"]("uniform")
+        controller.actions["activate_workspace_tab"]("pane-1", "tab-1")
 
         controller.triggers["move_workspace_grid_cell_trigger"](
             "pane-1", "tab-1", 0, "pane-2", "tab-2", 4
@@ -648,6 +707,43 @@ class CampaignDbNavigationTests(unittest.TestCase):
             ],
             "",
         )
+
+    def test_workspace_freeform_move_places_tile_in_destination_canvas(self):
+        state, controller = self.make_controller()
+        state.gridCells[0].update(
+            {
+                "variable_id": "density",
+                "variable_name": "density",
+                "status": "ready",
+            }
+        )
+        controller.actions["set_grid_layout_mode"]("freeform")
+        controller.actions["split_workspace_pane"]("horizontal", "pane-1")
+
+        controller.triggers["move_workspace_canvas_tile_trigger"](
+            "pane-1",
+            "tab-1",
+            0,
+            "pane-2",
+            "tab-2",
+            json.dumps({"x": 6, "y": 5, "w": 8, "h": 6}),
+        )
+
+        self.assertEqual(state.workspaceActivePaneId, "pane-2")
+        self.assertEqual(state.workspaceActiveTabId, "tab-2")
+        self.assertEqual(len(state.gridCells), 1)
+        self.assertEqual(state.gridCells[0]["variable_id"], "density")
+        self.assertEqual(
+            (
+                state.gridCells[0]["canvas_x"],
+                state.gridCells[0]["canvas_y"],
+                state.gridCells[0]["canvas_w"],
+                state.gridCells[0]["canvas_h"],
+            ),
+            (6, 5, 8, 6),
+        )
+        source_grid = state.workspacePanes[0]["tabs"][0]["grid"]
+        self.assertEqual(source_grid["cells"], [])
 
     def test_server_ready_lifecycle_reingests_and_refreshes_catalog(self):
         state = RecordingState()
@@ -851,6 +947,7 @@ class CampaignDbNavigationTests(unittest.TestCase):
     def test_workspace_layout_round_trip_restores_tabs_and_split(self):
         state, controller = self.make_controller()
         owner = controller.actions["save_workspace_state"].__self__
+        state.canvasDefaultTileWidth = 7
         controller.actions["add_workspace_tab"]("pane-1")
         controller.actions["rename_workspace_tab"](
             "pane-1", "tab-1", "2D Fields"
@@ -865,10 +962,12 @@ class CampaignDbNavigationTests(unittest.TestCase):
         )
 
         controller.actions["close_workspace_pane"]("pane-2")
+        state.canvasDefaultTileWidth = 2
         self.assertEqual(len(state.workspacePanes), 1)
 
         owner.restore_workspace_state(serialized)
 
+        self.assertEqual(state.canvasDefaultTileWidth, 7)
         self.assertEqual(state.workspaceSplitDirection, "horizontal")
         self.assertAlmostEqual(state.workspaceLayout["root"]["ratio"], 0.68)
         self.assertEqual(len(state.workspacePanes), 2)
@@ -921,6 +1020,8 @@ class CampaignDbNavigationTests(unittest.TestCase):
             }
         )
         controller.actions["split_workspace_pane"]("horizontal", "pane-1")
+        controller.actions["set_grid_layout_mode"]("uniform")
+        controller.actions["activate_workspace_tab"]("pane-1", "tab-1")
         controller.triggers["move_workspace_grid_cell_trigger"](
             "pane-1", "tab-1", 0, "pane-2", "tab-2", 4
         )
@@ -1569,6 +1670,156 @@ class CampaignDbNavigationTests(unittest.TestCase):
         self.assertEqual((state.gridRows, state.gridCols), (3, 3))
         self.assertEqual(len(state.gridCells), 9)
         self.assertEqual(state.activeGridCell, -1)
+
+    def test_freeform_layout_converts_content_and_commits_stable_geometry(self):
+        state, controller = self.make_controller()
+        for index, variable_id in enumerate(("density", "temperature")):
+            state.gridCells[index].update(
+                {
+                    "variable_id": variable_id,
+                    "variable_name": variable_id,
+                    "status": "ready",
+                }
+            )
+        state.activeGridCell = 0
+        state.selectedGridCellIndices = [0]
+        state.selectedGridCellMap = {"0": True}
+
+        controller.actions["set_grid_layout_mode"]("freeform")
+
+        self.assertEqual(state.gridLayoutMode, "freeform")
+        self.assertEqual(len(state.gridCells), 2)
+        self.assertEqual(
+            [cell["tile_id"] for cell in state.gridCells],
+            ["tile-1", "tile-2"],
+        )
+        self.assertTrue(state.canvasSnapToGrid)
+        self.assertTrue(state.canvasNudgeOthers)
+
+        geometry = [
+            {
+                "tile_id": cell["tile_id"],
+                "x": cell["canvas_x"],
+                "y": cell["canvas_y"] + (12 if index == 0 else 0),
+                "w": cell["canvas_w"],
+                "h": cell["canvas_h"],
+            }
+            for index, cell in enumerate(state.gridCells)
+        ]
+        controller.triggers["commit_canvas_layout_trigger"](
+            json.dumps(geometry),
+            "tile-1",
+            "pane-1",
+            "tab-1",
+        )
+
+        self.assertEqual(state.gridCells[0]["canvas_y"], 12)
+        self.assertEqual(state.activeGridCell, 0)
+        self.assertEqual(state.canvasLayoutError, "")
+
+        overlapping = [dict(item, x=0, y=0) for item in geometry]
+        controller.triggers["commit_canvas_layout_trigger"](
+            json.dumps(overlapping),
+            "tile-1",
+            "pane-1",
+            "tab-1",
+        )
+        self.assertIn("overlap", state.canvasLayoutError)
+        self.assertEqual(state.gridCells[0]["canvas_y"], 12)
+
+    def test_freeform_canvas_column_change_preserves_visual_geometry(self):
+        state, controller = self.make_controller()
+        for index, variable_id in enumerate(("density", "temperature")):
+            state.gridCells[index].update(
+                {
+                    "variable_id": variable_id,
+                    "variable_name": variable_id,
+                    "status": "ready",
+                }
+            )
+        controller.actions["set_grid_layout_mode"]("freeform")
+        before = [
+            (cell["canvas_x"] / 24, cell["canvas_w"] / 24)
+            for cell in state.gridCells
+        ]
+
+        controller.actions["set_canvas_columns"](48)
+
+        after = [
+            (cell["canvas_x"] / 48, cell["canvas_w"] / 48)
+            for cell in state.gridCells
+        ]
+        self.assertEqual(state.canvasCols, 48)
+        self.assertEqual(after, before)
+        self.assertEqual(state.canvasLayoutError, "")
+
+        controller.actions["set_canvas_columns"](30)
+        self.assertEqual(state.canvasCols, 24)
+
+    def test_freeform_variable_insert_commits_neighbor_layout_before_add(self):
+        state, controller = self.make_controller()
+        for index, variable_id in enumerate(("density", "temperature")):
+            state.gridCells[index].update(
+                {
+                    "variable_id": variable_id,
+                    "variable_name": variable_id,
+                    "status": "ready",
+                }
+            )
+        controller.actions["set_grid_layout_mode"]("freeform")
+        existing_layout = [
+            {
+                "tile_id": cell["tile_id"],
+                "x": cell["canvas_x"] + (8 if index == 1 else 0),
+                "y": cell["canvas_y"],
+                "w": cell["canvas_w"],
+                "h": cell["canvas_h"],
+            }
+            for index, cell in enumerate(state.gridCells)
+        ]
+
+        controller.triggers["add_var_to_canvas_trigger"](
+            "density",
+            json.dumps({"x": 8, "y": 0, "w": 8, "h": 12}),
+            "pane-1",
+            "tab-1",
+            json.dumps(existing_layout),
+        )
+
+        self.assertEqual(len(state.gridCells), 3)
+        self.assertEqual(state.gridCells[1]["canvas_x"], 16)
+        self.assertEqual(state.gridCells[2]["canvas_x"], 8)
+        self.assertEqual(state.canvasLayoutError, "")
+
+    def test_freeform_configured_drop_size_survives_field_classification(self):
+        state, controller = self.make_controller()
+        controller.actions["set_grid_layout_mode"]("freeform")
+        state.canvasDefaultTileWidth = 4
+        owner = controller.actions["save_workspace_state"].__self__
+        field_cell = {
+            "variable_id": "density",
+            "variable_name": "density",
+            "variable_type": "scalarField",
+            "status": "ready",
+        }
+
+        with patch.object(
+            owner,
+            "build_grid_cell_for_variable",
+            return_value=field_cell,
+        ):
+            controller.triggers["add_var_to_canvas_trigger"](
+                "density",
+                json.dumps({"x": 0, "y": 0, "w": 4, "h": 4}),
+                "pane-1",
+                "tab-1",
+                "",
+            )
+
+        self.assertEqual(len(state.gridCells), 1)
+        self.assertEqual(state.gridCells[0]["tile_type"], "field")
+        self.assertEqual(state.gridCells[0]["canvas_w"], 4)
+        self.assertEqual(state.gridCells[0]["canvas_h"], 4)
 
     def test_move_and_clear_cell_reset_timeline_driver_and_selection(self):
         state, controller = self.make_controller()

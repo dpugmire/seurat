@@ -443,8 +443,8 @@
     const plot = parsePlotData(el);
     const settings = normalizePlotSettings(parsePlotSettings(el));
     const rect = el.getBoundingClientRect ? el.getBoundingClientRect() : { width: 0, height: 0 };
-    const width = Math.max(240, Math.round(rect.width || el.clientWidth || 300));
-    const height = Math.max(180, Math.round(rect.height || el.clientHeight || 300));
+    const width = Math.max(1, Math.round(rect.width || el.clientWidth || 300));
+    const height = Math.max(1, Math.round(rect.height || el.clientHeight || 300));
     const renderKey = String(el.__seuratPlotRaw || "") + "|" + String(el.__seuratPlotSettingsRaw || "") + "|" + width + "x" + height + "|" + plotViewRenderKey(el);
     if (el.__seuratPlotRenderKey === renderKey && el.querySelector("svg")) {
       return;
@@ -474,9 +474,28 @@
       return;
     }
 
-    const pad = { left: 52, right: 14, top: 12, bottom: 40 };
+    const compact = width < 280 || height < 170;
+    const showXAxisLabel = height >= 90;
+    const tickFontSize = compact ? 10 : 12;
+    const axisLabelFontSize = compact ? 11 : 13;
+    const pad = {
+      left: compact ? Math.max(30, Math.min(44, Math.round(width * 0.2))) : 52,
+      right: compact ? 8 : 14,
+      top: compact ? 7 : 12,
+      bottom: showXAxisLabel
+        ? (compact ? Math.max(28, Math.min(36, Math.round(height * 0.25))) : 40)
+        : Math.max(16, Math.min(24, Math.round(height * 0.24))),
+    };
     const plotW = Math.max(1, width - pad.left - pad.right);
     const plotH = Math.max(1, height - pad.top - pad.bottom);
+    const tickCount = Math.max(
+      2,
+      Math.min(5, Math.floor(Math.min(width / 65, height / 38)))
+    );
+    const xTickOffset = Math.max(
+      10,
+      Math.min(20, pad.bottom - (showXAxisLabel ? 14 : 4))
+    );
     let xAxis = resolvePlotAxis(plot, series, settings, "x");
     let yAxis = resolvePlotAxis(plot, series, settings, "y");
     const defaultXAxis = xAxis;
@@ -510,8 +529,8 @@
     frame.setAttribute("stroke-width", "1");
     svg.appendChild(frame);
 
-    for (let i = 0; i < 5; i += 1) {
-      const frac = i / 4;
+    for (let i = 0; i < tickCount; i += 1) {
+      const frac = i / (tickCount - 1);
       const gx = pad.left + frac * plotW;
       const gy = pad.top + frac * plotH;
       if (settings.show_grid) {
@@ -534,9 +553,9 @@
 
       const xTick = createSvgNode("text");
       xTick.setAttribute("x", String(gx));
-      xTick.setAttribute("y", String(pad.top + plotH + 20));
+      xTick.setAttribute("y", String(pad.top + plotH + xTickOffset));
       xTick.setAttribute("text-anchor", "middle");
-      xTick.setAttribute("font-size", "12");
+      xTick.setAttribute("font-size", String(tickFontSize));
       xTick.setAttribute("fill", "#333333");
       xTick.textContent = formatPlotTick(xAxis.inverse(xAxis.tMin + frac * (xAxis.tMax - xAxis.tMin)));
       svg.appendChild(xTick);
@@ -545,7 +564,7 @@
       yTick.setAttribute("x", String(pad.left - 8));
       yTick.setAttribute("y", String(gy + 4));
       yTick.setAttribute("text-anchor", "end");
-      yTick.setAttribute("font-size", "12");
+      yTick.setAttribute("font-size", String(tickFontSize));
       yTick.setAttribute("fill", "#333333");
       yTick.textContent = formatPlotTick(yAxis.inverse(yAxis.tMax - frac * (yAxis.tMax - yAxis.tMin)));
       svg.appendChild(yTick);
@@ -614,12 +633,12 @@
     }
 
     const xLabel = String(plot.x_label || "");
-    if (xLabel) {
+    if (xLabel && showXAxisLabel) {
       const label = createSvgNode("text");
       label.setAttribute("x", String(pad.left + plotW / 2));
       label.setAttribute("y", String(height - 10));
       label.setAttribute("text-anchor", "middle");
-      label.setAttribute("font-size", "13");
+      label.setAttribute("font-size", String(axisLabelFontSize));
       label.setAttribute("fill", "#333333");
       label.textContent = xLabel;
       svg.appendChild(label);
@@ -1081,7 +1100,7 @@
   function scheduleRenderAllPlot1d() {
     if (!runtimeRoot) return;
     const ownerWindow = runtimeWindow();
-    if (plotRenderTimer) ownerWindow.clearTimeout(plotRenderTimer);
+    if (plotRenderTimer) return;
     plotRenderTimer = ownerWindow.setTimeout(function() {
       plotRenderTimer = null;
       if (!runtimeRoot) return;
@@ -1155,7 +1174,12 @@
       childList: true,
       subtree: true,
       attributes: true,
-      attributeFilter: ["data-plot", "data-plot-settings"],
+      attributeFilter: [
+        "data-plot",
+        "data-plot-settings",
+        "data-canvas-w",
+        "data-canvas-h",
+      ],
     });
     observePlot1dSizes();
     scheduleRenderAllPlot1d();

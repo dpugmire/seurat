@@ -1,7 +1,10 @@
 """Grid layout, selection, assignment, and timeline controller behavior."""
 
+import json
+from math import ceil
 from typing import Any, Dict, List, Optional, Tuple
 
+from seurat.models import canvas_layout
 from seurat.models import grid as grid_model
 from seurat.models import grid_layout as grid_layout_model
 from seurat.models.grid import (
@@ -25,6 +28,13 @@ from seurat.models.timeline import (
 class GridControllerMixin:
     ACTION_BINDINGS = (
         ("set_grid_layout_mode", "set_grid_layout_mode"),
+        ("set_canvas_snap_to_grid", "set_canvas_snap_to_grid"),
+        ("set_canvas_nudge_others", "set_canvas_nudge_others"),
+        ("set_canvas_show_grid", "set_canvas_show_grid"),
+        ("set_canvas_columns", "set_canvas_columns"),
+        ("adjust_canvas_default_tile_width", "adjust_canvas_default_tile_width"),
+        ("adjust_canvas_zoom", "adjust_canvas_zoom"),
+        ("set_canvas_fit_to_view", "set_canvas_fit_to_view"),
         ("set_grid_cell_size", "set_grid_cell_size"),
         ("set_grid_fit_min_cell_size", "set_grid_fit_min_cell_size"),
         ("set_grid_sizing_mode", "set_grid_sizing_mode"),
@@ -52,6 +62,9 @@ class GridControllerMixin:
         ("set_grid_track_weights_trigger", "set_grid_track_weights_trigger"),
         ("move_grid_cell_trigger", "move_grid_cell_trigger"),
         ("assign_var_to_grid_cell_trigger", "assign_var_to_grid_cell_trigger"),
+        ("commit_canvas_layout_trigger", "commit_canvas_layout_trigger"),
+        ("add_var_to_canvas_trigger", "add_var_to_canvas_trigger"),
+        ("sync_canvas_fit_zoom_trigger", "sync_canvas_fit_zoom_trigger"),
     )
     STATE_CHANGE_BINDINGS = ()
 
@@ -64,12 +77,78 @@ class GridControllerMixin:
 
     def normalize_grid_layout_mode(self) -> str:
         mode = (
-            str(getattr(self.state, "gridLayoutMode", "uniform") or "uniform")
+            str(
+                getattr(
+                    self.state,
+                    "gridLayoutMode",
+                    grid_model.DEFAULT_GRID_LAYOUT_MODE,
+                )
+                or grid_model.DEFAULT_GRID_LAYOUT_MODE
+            )
             .strip()
             .lower()
         )
-        self.state.gridLayoutMode = "spanning" if mode == "spanning" else "uniform"
+        self.state.gridLayoutMode = (
+            mode
+            if mode in grid_model.GRID_LAYOUT_MODES
+            else grid_model.DEFAULT_GRID_LAYOUT_MODE
+        )
         return self.state.gridLayoutMode
+
+    def normalize_canvas_settings(self) -> None:
+        self.state.canvasCols = canvas_layout.normalize_columns(
+            getattr(self.state, "canvasCols", canvas_layout.CANVAS_COLUMNS)
+        )
+        self.state.canvasRowHeight = canvas_layout.CANVAS_ROW_HEIGHT
+        self.state.canvasSnapToGrid = bool(
+            getattr(self.state, "canvasSnapToGrid", True)
+        )
+        self.state.canvasNudgeOthers = bool(
+            getattr(self.state, "canvasNudgeOthers", True)
+        )
+        self.state.canvasShowGrid = bool(
+            getattr(self.state, "canvasShowGrid", False)
+        )
+        self.state.canvasZoom = canvas_layout.normalize_zoom(
+            getattr(
+                self.state,
+                "canvasZoom",
+                canvas_layout.CANVAS_ZOOM_DEFAULT,
+            )
+        )
+        self.state.canvasFitToView = bool(
+            getattr(self.state, "canvasFitToView", False)
+        )
+        self.state.canvasDefaultTileWidth = canvas_layout.normalize_drop_width(
+            getattr(
+                self.state,
+                "canvasDefaultTileWidth",
+                canvas_layout.CANVAS_DEFAULT_DROP_WIDTH,
+            )
+        )
+        self.state.canvasDwellMs = canvas_layout.CANVAS_DWELL_MS
+        self.state.canvasSnapDeadZone = canvas_layout.CANVAS_SNAP_DEAD_ZONE
+        self.state.canvasTransitionMs = canvas_layout.CANVAS_TRANSITION_MS
+        try:
+            revision = int(getattr(self.state, "canvasLayoutRevision", 0))
+        except Exception:
+            revision = 0
+        self.state.canvasLayoutRevision = max(0, revision)
+
+    def canvas_columns(self) -> int:
+        return canvas_layout.normalize_columns(
+            getattr(self.state, "canvasCols", canvas_layout.CANVAS_COLUMNS)
+        )
+
+    @staticmethod
+    def next_canvas_tile_id(cells: List[Dict[str, Any]]) -> str:
+        existing = {
+            str(cell.get("tile_id", "") or "") for cell in list(cells or [])
+        }
+        index = 1
+        while f"tile-{index}" in existing:
+            index += 1
+        return f"tile-{index}"
 
     def grid_dimensions(self) -> Tuple[int, int]:
         rows = clamp_int(
@@ -208,6 +287,8 @@ class GridControllerMixin:
             self.state.gridColumnWeights = weights
 
     def grid_cell_count(self) -> int:
+        if self.normalize_grid_layout_mode() == "freeform":
+            return len(self.normalize_grid_cells(self.state.gridCells))
         rows, cols = self.grid_dimensions()
         return rows * cols
 
@@ -295,6 +376,8 @@ class GridControllerMixin:
             rows,
             cols,
             self.normalize_grid_layout_mode(),
+            canvas_snap=bool(getattr(self.state, "canvasSnapToGrid", True)),
+            canvas_columns=self.canvas_columns(),
         )
 
     def set_grid_layout(
@@ -332,32 +415,592 @@ class GridControllerMixin:
         )
         self.clear_interaction_assignment()
 
+    def legacy_cells_to_freeform(
+        self,
+        raw_cells: List[Dict[str, Any]],
+        rows: int,
+        cols: int,
+    ) -> Tuple[List[Dict[str, Any]], Dict[int, int]]:
+        """Convert visible legacy cells into compact freeform tiles."""
+
+        result: List[Dict[str, Any]] = []
+        geometries: List[Dict[str, Any]] = []
+        index_map: Dict[int, int] = {}
+        safe_cols = max(1, int(cols or 1))
+        canvas_columns = self.canvas_columns()
+        legacy_row_units = 12
+        for source_index, raw_cell in enumerate(list(raw_cells or [])):
+            cell = dict(raw_cell or {})
+            if bool(cell.get("grid_hidden", False)) or not cell_has_content(cell):
+                continue
+            kind = canvas_layout.tile_type_for_cell(cell)
+            min_w, min_h = canvas_layout.minimum_size(kind)
+            default_w, default_h = canvas_layout.default_size(kind)
+            row = clamp_int(cell.get("grid_row", 1), 1, 1, max(1, rows))
+            col = clamp_int(cell.get("grid_col", 1), 1, 1, safe_cols)
+            row_span = clamp_int(
+                cell.get("row_span", 1), 1, 1, max(1, rows - row + 1)
+            )
+            col_span = clamp_int(
+                cell.get("col_span", 1), 1, 1, max(1, safe_cols - col + 1)
+            )
+            left = round((col - 1) * canvas_columns / safe_cols)
+            right = round(
+                (col - 1 + col_span)
+                * canvas_columns
+                / safe_cols
+            )
+            width = max(min_w, right - left, default_w if safe_cols == 1 else 0)
+            width = min(width, canvas_columns)
+            left = max(0, min(left, canvas_columns - width))
+            height = max(min_h, row_span * legacy_row_units, default_h)
+            item = canvas_layout.geometry(
+                self.next_canvas_tile_id(result),
+                kind,
+                left,
+                (row - 1) * legacy_row_units,
+                width,
+                height,
+                columns=canvas_columns,
+            )
+            if any(canvas_layout.overlaps(item, other) for other in geometries):
+                item = canvas_layout.nearest_free(
+                    item, geometries, columns=canvas_columns
+                )
+            cell = canvas_layout.geometry_to_cell(cell, item)
+            cell["grid_hidden"] = False
+            index_map[source_index] = len(result)
+            result.append(cell)
+            geometries.append(item)
+        return result, index_map
+
+    def freeform_cells_to_legacy(
+        self,
+        raw_cells: List[Dict[str, Any]],
+        rows: int,
+        cols: int,
+    ) -> Tuple[List[Dict[str, Any]], int, int]:
+        """Pack freeform tiles into a legacy matrix without discarding content."""
+
+        cells = grid_model.normalize_freeform_cells(
+            raw_cells,
+            snap=bool(getattr(self.state, "canvasSnapToGrid", True)),
+            columns=self.canvas_columns(),
+        )
+        count = len(cells)
+        safe_cols = max(1, min(self.GRID_MAX_COLS, int(cols or 1)))
+        safe_rows = max(1, min(self.GRID_MAX_ROWS, int(rows or 1)))
+        if safe_rows * safe_cols < count:
+            safe_rows = min(self.GRID_MAX_ROWS, max(safe_rows, ceil(count / safe_cols)))
+        if safe_rows * safe_cols < count:
+            safe_cols = self.GRID_MAX_COLS
+            safe_rows = min(self.GRID_MAX_ROWS, ceil(count / safe_cols))
+        if safe_rows * safe_cols < count:
+            raise ValueError("Freeform canvas contains more than 64 tiles")
+
+        packed = [empty_grid_cell() for _ in range(safe_rows * safe_cols)]
+        for index, cell in enumerate(cells):
+            item = dict(cell)
+            item.update(grid_model.default_grid_geometry(index, safe_cols))
+            packed[index] = item
+        return packed, safe_rows, safe_cols
+
     def set_grid_layout_mode(self, mode: str, **_):
-        previous = str(getattr(self.state, "gridLayoutMode", "uniform") or "uniform")
-        self.state.gridLayoutMode = (
-            "spanning" if str(mode or "").strip().lower() == "spanning" else "uniform"
-        )
+        requested = str(mode or "").strip().lower()
+        if requested not in grid_model.GRID_LAYOUT_MODES:
+            requested = grid_model.DEFAULT_GRID_LAYOUT_MODE
+        previous = self.normalize_grid_layout_mode()
+        if requested == previous:
+            return
+
         rows, cols = self.grid_dimensions()
-        active = self.active_grid_index(rows * cols)
-        self.state.gridCells = self.normalize_grid_cells(
-            self.state.gridCells, rows, cols
+        try:
+            active = int(getattr(self.state, "activeGridCell", -1))
+        except Exception:
+            active = -1
+        selected = list(getattr(self.state, "selectedGridCellIndices", []) or [])
+
+        if requested == "freeform":
+            legacy_cells = self.normalize_grid_cells(self.state.gridCells, rows, cols)
+            converted, index_map = self.legacy_cells_to_freeform(
+                legacy_cells, rows, cols
+            )
+            self.state.gridLayoutMode = "freeform"
+            self.normalize_canvas_settings()
+            self.state.gridCells = grid_model.normalize_freeform_cells(
+                converted,
+                snap=bool(self.state.canvasSnapToGrid),
+                columns=self.canvas_columns(),
+            )
+            self.state.activeGridCell = index_map.get(active, -1)
+            remapped_selection = [
+                index_map[index] for index in selected if index in index_map
+            ]
+            self.publish_grid_selection(
+                self.normalize_grid_selection(
+                    remapped_selection, list(self.state.gridCells or [])
+                )
+            )
+            try:
+                driver = int(getattr(self.state, "timelineDriverCell", -1))
+            except Exception:
+                driver = -1
+            self.state.timelineDriverCell = index_map.get(driver, -1)
+        elif previous == "freeform":
+            try:
+                packed, rows, cols = self.freeform_cells_to_legacy(
+                    list(self.state.gridCells or []), rows, cols
+                )
+            except ValueError as error:
+                self.state.canvasLayoutError = str(error)
+                return
+            self.state.gridLayoutMode = requested
+            self.state.gridRows = rows
+            self.state.gridCols = cols
+            self.normalize_grid_track_sizes(rows, cols)
+            self.state.gridCells = self.normalize_grid_cells(packed, rows, cols)
+            self.state.activeGridCell = active if 0 <= active < len(packed) else -1
+            self.publish_grid_selection(
+                self.normalize_grid_selection(selected, list(self.state.gridCells or []))
+            )
+        else:
+            self.state.gridLayoutMode = requested
+            self.state.gridCells = self.normalize_grid_cells(
+                self.state.gridCells, rows, cols
+            )
+            self.state.activeGridCell = (
+                active if 0 <= active < rows * cols else -1
+            )
+            self.publish_grid_selection(
+                self.normalize_grid_selection(cells=list(self.state.gridCells or []))
+            )
+
+        self.state.canvasLayoutError = ""
+        self.state.canvasLayoutRevision = int(
+            getattr(self.state, "canvasLayoutRevision", 0) or 0
+        ) + 1
+        self.record_interaction(
+            "workspace.layout_changed",
+            source="grid_controls",
+            payload={
+                "change": "layout_mode",
+                "previous": previous,
+                "current": requested,
+                "workspace": self.interaction_workspace_location(),
+            },
         )
-        self.state.activeGridCell = active if 0 <= active < rows * cols else -1
-        self.publish_grid_selection(
-            self.normalize_grid_selection(cells=list(self.state.gridCells or []))
-        )
-        current = str(self.state.gridLayoutMode or "uniform")
-        if current != previous:
+
+    def set_canvas_snap_to_grid(self, value=True, **_):
+        previous = bool(getattr(self.state, "canvasSnapToGrid", True))
+        self.state.canvasSnapToGrid = bool(value)
+        self.normalize_canvas_settings()
+        if self.normalize_grid_layout_mode() == "freeform":
+            self.state.gridCells = grid_model.normalize_freeform_cells(
+                list(self.state.gridCells or []),
+                snap=bool(self.state.canvasSnapToGrid),
+                columns=self.canvas_columns(),
+            )
+            self.state.canvasLayoutRevision = int(self.state.canvasLayoutRevision) + 1
+        if previous != bool(self.state.canvasSnapToGrid):
             self.record_interaction(
                 "workspace.layout_changed",
-                source="grid_controls",
+                source="canvas_controls",
                 payload={
-                    "change": "layout_mode",
-                    "previous": previous,
-                    "current": current,
+                    "change": "canvas_snap",
+                    "enabled": bool(self.state.canvasSnapToGrid),
                     "workspace": self.interaction_workspace_location(),
                 },
             )
+
+    def set_canvas_nudge_others(self, value=True, **_):
+        self.state.canvasNudgeOthers = bool(value)
+        self.normalize_canvas_settings()
+
+    def set_canvas_show_grid(self, value=True, **_):
+        self.state.canvasShowGrid = bool(value)
+        self.normalize_canvas_settings()
+
+    def set_canvas_columns(self, value=canvas_layout.CANVAS_COLUMNS, **_):
+        previous = self.canvas_columns()
+        columns = canvas_layout.normalize_columns(value)
+        if columns == previous:
+            return
+
+        if self.normalize_grid_layout_mode() == "freeform":
+            cells = self.normalize_grid_cells(self.state.gridCells)
+            scaled = canvas_layout.scale_layout_columns(
+                self.canvas_geometries(cells, columns=previous),
+                previous,
+                columns,
+                snap=bool(getattr(self.state, "canvasSnapToGrid", True)),
+            )
+            geometry_by_id = {item["tile_id"]: item for item in scaled}
+            updated_cells = [
+                canvas_layout.geometry_to_cell(
+                    cell,
+                    geometry_by_id[str(cell.get("tile_id", "") or "")],
+                )
+                for cell in cells
+            ]
+            self.state.canvasCols = columns
+            self.state.gridCells = updated_cells
+            self.state.canvasLayoutRevision = int(
+                getattr(self.state, "canvasLayoutRevision", 0) or 0
+            ) + 1
+
+        self.state.canvasCols = columns
+        self.normalize_canvas_settings()
+        self.state.canvasLayoutError = ""
+        self.record_interaction(
+            "workspace.layout_changed",
+            source="canvas_controls",
+            payload={
+                "change": "canvas_columns",
+                "previous": previous,
+                "current": columns,
+                "workspace": self.interaction_workspace_location(),
+            },
+        )
+
+    def adjust_canvas_zoom(self, delta=0, **_):
+        previous = canvas_layout.normalize_zoom(
+            getattr(self.state, "canvasZoom", canvas_layout.CANVAS_ZOOM_DEFAULT)
+        )
+        was_fit = bool(getattr(self.state, "canvasFitToView", False))
+        try:
+            change = float(delta)
+        except (TypeError, ValueError):
+            change = 0.0
+        zoom = canvas_layout.normalize_zoom(previous + change)
+        self.state.canvasZoom = zoom
+        self.state.canvasFitToView = False
+        self.normalize_canvas_settings()
+        if zoom == previous and not was_fit:
+            return
+        self.state.canvasLayoutRevision = int(
+            getattr(self.state, "canvasLayoutRevision", 0) or 0
+        ) + 1
+        self.record_interaction(
+            "workspace.layout_changed",
+            source="canvas_controls",
+            payload={
+                "change": "canvas_zoom",
+                "previous": previous,
+                "current": zoom,
+                "workspace": self.interaction_workspace_location(),
+            },
+        )
+
+    def adjust_canvas_default_tile_width(self, delta=0, **_):
+        previous = canvas_layout.normalize_drop_width(
+            getattr(
+                self.state,
+                "canvasDefaultTileWidth",
+                canvas_layout.CANVAS_DEFAULT_DROP_WIDTH,
+            )
+        )
+        try:
+            change = int(delta)
+        except (TypeError, ValueError):
+            change = 0
+        width = canvas_layout.normalize_drop_width(previous + change)
+        self.state.canvasDefaultTileWidth = width
+        if width == previous:
+            return
+        self.record_interaction(
+            "workspace.layout_changed",
+            source="canvas_controls",
+            payload={
+                "change": "canvas_default_tile_width",
+                "previous": previous,
+                "current": width,
+                "workspace": self.interaction_workspace_location(),
+            },
+        )
+
+    def set_canvas_fit_to_view(self, value=True, **_):
+        previous = bool(getattr(self.state, "canvasFitToView", False))
+        self.state.canvasFitToView = bool(value)
+        self.normalize_canvas_settings()
+        self.state.canvasLayoutRevision = int(
+            getattr(self.state, "canvasLayoutRevision", 0) or 0
+        ) + 1
+        if previous != bool(self.state.canvasFitToView):
+            self.record_interaction(
+                "workspace.layout_changed",
+                source="canvas_controls",
+                payload={
+                    "change": "canvas_fit_to_view",
+                    "enabled": bool(self.state.canvasFitToView),
+                    "workspace": self.interaction_workspace_location(),
+                },
+            )
+
+    def sync_canvas_fit_zoom_trigger(
+        self,
+        value,
+        pane_id="",
+        tab_id="",
+        **_,
+    ):
+        if pane_id and str(pane_id) != str(self.state.workspaceActivePaneId or ""):
+            return
+        if tab_id and str(tab_id) != str(self.state.workspaceActiveTabId or ""):
+            return
+        if not bool(getattr(self.state, "canvasFitToView", False)):
+            return
+        self.state.canvasZoom = canvas_layout.normalize_zoom(value)
+
+    @staticmethod
+    def parse_canvas_payload(value: Any, default: Any):
+        if isinstance(value, str):
+            try:
+                return json.loads(value)
+            except (TypeError, ValueError):
+                return default
+        return value
+
+    def canvas_geometries(
+        self,
+        cells: Optional[List[Dict[str, Any]]] = None,
+        *,
+        columns: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        if cells is None:
+            cells = self.normalize_grid_cells(self.state.gridCells)
+        snap = bool(getattr(self.state, "canvasSnapToGrid", True))
+        column_count = self.canvas_columns() if columns is None else columns
+        return [
+            canvas_layout.geometry_from_cell(
+                cell,
+                fallback_id=f"tile-{index + 1}",
+                fallback_index=index,
+                snap=snap,
+                columns=column_count,
+            )
+            for index, cell in enumerate(cells)
+        ]
+
+    def commit_canvas_layout(
+        self,
+        layout_payload,
+        active_tile_id: str = "",
+        pane_id: str = "",
+        tab_id: str = "",
+    ) -> bool:
+        if self.normalize_grid_layout_mode() != "freeform":
+            return False
+        if pane_id and str(pane_id) != str(self.state.workspaceActivePaneId or ""):
+            return False
+        if tab_id and str(tab_id) != str(self.state.workspaceActiveTabId or ""):
+            return False
+
+        payload = self.parse_canvas_payload(layout_payload, [])
+        if not isinstance(payload, list) or len(payload) > canvas_layout.CANVAS_MAX_TILES:
+            self.state.canvasLayoutError = "Invalid canvas layout payload"
+            return False
+        cells = self.normalize_grid_cells(self.state.gridCells)
+        existing_by_id = {
+            str(cell.get("tile_id", "") or ""): (index, cell)
+            for index, cell in enumerate(cells)
+        }
+        if not existing_by_id and not payload:
+            return True
+        if any(not isinstance(item, dict) for item in payload):
+            self.state.canvasLayoutError = "Canvas layout entries must be objects"
+            return False
+        payload_by_id = {
+            str(item.get("tile_id", "") or ""): item for item in payload
+        }
+        if set(payload_by_id) != set(existing_by_id):
+            self.state.canvasLayoutError = "Canvas layout tile IDs do not match"
+            return False
+
+        snap = bool(getattr(self.state, "canvasSnapToGrid", True))
+        columns = self.canvas_columns()
+        geometries: List[Dict[str, Any]] = []
+        for tile_id, (_index, cell) in existing_by_id.items():
+            proposed = payload_by_id[tile_id]
+            geometries.append(
+                canvas_layout.geometry(
+                    tile_id,
+                    cell.get("tile_type", canvas_layout.tile_type_for_cell(cell)),
+                    proposed.get("x"),
+                    proposed.get("y"),
+                    proposed.get("w"),
+                    proposed.get("h"),
+                    snap=snap,
+                    columns=columns,
+                )
+            )
+        valid, message = canvas_layout.validate_layout(
+            geometries, columns=columns
+        )
+        if not valid:
+            self.state.canvasLayoutError = message
+            return False
+
+        geometry_by_id = {item["tile_id"]: item for item in geometries}
+        self.state.gridCells = [
+            canvas_layout.geometry_to_cell(
+                cell, geometry_by_id[str(cell.get("tile_id", "") or "")]
+            )
+            for cell in cells
+        ]
+        active_id = str(active_tile_id or "")
+        if active_id in existing_by_id:
+            self.state.activeGridCell = existing_by_id[active_id][0]
+        self.state.canvasLayoutError = ""
+        self.state.canvasLayoutRevision = int(
+            getattr(self.state, "canvasLayoutRevision", 0) or 0
+        ) + 1
+        self.record_interaction(
+            "workspace.layout_changed",
+            source="canvas_drag",
+            payload={
+                "change": "freeform_geometry",
+                "tile_count": len(geometries),
+                "active_tile_id": active_id,
+                "workspace": self.interaction_workspace_location(
+                    self.state.activeGridCell
+                ),
+            },
+        )
+        return True
+
+    def commit_canvas_layout_trigger(
+        self,
+        layout_payload,
+        active_tile_id="",
+        pane_id="",
+        tab_id="",
+        **_,
+    ):
+        self.commit_canvas_layout(
+            layout_payload,
+            active_tile_id=active_tile_id,
+            pane_id=pane_id,
+            tab_id=tab_id,
+        )
+
+    def add_var_to_canvas(
+        self,
+        var_name: str,
+        geometry_payload=None,
+        *,
+        sync_selection: bool = False,
+    ) -> int:
+        var = str(var_name or "").strip()
+        if not var or self.normalize_grid_layout_mode() != "freeform":
+            return -1
+        cells = self.normalize_grid_cells(self.state.gridCells)
+        if len(cells) >= canvas_layout.CANVAS_MAX_TILES:
+            self.state.canvasLayoutError = "Freeform canvas reached its tile limit"
+            return -1
+        proposed = self.parse_canvas_payload(geometry_payload, {})
+        if not isinstance(proposed, dict):
+            proposed = {}
+        tile_id = self.next_canvas_tile_id(cells)
+        columns = self.canvas_columns()
+        default_w = canvas_layout.normalize_drop_width(
+            getattr(
+                self.state,
+                "canvasDefaultTileWidth",
+                canvas_layout.CANVAS_DEFAULT_DROP_WIDTH,
+            )
+        )
+        default_h = max(
+            canvas_layout.minimum_size("plot")[1],
+            default_w * 2,
+        )
+        item = canvas_layout.geometry(
+            tile_id,
+            "plot",
+            proposed.get("x", 0),
+            proposed.get("y", 0),
+            proposed.get("w", default_w),
+            proposed.get("h", default_h),
+            snap=bool(getattr(self.state, "canvasSnapToGrid", True)),
+            columns=columns,
+        )
+        others = self.canvas_geometries(cells)
+        if any(canvas_layout.overlaps(item, other) for other in others):
+            item = canvas_layout.nearest_free(item, others, columns=columns)
+
+        placeholder = empty_grid_cell()
+        placeholder.update(
+            {
+                "variable_id": var,
+                "variable_name": self.variable_label(var),
+                "display_title": self.variable_label(var),
+                "status": "loading",
+            }
+        )
+        placeholder = canvas_layout.geometry_to_cell(placeholder, item)
+        cells.append(placeholder)
+        self.state.gridCells = cells
+        target = len(cells) - 1
+        self.assign_var_to_grid_cell(target, var, sync_selection=sync_selection)
+
+        cells = self.normalize_grid_cells(self.state.gridCells)
+        if 0 <= target < len(cells):
+            cell = dict(cells[target] or {})
+            inferred = dict(cell)
+            inferred["tile_type"] = ""
+            kind = canvas_layout.tile_type_for_cell(inferred)
+            cell["tile_type"] = kind
+            current = canvas_layout.geometry_from_cell(
+                cell,
+                fallback_id=tile_id,
+                fallback_index=target,
+                snap=bool(self.state.canvasSnapToGrid),
+                columns=columns,
+            )
+            min_w, min_h = canvas_layout.minimum_size(kind)
+            current["w"] = max(min_w, current["w"])
+            current["h"] = max(min_h, current["h"])
+            current["x"] = min(
+                current["x"], columns - current["w"]
+            )
+            other_geometry = [
+                geometry
+                for index, geometry in enumerate(self.canvas_geometries(cells))
+                if index != target
+            ]
+            if any(canvas_layout.overlaps(current, other) for other in other_geometry):
+                current = canvas_layout.nearest_free(
+                    current, other_geometry, columns=columns
+                )
+            cells[target] = canvas_layout.geometry_to_cell(cell, current)
+            self.state.gridCells = cells
+        self.state.activeGridCell = target
+        self.set_grid_selection([target], active=target)
+        self.state.canvasLayoutRevision = int(self.state.canvasLayoutRevision) + 1
+        self.state.canvasLayoutError = ""
+        return target
+
+    def add_var_to_canvas_trigger(
+        self,
+        var_name,
+        geometry_payload=None,
+        pane_id="",
+        tab_id="",
+        layout_payload="",
+        **_,
+    ):
+        if pane_id and str(pane_id) != str(self.state.workspaceActivePaneId or ""):
+            return
+        if tab_id and str(tab_id) != str(self.state.workspaceActiveTabId or ""):
+            return
+        if layout_payload and not self.commit_canvas_layout(
+            layout_payload,
+            pane_id=pane_id,
+            tab_id=tab_id,
+        ):
+            return
+        self.add_var_to_canvas(var_name, geometry_payload, sync_selection=False)
+        self.state.selectedVar = ""
+        self.state.draggedVar = ""
 
     def set_grid_cell_size(self, size: int, **_):
         self.normalize_grid_sizing()
@@ -458,6 +1101,8 @@ class GridControllerMixin:
         )
 
     def set_grid_layout_size(self, rows: int, cols: int, **_):
+        if self.normalize_grid_layout_mode() == "freeform":
+            return
         old_rows, old_cols = self.grid_dimensions()
         new_rows = clamp_int(rows, old_rows, self.GRID_MIN_ROWS, self.GRID_MAX_ROWS)
         new_cols = clamp_int(cols, old_cols, self.GRID_MIN_COLS, self.GRID_MAX_COLS)
@@ -501,6 +1146,9 @@ class GridControllerMixin:
     def add_var_to_grid(self, var_name: str, **_):
         var = str(var_name or "").strip()
         if not var:
+            return
+        if self.normalize_grid_layout_mode() == "freeform":
+            self.add_var_to_canvas(var, {}, sync_selection=True)
             return
 
         cells = self.normalize_grid_cells(self.state.gridCells)
@@ -713,20 +1361,56 @@ class GridControllerMixin:
         if not self.is_valid_grid_index(idx):
             return
 
-        self.clear_timeline_driver_if_cell(idx)
         cells = self.normalize_grid_cells(self.state.gridCells)
         previous = dict(cells[idx] or {})
-        assign_cell(cells, idx, empty_grid_cell())
-        self.state.gridCells = self.normalize_grid_cells(cells)
-        self.publish_grid_selection(
-            [
-                item
-                for item in self.normalize_grid_selection(
-                    cells=list(self.state.gridCells or [])
-                )
-                if item != idx
-            ]
-        )
+        if self.normalize_grid_layout_mode() == "freeform":
+            cells.pop(idx)
+            self.state.gridCells = cells
+            selected = []
+            for item in list(getattr(self.state, "selectedGridCellIndices", []) or []):
+                try:
+                    selected_index = int(item)
+                except (TypeError, ValueError):
+                    continue
+                if selected_index != idx:
+                    selected.append(
+                        selected_index - 1 if selected_index > idx else selected_index
+                    )
+            self.publish_grid_selection(
+                self.normalize_grid_selection(selected, cells)
+            )
+            try:
+                active = int(getattr(self.state, "activeGridCell", -1))
+            except Exception:
+                active = -1
+            if active == idx:
+                self.state.activeGridCell = -1
+            elif active > idx:
+                self.state.activeGridCell = active - 1
+            try:
+                driver = int(getattr(self.state, "timelineDriverCell", -1))
+            except Exception:
+                driver = -1
+            if driver == idx:
+                self.state.timelineDriverCell = -1
+            elif driver > idx:
+                self.state.timelineDriverCell = driver - 1
+            self.state.canvasLayoutRevision = int(
+                getattr(self.state, "canvasLayoutRevision", 0) or 0
+            ) + 1
+        else:
+            self.clear_timeline_driver_if_cell(idx)
+            assign_cell(cells, idx, empty_grid_cell())
+            self.state.gridCells = self.normalize_grid_cells(cells)
+            self.publish_grid_selection(
+                [
+                    item
+                    for item in self.normalize_grid_selection(
+                        cells=list(self.state.gridCells or [])
+                    )
+                    if item != idx
+                ]
+            )
         variable_id = str(
             previous.get("variable_id", "")
             or previous.get("variable_name", "")

@@ -1,6 +1,7 @@
 """Deterministic Trame application used by the browser tests."""
 
 import argparse
+import json
 import sys
 from copy import deepcopy
 from pathlib import Path
@@ -12,7 +13,12 @@ if str(REPOSITORY_ROOT) not in sys.path:
 
 from seurat import module as seurat_module  # noqa: E402
 from seurat.controllers.catalog import _filter_variable_groups  # noqa: E402
-from seurat.models.grid import empty_grid_cell  # noqa: E402
+from seurat.models import canvas_layout  # noqa: E402
+from seurat.models.grid import (  # noqa: E402
+    cell_has_content,
+    empty_grid_cell,
+    normalize_grid_cells,
+)
 from seurat.models.workspace_layout import (  # noqa: E402
     active_pane_and_tab,
     add_workspace_tab as add_workspace_tab_model,
@@ -251,6 +257,7 @@ def build_fixture_server(mode):
     }
     state.gridRows = 1
     state.gridCols = 3
+    state.gridLayoutMode = "uniform"
     state.gridColumnSizes = [280, 280, 280]
     state.gridRowSizes = [352]
     state.gridColumnWeights = [1.0, 1.0, 1.0]
@@ -273,6 +280,44 @@ def build_fixture_server(mode):
             _image_sequence_cell(mode),
             empty_grid_cell(),
         ]
+    if mode in {"freeform-column-seam", "freeform-row-seam"}:
+        row_tiles = [dict(state.gridCells[0]), dict(state.gridCells[1])]
+        row_tiles[0].update(
+            {
+                "tile_id": "tile-1",
+                "tile_type": "plot",
+                "canvas_x": 0 if mode == "freeform-column-seam" else 10,
+                "canvas_y": 0 if mode == "freeform-column-seam" else 8,
+                "canvas_w": 10,
+                "canvas_h": 8,
+            }
+        )
+        row_tiles[1].update(
+            {
+                "tile_id": "tile-2",
+                "tile_type": "plot",
+                "canvas_x": 10,
+                "canvas_y": 0,
+                "canvas_w": 10,
+                "canvas_h": 8,
+            }
+        )
+        state.gridLayoutMode = "freeform"
+        state.gridCells = row_tiles
+    if mode == "freeform-resize":
+        resize_tile = dict(state.gridCells[0])
+        resize_tile.update(
+            {
+                "tile_id": "tile-1",
+                "tile_type": "plot",
+                "canvas_x": 6,
+                "canvas_y": 4,
+                "canvas_w": 8,
+                "canvas_h": 8,
+            }
+        )
+        state.gridLayoutMode = "freeform"
+        state.gridCells = [resize_tile]
     state.workspaceLayout = initial_workspace_layout(grid_snapshot(state))
     state.workspacePanes = deepcopy(state.workspaceLayout["panes"])
     state.workspacePaneFrames, splitters = workspace_geometry(state.workspaceLayout)
@@ -435,6 +480,47 @@ def build_fixture_server(mode):
             )
         )
 
+    def move_workspace_canvas_tile(
+        source_pane_id,
+        source_tab_id,
+        source_index,
+        destination_pane_id,
+        destination_tab_id,
+        geometry_payload,
+    ):
+        layout = stash_active_workspace_grid()
+        _source_pane, source_tab = pane_and_tab(
+            layout, source_pane_id, source_tab_id
+        )
+        destination_pane, destination_tab = pane_and_tab(
+            layout, destination_pane_id, destination_tab_id
+        )
+        if source_tab is None or destination_tab is None:
+            return
+        source_cells = list(source_tab["grid"].get("cells", []) or [])
+        index = int(source_index)
+        if not 0 <= index < len(source_cells):
+            return
+        cell = dict(source_cells.pop(index))
+        geometry = json.loads(geometry_payload)
+        cell.update(
+            {
+                "canvas_x": geometry["x"],
+                "canvas_y": geometry["y"],
+                "canvas_w": geometry["w"],
+                "canvas_h": geometry["h"],
+            }
+        )
+        source_tab["grid"]["cells"] = source_cells
+        destination_cells = list(destination_tab["grid"].get("cells", []) or [])
+        destination_cells.append(cell)
+        destination_tab["grid"]["cells"] = destination_cells
+        destination_tab["grid"]["active_cell"] = len(destination_cells) - 1
+        destination_pane["active_tab_id"] = destination_tab_id
+        layout["active_pane_id"] = destination_pane_id
+        layout["active_tab_id"] = destination_tab_id
+        load_active_workspace_grid(layout)
+
     def resize_workspace_split(split_id, ratio):
         publish_workspace_layout(
             resize_workspace_split_model(
@@ -496,6 +582,164 @@ def build_fixture_server(mode):
             "minmax(180px, 1fr)" for _ in range(cols)
         )
         state.gridFitRowTemplate = " ".join("minmax(212px, 1fr)" for _ in range(rows))
+
+    def set_grid_layout_mode(layout_mode):
+        requested = str(layout_mode or "uniform")
+        previous = str(state.gridLayoutMode or "uniform")
+        if requested == previous:
+            return
+        if requested == "freeform":
+            compact = []
+            for index, raw_cell in enumerate(state.gridCells):
+                if not cell_has_content(raw_cell):
+                    continue
+                cell = dict(raw_cell)
+                cell.update(
+                    {
+                        "tile_id": f"tile-{len(compact) + 1}",
+                        "tile_type": canvas_layout.tile_type_for_cell(cell),
+                        "canvas_x": (len(compact) * 10) % 20,
+                        "canvas_y": (len(compact) // 2) * 8,
+                        "canvas_w": 10,
+                        "canvas_h": 8,
+                    }
+                )
+                compact.append(cell)
+            state.gridLayoutMode = "freeform"
+            state.gridCells = normalize_grid_cells(
+                compact,
+                state.gridRows,
+                state.gridCols,
+                "freeform",
+            )
+        else:
+            cells = [dict(cell) for cell in state.gridCells if cell_has_content(cell)]
+            while len(cells) < state.gridRows * state.gridCols:
+                cells.append(empty_grid_cell())
+            state.gridLayoutMode = requested if requested == "spanning" else "uniform"
+            state.gridCells = normalize_grid_cells(
+                cells,
+                state.gridRows,
+                state.gridCols,
+                state.gridLayoutMode,
+            )
+        state.activeGridCell = -1
+        state.selectedGridCellIndices = []
+        state.selectedGridCellMap = {}
+        state.canvasLayoutRevision += 1
+
+    def set_canvas_snap_to_grid(value=True):
+        state.canvasSnapToGrid = bool(value)
+
+    def set_canvas_nudge_others(value=True):
+        state.canvasNudgeOthers = bool(value)
+
+    def set_canvas_show_grid(value=True):
+        state.canvasShowGrid = bool(value)
+
+    def adjust_canvas_zoom(delta=0):
+        state.canvasZoom = canvas_layout.normalize_zoom(
+            state.canvasZoom + float(delta or 0)
+        )
+        state.canvasFitToView = False
+        state.canvasLayoutRevision += 1
+
+    def adjust_canvas_default_tile_width(delta=0):
+        state.canvasDefaultTileWidth = canvas_layout.normalize_drop_width(
+            state.canvasDefaultTileWidth + int(delta or 0)
+        )
+
+    def set_canvas_fit_to_view(value=True):
+        state.canvasFitToView = bool(value)
+        state.canvasLayoutRevision += 1
+
+    def sync_canvas_fit_zoom(value, *_args):
+        if state.canvasFitToView:
+            state.canvasZoom = canvas_layout.normalize_zoom(value)
+
+    def set_canvas_columns(value=canvas_layout.CANVAS_COLUMNS):
+        previous = canvas_layout.normalize_columns(state.canvasCols)
+        columns = canvas_layout.normalize_columns(value)
+        if previous == columns:
+            return
+        geometries = [
+            canvas_layout.geometry_from_cell(
+                cell,
+                fallback_id=f"tile-{index + 1}",
+                fallback_index=index,
+                snap=bool(state.canvasSnapToGrid),
+                columns=previous,
+            )
+            for index, cell in enumerate(state.gridCells)
+        ]
+        scaled = canvas_layout.scale_layout_columns(
+            geometries,
+            previous,
+            columns,
+            snap=bool(state.canvasSnapToGrid),
+        )
+        by_id = {item["tile_id"]: item for item in scaled}
+        state.canvasCols = columns
+        state.gridCells = [
+            canvas_layout.geometry_to_cell(cell, by_id[cell["tile_id"]])
+            for cell in state.gridCells
+        ]
+        state.canvasLayoutRevision += 1
+
+    def commit_canvas_layout(layout_payload, active_tile_id="", *_args):
+        proposed = json.loads(layout_payload)
+        by_id = {str(item["tile_id"]): item for item in proposed}
+        cells = []
+        for cell in state.gridCells:
+            updated = dict(cell)
+            geometry = by_id[updated["tile_id"]]
+            updated.update(
+                {
+                    "canvas_x": geometry["x"],
+                    "canvas_y": geometry["y"],
+                    "canvas_w": geometry["w"],
+                    "canvas_h": geometry["h"],
+                }
+            )
+            cells.append(updated)
+        state.gridCells = cells
+        state.activeGridCell = next(
+            (
+                index
+                for index, cell in enumerate(cells)
+                if cell["tile_id"] == active_tile_id
+            ),
+            -1,
+        )
+        state.canvasLayoutRevision += 1
+
+    def add_var_to_canvas(
+        variable_id,
+        geometry_payload,
+        _pane_id="",
+        _tab_id="",
+        layout_payload="",
+    ):
+        if layout_payload:
+            commit_canvas_layout(layout_payload)
+        geometry = json.loads(geometry_payload)
+        cell = empty_grid_cell()
+        cell.update(
+            {
+                "variable_id": str(variable_id),
+                "variable_name": str(variable_id),
+                "display_title": str(variable_id),
+                "status": "ok",
+                "tile_id": f"tile-{len(state.gridCells) + 1}",
+                "tile_type": "plot",
+                "canvas_x": geometry["x"],
+                "canvas_y": geometry["y"],
+                "canvas_w": geometry["w"],
+                "canvas_h": geometry["h"],
+            }
+        )
+        state.gridCells = [*state.gridCells, cell]
+        state.canvasLayoutRevision += 1
 
     def _numeric_values(values, count, fallback):
         if isinstance(values, str):
@@ -806,13 +1050,33 @@ def build_fixture_server(mode):
     server.controller.add("close_workspace_pane")(close_workspace_pane)
     server.controller.add("move_workspace_tab")(move_workspace_tab)
     server.controller.add("set_active_grid_cell")(set_active_grid_cell)
+    server.controller.add("set_grid_layout_mode")(set_grid_layout_mode)
+    server.controller.add("set_canvas_snap_to_grid")(set_canvas_snap_to_grid)
+    server.controller.add("set_canvas_nudge_others")(set_canvas_nudge_others)
+    server.controller.add("set_canvas_show_grid")(set_canvas_show_grid)
+    server.controller.add("adjust_canvas_zoom")(adjust_canvas_zoom)
+    server.controller.add("adjust_canvas_default_tile_width")(
+        adjust_canvas_default_tile_width
+    )
+    server.controller.add("set_canvas_fit_to_view")(set_canvas_fit_to_view)
+    server.controller.add("set_canvas_columns")(set_canvas_columns)
     server.controller.add("set_grid_layout_size")(set_grid_layout_size)
+    server.controller.trigger("commit_canvas_layout_trigger")(
+        commit_canvas_layout
+    )
+    server.controller.trigger("add_var_to_canvas_trigger")(add_var_to_canvas)
+    server.controller.trigger("sync_canvas_fit_zoom_trigger")(
+        sync_canvas_fit_zoom
+    )
     server.controller.trigger("assign_var_to_grid_cell_trigger")(
         assign_var_to_grid_cell
     )
     server.controller.trigger("move_grid_cell_trigger")(move_grid_cell)
     server.controller.trigger("move_workspace_grid_cell_trigger")(
         move_workspace_grid_cell
+    )
+    server.controller.trigger("move_workspace_canvas_tile_trigger")(
+        move_workspace_canvas_tile
     )
     server.controller.trigger("move_workspace_tab_trigger")(move_workspace_tab)
     server.controller.trigger("reorder_workspace_tab_trigger")(
@@ -857,7 +1121,16 @@ def main():
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument(
         "--mode",
-        choices=("step", "physical", "mixed", "scalar", "scalar-settings"),
+        choices=(
+            "step",
+            "physical",
+            "mixed",
+            "scalar",
+            "scalar-settings",
+            "freeform-column-seam",
+            "freeform-resize",
+            "freeform-row-seam",
+        ),
         default="step",
     )
     args = parser.parse_args()

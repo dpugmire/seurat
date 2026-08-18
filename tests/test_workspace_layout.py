@@ -21,6 +21,7 @@ from seurat.models.workspace_layout import (
     workspace_geometry,
     workspace_pane_ids,
 )
+from seurat.models.grid import empty_grid_cell
 from seurat.state import init_state
 
 
@@ -41,7 +42,7 @@ class WorkspaceLayoutTests(unittest.TestCase):
         self.assertEqual(state.gridCells[0]["variable_id"], "density")
         self.assertIsNot(state.gridCells, snapshot["cells"])
 
-    def test_new_tabs_keep_layout_preferences_but_start_empty(self):
+    def test_new_tabs_start_empty_in_default_freeform_mode(self):
         state = self.make_state()
         state.gridRows = 2
         state.gridCols = 2
@@ -55,10 +56,8 @@ class WorkspaceLayoutTests(unittest.TestCase):
         self.assertEqual(tab_id, "tab-2")
         self.assertEqual(pane["active_tab_id"], tab_id)
         self.assertEqual((tab["grid"]["rows"], tab["grid"]["columns"]), (2, 2))
-        self.assertEqual(len(tab["grid"]["cells"]), 4)
-        self.assertTrue(
-            all(not cell.get("variable_id") for cell in tab["grid"]["cells"])
-        )
+        self.assertEqual(tab["grid"]["layout_mode"], "freeform")
+        self.assertEqual(tab["grid"]["cells"], [])
 
     def test_workspace_splits_active_panes_into_at_most_four_leaves(self):
         state = self.make_state()
@@ -127,7 +126,7 @@ class WorkspaceLayoutTests(unittest.TestCase):
         layout = initial_workspace_layout(snapshot)
         layout, moved_tab_id = add_workspace_tab(layout, "pane-1", snapshot)
         _, moved_tab = active_pane_and_tab(layout)
-        moved_tab["grid"]["cells"][0]["variable_id"] = "pressure"
+        moved_tab["grid"]["cells"] = [{"variable_id": "pressure"}]
         layout, _ = split_workspace(layout, "horizontal", snapshot)
 
         layout = move_workspace_tab(layout, "pane-1", moved_tab_id)
@@ -143,7 +142,7 @@ class WorkspaceLayoutTests(unittest.TestCase):
         layout = initial_workspace_layout(snapshot)
         layout, moved_tab_id = add_workspace_tab(layout, "pane-1", snapshot)
         _, moved_tab = active_pane_and_tab(layout)
-        moved_tab["grid"]["cells"][0]["variable_id"] = "pressure"
+        moved_tab["grid"]["cells"] = [{"variable_id": "pressure"}]
         layout, _ = split_workspace(layout, "horizontal", snapshot)
 
         layout = move_workspace_tab_to_pane(
@@ -189,6 +188,7 @@ class WorkspaceLayoutTests(unittest.TestCase):
 
     def test_visualizations_move_between_tab_grids_and_update_ownership(self):
         state = self.make_state()
+        state.gridLayoutMode = "uniform"
         state.gridCells[0].update(
             {
                 "variable_id": "pressure",
@@ -204,6 +204,8 @@ class WorkspaceLayoutTests(unittest.TestCase):
         layout = initial_workspace_layout(snapshot)
         layout, _ = split_workspace(layout, "horizontal", snapshot)
         destination_grid = layout["panes"][1]["tabs"][0]["grid"]
+        destination_grid["layout_mode"] = "uniform"
+        destination_grid["cells"] = [empty_grid_cell() for _ in range(9)]
         destination_grid["cells"][4].update(
             {
                 "variable_id": "temperature",
@@ -247,7 +249,9 @@ class WorkspaceLayoutTests(unittest.TestCase):
         layout, _ = add_workspace_tab(layout, "pane-1", snapshot)
         layout, active_tab_id = add_workspace_tab(layout, "pane-1", snapshot)
         for index, tab in enumerate(layout["panes"][0]["tabs"]):
-            tab["grid"]["cells"][0]["variable_id"] = f"variable-{index + 1}"
+            tab["grid"]["cells"] = [
+                {"variable_id": f"variable-{index + 1}"}
+            ]
 
         layout = reorder_workspace_tab(layout, "pane-1", "tab-1", 3)
 
