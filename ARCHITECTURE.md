@@ -50,7 +50,9 @@ flowchart LR
 ## Ownership Rules
 
 - The browser owns interaction mechanics and rendering lifecycles, but not
-  campaign data access or backend credentials.
+  campaign data access or backend credentials. Freeform pointer interactions
+  operate on a local layout snapshot and send one validated geometry commit to
+  Trame when the pointer is released.
 - Trame controllers translate user actions and state changes into application
   operations. They should not depend on SQLite rows, ACA paths, Phobos REST
   objects, or transport-specific query syntax.
@@ -60,6 +62,9 @@ flowchart LR
   pane records. Pane records own tabs; tabs own grid snapshots. Split ratios
   are durable semantic state, while percentage frames and divider geometry are
   derived for the browser and are not persisted as independent authority.
+- Freeform tabs store compact tiles with stable IDs and `{x, y, w, h}` in
+  24-column canvas units. The collision, auto-fit, insertion, and push rules
+  are pure model logic mirrored by the browser interaction runtime.
 - `SeuratApplication` is the facade through which controllers consume backend
   capabilities.
 - Backend contracts return normalized Seurat DTOs. Local and Phobos adapters

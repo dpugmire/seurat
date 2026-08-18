@@ -1,6 +1,7 @@
 """State owned by the visualization grid and synchronized timeline."""
 
-from seurat.models.grid import empty_grid_cell
+from seurat.models.grid import DEFAULT_GRID_LAYOUT_MODE, empty_grid_cell
+from seurat.models import canvas_layout
 
 
 GRID_ROWS = 3
@@ -26,7 +27,20 @@ def defaults():
         "gridMinCols": 1,
         "gridMaxRows": 8,
         "gridMaxCols": 8,
-        "gridLayoutMode": "uniform",
+        "gridLayoutMode": DEFAULT_GRID_LAYOUT_MODE,
+        "canvasCols": canvas_layout.CANVAS_COLUMNS,
+        "canvasRowHeight": canvas_layout.CANVAS_ROW_HEIGHT,
+        "canvasSnapToGrid": True,
+        "canvasNudgeOthers": True,
+        "canvasShowGrid": False,
+        "canvasZoom": canvas_layout.CANVAS_ZOOM_DEFAULT,
+        "canvasFitToView": False,
+        "canvasDefaultTileWidth": canvas_layout.CANVAS_DEFAULT_DROP_WIDTH,
+        "canvasDwellMs": canvas_layout.CANVAS_DWELL_MS,
+        "canvasSnapDeadZone": canvas_layout.CANVAS_SNAP_DEAD_ZONE,
+        "canvasTransitionMs": canvas_layout.CANVAS_TRANSITION_MS,
+        "canvasLayoutRevision": 0,
+        "canvasLayoutError": "",
         "gridSizingMode": "static",
         "gridCellSize": GRID_CELL_SIZE,
         "gridMinCellSize": 80,

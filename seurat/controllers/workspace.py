@@ -9,6 +9,8 @@ from seurat.native_file_dialog import (
     choose_workspace_load_path,
     choose_workspace_save_path,
 )
+from seurat.models import canvas_layout
+from seurat.models import grid as grid_model
 from seurat.models.timeline import toggle_timeline_driver
 from seurat.models.workspace_layout import (
     active_pane_and_tab,
@@ -58,6 +60,7 @@ class WorkspaceControllerMixin:
     )
     TRIGGER_BINDINGS = (
         ("move_workspace_grid_cell_trigger", "move_workspace_grid_cell"),
+        ("move_workspace_canvas_tile_trigger", "move_workspace_canvas_tile"),
         ("move_workspace_tab_trigger", "move_workspace_tab"),
         ("reorder_workspace_tab_trigger", "reorder_workspace_tab"),
         ("resize_workspace_split_trigger", "resize_workspace_split"),
@@ -107,6 +110,7 @@ class WorkspaceControllerMixin:
     def _load_workspace_grid(self, snapshot: Mapping[str, Any]) -> None:
         needs_refresh = bool(snapshot.get("needs_refresh", False))
         apply_grid_snapshot(self.state, snapshot)
+        self.normalize_canvas_settings()
         rows, cols = self.grid_dimensions()
         self.normalize_grid_track_sizes(rows, cols)
         self.state.gridCells = self.normalize_grid_cells(
@@ -143,10 +147,16 @@ class WorkspaceControllerMixin:
             )
         except Exception:
             cols = 3
+        requested_layout_mode = str(
+            saved_grid.get(
+                "layout_mode", grid_model.DEFAULT_GRID_LAYOUT_MODE
+            )
+            or grid_model.DEFAULT_GRID_LAYOUT_MODE
+        )
         layout_mode = (
-            "spanning"
-            if str(saved_grid.get("layout_mode", "")) == "spanning"
-            else "uniform"
+            requested_layout_mode
+            if requested_layout_mode in {"uniform", "spanning", "freeform"}
+            else grid_model.DEFAULT_GRID_LAYOUT_MODE
         )
         sizing_mode = (
             "fit" if str(saved_grid.get("sizing_mode", "")) == "fit" else "static"
@@ -160,6 +170,31 @@ class WorkspaceControllerMixin:
                 "rows": rows,
                 "columns": cols,
                 "layout_mode": layout_mode,
+                "canvas_columns": canvas_layout.normalize_columns(
+                    saved_grid.get("canvas_columns", canvas_layout.CANVAS_COLUMNS)
+                ),
+                "canvas_row_height": canvas_layout.CANVAS_ROW_HEIGHT,
+                "canvas_snap_to_grid": bool(
+                    saved_grid.get("canvas_snap_to_grid", True)
+                ),
+                "canvas_nudge_others": bool(
+                    saved_grid.get("canvas_nudge_others", True)
+                ),
+                "canvas_show_grid": bool(
+                    saved_grid.get("canvas_show_grid", False)
+                ),
+                "canvas_zoom": canvas_layout.normalize_zoom(
+                    saved_grid.get(
+                        "canvas_zoom", canvas_layout.CANVAS_ZOOM_DEFAULT
+                    )
+                ),
+                "canvas_fit_to_view": bool(
+                    saved_grid.get("canvas_fit_to_view", False)
+                ),
+                "canvas_dwell_ms": canvas_layout.CANVAS_DWELL_MS,
+                "canvas_snap_dead_zone": canvas_layout.CANVAS_SNAP_DEAD_ZONE,
+                "canvas_transition_ms": canvas_layout.CANVAS_TRANSITION_MS,
+                "canvas_layout_revision": 0,
                 "sizing_mode": sizing_mode,
                 "cell_size": cell_size,
                 "fit_minimum_cell_size": fit_minimum,
@@ -200,13 +235,21 @@ class WorkspaceControllerMixin:
             runtime["row_weights"], fit_minimum + self.GRID_HEADER_HEIGHT
         )
         runtime["cells"] = self.normalize_grid_cells_for_workspace(
-            list(saved_grid.get("cells", []) or []), rows, cols, layout_mode
+            list(saved_grid.get("cells", []) or []),
+            rows,
+            cols,
+            layout_mode,
+            bool(runtime["canvas_snap_to_grid"]),
+            int(runtime["canvas_columns"]),
         )
         try:
             active = int(saved_grid.get("active_cell", -1))
         except Exception:
             active = -1
-        runtime["active_cell"] = active if 0 <= active < rows * cols else -1
+        cell_count = (
+            len(runtime["cells"]) if layout_mode == "freeform" else rows * cols
+        )
+        runtime["active_cell"] = active if 0 <= active < cell_count else -1
         selected = self.normalize_grid_selection(
             list(saved_grid.get("selected_cells", []) or []), runtime["cells"]
         )
@@ -219,20 +262,34 @@ class WorkspaceControllerMixin:
         except Exception:
             driver = -1
         runtime["timeline_driver_cell"] = (
-            driver if 0 <= driver < rows * cols else -1
+            driver if 0 <= driver < cell_count else -1
         )
         runtime["needs_refresh"] = True
         return runtime
 
     def normalize_grid_cells_for_workspace(
-        self, cells, rows: int, cols: int, layout_mode: str
+        self,
+        cells,
+        rows: int,
+        cols: int,
+        layout_mode: str,
+        canvas_snap: bool = True,
+        canvas_columns: int = canvas_layout.CANVAS_COLUMNS,
     ):
         previous_mode = getattr(self.state, "gridLayoutMode", "uniform")
+        previous_snap = getattr(self.state, "canvasSnapToGrid", True)
+        previous_columns = getattr(
+            self.state, "canvasCols", canvas_layout.CANVAS_COLUMNS
+        )
         try:
             self.state.gridLayoutMode = layout_mode
+            self.state.canvasSnapToGrid = bool(canvas_snap)
+            self.state.canvasCols = canvas_layout.normalize_columns(canvas_columns)
             return self.normalize_grid_cells(cells, rows, cols)
         finally:
             self.state.gridLayoutMode = previous_mode
+            self.state.canvasSnapToGrid = previous_snap
+            self.state.canvasCols = previous_columns
 
     def _restore_workspace_layout(self, saved_workspace: Any) -> None:
         if not isinstance(saved_workspace, Mapping):
@@ -538,6 +595,170 @@ class WorkspaceControllerMixin:
             )
             self.clear_interaction_assignment()
 
+    def move_workspace_canvas_tile(
+        self,
+        source_pane_id: str,
+        source_tab_id: str,
+        source_index: int,
+        destination_pane_id: str,
+        destination_tab_id: str,
+        geometry_payload,
+        **_,
+    ):
+        """Move one compact Freeform tile between two workspace tabs."""
+
+        if (
+            str(source_pane_id or "") == str(destination_pane_id or "")
+            and str(source_tab_id or "") == str(destination_tab_id or "")
+        ):
+            return
+        layout = self._stash_active_workspace_grid()
+        _source_pane, source_tab = pane_and_tab(
+            layout, source_pane_id, source_tab_id
+        )
+        _destination_pane, destination_tab = pane_and_tab(
+            layout, destination_pane_id, destination_tab_id
+        )
+        if source_tab is None or destination_tab is None:
+            return
+        source_grid = source_tab.get("grid", {})
+        destination_grid = destination_tab.get("grid", {})
+        source_columns = canvas_layout.normalize_columns(
+            source_grid.get("canvas_columns", canvas_layout.CANVAS_COLUMNS)
+        )
+        destination_columns = canvas_layout.normalize_columns(
+            destination_grid.get("canvas_columns", canvas_layout.CANVAS_COLUMNS)
+        )
+        if (
+            str(source_grid.get("layout_mode", "")) != "freeform"
+            or str(destination_grid.get("layout_mode", "")) != "freeform"
+        ):
+            return
+        source_cells = grid_model.normalize_freeform_cells(
+            list(source_grid.get("cells", []) or []),
+            snap=bool(source_grid.get("canvas_snap_to_grid", True)),
+            columns=source_columns,
+        )
+        try:
+            source_cell_index = int(source_index)
+        except (TypeError, ValueError):
+            return
+        if not 0 <= source_cell_index < len(source_cells):
+            return
+
+        moved_cell = dict(source_cells.pop(source_cell_index) or {})
+        destination_cells = grid_model.normalize_freeform_cells(
+            list(destination_grid.get("cells", []) or []),
+            snap=bool(destination_grid.get("canvas_snap_to_grid", True)),
+            columns=destination_columns,
+        )
+        if len(destination_cells) >= canvas_layout.CANVAS_MAX_TILES:
+            return
+        existing_ids = {
+            str(cell.get("tile_id", "") or "") for cell in destination_cells
+        }
+        if str(moved_cell.get("tile_id", "") or "") in existing_ids:
+            moved_cell["tile_id"] = self.next_canvas_tile_id(destination_cells)
+        proposed = self.parse_canvas_payload(geometry_payload, {})
+        if not isinstance(proposed, dict):
+            return
+        target_geometry = canvas_layout.geometry(
+            str(moved_cell.get("tile_id", "") or ""),
+            moved_cell.get(
+                "tile_type", canvas_layout.tile_type_for_cell(moved_cell)
+            ),
+            proposed.get("x", 0),
+            proposed.get("y", 0),
+            proposed.get("w", moved_cell.get("canvas_w", 8)),
+            proposed.get("h", moved_cell.get("canvas_h", 6)),
+            snap=bool(destination_grid.get("canvas_snap_to_grid", True)),
+            columns=destination_columns,
+        )
+        destination_geometry = [
+            canvas_layout.geometry_from_cell(
+                cell,
+                fallback_id=f"tile-{index + 1}",
+                fallback_index=index,
+                snap=bool(destination_grid.get("canvas_snap_to_grid", True)),
+                columns=destination_columns,
+            )
+            for index, cell in enumerate(destination_cells)
+        ]
+        if any(
+            canvas_layout.overlaps(target_geometry, item)
+            for item in destination_geometry
+        ):
+            target_geometry = canvas_layout.nearest_free(
+                target_geometry,
+                destination_geometry,
+                columns=destination_columns,
+            )
+        destination_cells.append(
+            canvas_layout.geometry_to_cell(moved_cell, target_geometry)
+        )
+        destination_index = len(destination_cells) - 1
+
+        def remap_index(value):
+            try:
+                index = int(value)
+            except (TypeError, ValueError):
+                return -1
+            if index == source_cell_index:
+                return -1
+            return index - 1 if index > source_cell_index else index
+
+        source_grid["cells"] = source_cells
+        source_grid["active_cell"] = remap_index(
+            source_grid.get("active_cell", -1)
+        )
+        source_grid["timeline_driver_cell"] = remap_index(
+            source_grid.get("timeline_driver_cell", -1)
+        )
+        source_grid["selected_cells"] = [
+            remapped
+            for remapped in (
+                remap_index(item)
+                for item in list(source_grid.get("selected_cells", []) or [])
+            )
+            if remapped >= 0
+        ]
+        source_grid["selected_cell_map"] = {
+            str(index): True for index in source_grid["selected_cells"]
+        }
+        source_grid["canvas_layout_revision"] = int(
+            source_grid.get("canvas_layout_revision", 0) or 0
+        ) + 1
+        destination_grid["cells"] = destination_cells
+        destination_grid["active_cell"] = destination_index
+        destination_grid["selected_cells"] = [destination_index]
+        destination_grid["selected_cell_map"] = {
+            str(destination_index): True
+        }
+        destination_grid["canvas_layout_revision"] = int(
+            destination_grid.get("canvas_layout_revision", 0) or 0
+        ) + 1
+        self._publish_workspace_layout(layout)
+        self._activate_workspace_target(
+            str(destination_pane_id or ""),
+            str(destination_tab_id or ""),
+            stash=False,
+        )
+        self.record_interaction(
+            "workspace.cell_moved",
+            source="canvas_drag",
+            payload={
+                "source_pane_id": str(source_pane_id or ""),
+                "source_tab_id": str(source_tab_id or ""),
+                "source_cell": source_cell_index,
+                "destination_pane_id": str(destination_pane_id or ""),
+                "destination_tab_id": str(destination_tab_id or ""),
+                "destination_tile_id": str(
+                    moved_cell.get("tile_id", "") or ""
+                ),
+            },
+        )
+        self.clear_interaction_assignment()
+
     def resize_workspace_split(self, split_id: str, ratio: float, **_):
         layout = self._stash_active_workspace_grid()
         previous_layout = deepcopy(layout)
@@ -781,12 +1002,36 @@ class WorkspaceControllerMixin:
             visualization.get("scalar_plot_policy", "always") or "always"
         )
         self.normalize_scalar_plot_policy()
+        self.state.canvasDefaultTileWidth = canvas_layout.normalize_drop_width(
+            visualization.get(
+                "canvas_default_tile_width",
+                canvas_layout.CANVAS_DEFAULT_DROP_WIDTH,
+            )
+        )
 
         self.state.gridRows = grid.get("rows", 3)
         self.state.gridCols = grid.get("columns", 3)
         self.state.gridLayoutMode = str(
-            grid.get("layout_mode", "uniform") or "uniform"
+            grid.get("layout_mode", grid_model.DEFAULT_GRID_LAYOUT_MODE)
+            or grid_model.DEFAULT_GRID_LAYOUT_MODE
         )
+        self.state.canvasCols = grid.get(
+            "canvas_columns", canvas_layout.CANVAS_COLUMNS
+        )
+        self.state.canvasSnapToGrid = bool(
+            grid.get("canvas_snap_to_grid", True)
+        )
+        self.state.canvasNudgeOthers = bool(
+            grid.get("canvas_nudge_others", True)
+        )
+        self.state.canvasShowGrid = bool(grid.get("canvas_show_grid", False))
+        self.state.canvasZoom = grid.get(
+            "canvas_zoom", canvas_layout.CANVAS_ZOOM_DEFAULT
+        )
+        self.state.canvasFitToView = bool(
+            grid.get("canvas_fit_to_view", False)
+        )
+        self.normalize_canvas_settings()
 
         rows, cols = self.grid_dimensions()
         self._restore_grid_sizing(grid, rows, cols)

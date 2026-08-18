@@ -19,6 +19,8 @@ class WorkspaceStateTests(unittest.TestCase):
     def make_state(self):
         state = SimpleNamespace()
         init_state(state, SimpleNamespace(ok=True, last_error=""))
+        state.gridLayoutMode = "uniform"
+        state.canvasDefaultTileWidth = 5
         state.queryText = "var == 'density'"
         state.activeViewerActionPlan = {
             "version": 1,
@@ -94,6 +96,10 @@ class WorkspaceStateTests(unittest.TestCase):
             document["state"]["catalog"]["natural_language_query"],
             "show density",
         )
+        self.assertEqual(
+            document["state"]["visualization"]["canvas_default_tile_width"],
+            5,
+        )
 
         cell = document["state"]["grid"]["cells"][0]
         self.assertEqual(cell["variable_id"], "density")
@@ -128,6 +134,7 @@ class WorkspaceStateTests(unittest.TestCase):
     def test_workspace_layout_round_trip_retains_panes_tabs_and_grids(self):
         state = self.make_state()
         second_grid = dict(state.workspaceLayout["panes"][0]["tabs"][0]["grid"])
+        second_grid["layout_mode"] = "uniform"
         second_grid["cells"] = [dict(cell) for cell in second_grid["cells"]]
         second_grid["cells"][0]["variable_id"] = "temperature"
         state.workspaceLayout = {
@@ -197,6 +204,43 @@ class WorkspaceStateTests(unittest.TestCase):
         parsed = parse_workspace_document(json.dumps(document))
 
         self.assertNotIn("root", parsed["state"]["workspace"])
+
+    def test_freeform_grid_round_trip_preserves_canvas_geometry_and_settings(self):
+        state = self.make_state()
+        state.gridLayoutMode = "freeform"
+        state.canvasSnapToGrid = False
+        state.canvasNudgeOthers = True
+        state.canvasShowGrid = True
+        state.canvasCols = 36
+        state.canvasZoom = 0.75
+        state.canvasFitToView = True
+        state.gridCells = [
+            {
+                **state.gridCells[0],
+                "tile_id": "tile-density",
+                "tile_type": "field",
+                "canvas_x": 1.25,
+                "canvas_y": 2.5,
+                "canvas_w": 8.5,
+                "canvas_h": 7.25,
+            }
+        ]
+
+        parsed = parse_workspace_document(
+            workspace_json(state, "/campaign/example.aca")
+        )
+        grid = parsed["state"]["grid"]
+
+        self.assertEqual(grid["layout_mode"], "freeform")
+        self.assertFalse(grid["canvas_snap_to_grid"])
+        self.assertTrue(grid["canvas_nudge_others"])
+        self.assertTrue(grid["canvas_show_grid"])
+        self.assertEqual(grid["canvas_columns"], 36)
+        self.assertEqual(grid["canvas_zoom"], 0.75)
+        self.assertTrue(grid["canvas_fit_to_view"])
+        self.assertEqual(grid["cells"][0]["tile_id"], "tile-density")
+        self.assertEqual(grid["cells"][0]["canvas_x"], 1.25)
+        self.assertEqual(grid["cells"][0]["canvas_h"], 7.25)
 
     def test_rejects_wrong_format_version_and_campaign(self):
         document = workspace_document(

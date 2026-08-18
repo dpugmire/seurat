@@ -4,6 +4,7 @@ from copy import deepcopy
 from typing import Any, Dict, Iterable, Mapping, Optional, Tuple
 
 from seurat.models.grid import (
+    DEFAULT_GRID_LAYOUT_MODE,
     assign_cell,
     cell_has_content,
     empty_grid_cell,
@@ -22,6 +23,17 @@ GRID_STATE_FIELDS: Tuple[Tuple[str, str], ...] = (
     ("gridRows", "rows"),
     ("gridCols", "columns"),
     ("gridLayoutMode", "layout_mode"),
+    ("canvasCols", "canvas_columns"),
+    ("canvasRowHeight", "canvas_row_height"),
+    ("canvasSnapToGrid", "canvas_snap_to_grid"),
+    ("canvasNudgeOthers", "canvas_nudge_others"),
+    ("canvasShowGrid", "canvas_show_grid"),
+    ("canvasZoom", "canvas_zoom"),
+    ("canvasFitToView", "canvas_fit_to_view"),
+    ("canvasDwellMs", "canvas_dwell_ms"),
+    ("canvasSnapDeadZone", "canvas_snap_dead_zone"),
+    ("canvasTransitionMs", "canvas_transition_ms"),
+    ("canvasLayoutRevision", "canvas_layout_revision"),
     ("gridSizingMode", "sizing_mode"),
     ("gridCellSize", "cell_size"),
     ("gridMinCellSize", "minimum_cell_size"),
@@ -62,7 +74,7 @@ def apply_grid_snapshot(state: Any, snapshot: Mapping[str, Any]) -> None:
 
 
 def empty_grid_snapshot(snapshot: Mapping[str, Any]) -> Dict[str, Any]:
-    """Return an empty grid that retains another grid's layout preferences."""
+    """Return an empty grid using the application's default layout mode."""
 
     result = deepcopy(dict(snapshot))
     try:
@@ -75,7 +87,16 @@ def empty_grid_snapshot(snapshot: Mapping[str, Any]) -> Dict[str, Any]:
         columns = 3
     result["rows"] = rows
     result["columns"] = columns
-    result["cells"] = [empty_grid_cell() for _ in range(rows * columns)]
+    result["layout_mode"] = DEFAULT_GRID_LAYOUT_MODE
+    result["cells"] = (
+        []
+        if str(
+            result.get("layout_mode", DEFAULT_GRID_LAYOUT_MODE)
+            or DEFAULT_GRID_LAYOUT_MODE
+        )
+        == "freeform"
+        else [empty_grid_cell() for _ in range(rows * columns)]
+    )
     result["active_cell"] = -1
     result["selected_cells"] = []
     result["selected_cell_map"] = {}

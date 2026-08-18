@@ -11,7 +11,7 @@ from seurat.backends import LocalCampaignBackend
 from seurat import module as seurat_module
 from seurat.components import SeuratUI
 from seurat.components.query_assistant import QueryAssistantDialog
-from seurat.widgets import GridRuntime, InteractionRuntime, ResizeRuntime
+from seurat.widgets import CanvasRuntime, GridRuntime, InteractionRuntime, ResizeRuntime
 from ui import build_ui
 
 
@@ -66,6 +66,8 @@ class SeuratAppTests(unittest.TestCase):
                 f"{seurat_module.BASE_URL}/seurat-plot-runtime.js",
                 f"{seurat_module.BASE_URL}/seurat-timeline-runtime.js",
                 f"{seurat_module.BASE_URL}/seurat-grid-runtime.js",
+                f"{seurat_module.BASE_URL}/seurat-canvas-layout.js",
+                f"{seurat_module.BASE_URL}/seurat-canvas-runtime.js",
                 f"{seurat_module.BASE_URL}/seurat-interaction-runtime.js",
                 f"{seurat_module.BASE_URL}/seurat-resize-runtime.js",
             ],
@@ -74,6 +76,7 @@ class SeuratAppTests(unittest.TestCase):
             server.state.trame__vue_use,
             [
                 "seuratGridRuntime",
+                "seuratCanvasRuntime",
                 "seuratInteractionRuntime",
                 "seuratResizeRuntime",
             ],
@@ -190,6 +193,8 @@ class SeuratAppTests(unittest.TestCase):
         self.assertIsInstance(ui.grid_workspace.runtime, GridRuntime)
         self.assertIn("seurat-grid-runtime", ui.layout.html)
         self.assertIsInstance(ui.interaction_runtime, InteractionRuntime)
+        self.assertIsInstance(ui.canvas_runtime, CanvasRuntime)
+        self.assertIn("seurat-canvas-runtime", ui.layout.html)
         self.assertIn("seurat-interaction-runtime", ui.layout.html)
         self.assertIsInstance(ui.resize_runtime, ResizeRuntime)
         self.assertIn("seurat-resize-runtime", ui.layout.html)

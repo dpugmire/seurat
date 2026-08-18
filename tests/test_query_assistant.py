@@ -224,6 +224,7 @@ def make_controller(translator, backend=None, db=None):
     state = RecordingState()
     db = db or SimpleNamespace(ok=True, last_error="")
     init_state(state, db)
+    state.gridLayoutMode = "uniform"
     server = SimpleNamespace(state=state, controller=RecordingController())
     backend = backend or FakeBackend()
     attach_controllers(
@@ -1132,16 +1133,19 @@ class QueryAssistantControllerTests(unittest.TestCase):
         state.scalarPlotPolicy = "ask"
         original_cells = [dict(cell) for cell in state.gridCells]
 
-        controller.actions["open_visualization_assistant"]()
-        state.queryAssistantRequestText = "Plot pressure"
-        self.assertTrue(asyncio.run(controller.actions["translate_query_request"]()))
-        self.assertEqual(
-            state.queryAssistantVisualizationName,
-            "generated scalar plot",
-        )
-        self.assertEqual(state.gridCells, original_cells)
+        with patch("plugin_runtime.discover_plugins", return_value=[]):
+            controller.actions["open_visualization_assistant"]()
+            state.queryAssistantRequestText = "Plot pressure"
+            self.assertTrue(
+                asyncio.run(controller.actions["translate_query_request"]())
+            )
+            self.assertEqual(
+                state.queryAssistantVisualizationName,
+                "generated scalar plot",
+            )
+            self.assertEqual(state.gridCells, original_cells)
 
-        self.assertTrue(controller.actions["apply_query_proposal"]())
+            self.assertTrue(controller.actions["apply_query_proposal"]())
         self.assertTrue(state.showScalarPlotDialog)
         self.assertEqual(state.pendingScalarPlotVariableId, "pressure")
         self.assertEqual(state.pendingScalarPlotCellIndex, 0)
@@ -1155,9 +1159,12 @@ class QueryAssistantControllerTests(unittest.TestCase):
         state.scalarPlotPolicy = "never"
         original_cells = [dict(cell) for cell in state.gridCells]
 
-        controller.actions["open_visualization_assistant"]()
-        state.queryAssistantRequestText = "Plot pressure"
-        self.assertFalse(asyncio.run(controller.actions["translate_query_request"]()))
+        with patch("plugin_runtime.discover_plugins", return_value=[]):
+            controller.actions["open_visualization_assistant"]()
+            state.queryAssistantRequestText = "Plot pressure"
+            self.assertFalse(
+                asyncio.run(controller.actions["translate_query_request"]())
+            )
 
         self.assertIn("scalar plot generation is disabled", state.queryAssistantError)
         self.assertEqual(state.gridCells, original_cells)

@@ -46,6 +46,30 @@ def variable_cell(variable_id, **values):
 
 
 class GridModelTests(unittest.TestCase):
+    def test_freeform_normalization_is_compact_and_assigns_stable_ids(self):
+        cells = normalize_grid_cells(
+            [
+                empty_grid_cell(),
+                variable_cell(
+                    "density",
+                    canvas_x=3,
+                    canvas_y=4,
+                    canvas_w=8,
+                    canvas_h=6,
+                ),
+            ],
+            rows=3,
+            cols=3,
+            layout_mode="freeform",
+        )
+
+        self.assertEqual(len(cells), 1)
+        self.assertEqual(cells[0]["tile_id"], "tile-1")
+        self.assertEqual(
+            tuple(cells[0][key] for key in ("canvas_x", "canvas_y", "canvas_w", "canvas_h")),
+            (3, 4, 8, 6),
+        )
+
     def test_uniform_normalization_resets_geometry_and_pads_grid(self):
         cells = normalize_grid_cells(
             [variable_cell("density", grid_row=8, grid_col=8, row_span=4)],

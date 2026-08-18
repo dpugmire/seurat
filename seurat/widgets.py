@@ -17,6 +17,13 @@ class InteractionRuntime(AbstractElement):
         super().__init__("seurat-interaction-runtime", children, **kwargs)
 
 
+class CanvasRuntime(AbstractElement):
+    """Lifecycle owner for freeform canvas placement and resizing."""
+
+    def __init__(self, children=None, **kwargs):
+        super().__init__("seurat-canvas-runtime", children, **kwargs)
+
+
 class ResizeRuntime(AbstractElement):
     """Lifecycle owner for variable-panel and grid-track resizing."""
 

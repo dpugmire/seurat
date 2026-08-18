@@ -9,6 +9,8 @@ query language, and preview image sequences as short videos.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for a diagram of the browser, Trame,
 application, backend, local ACA/SQLite, and future Phobos layers.
+See [SEURAT_OVERVIEW.md](SEURAT_OVERVIEW.md) for a consolidated product,
+interaction-design, implementation, and prioritized roadmap overview.
 
 `seurat.app.SeuratApp` is the composition root. It owns the Trame server,
 enables Seurat's web module, initializes state, connects the data access layer
@@ -69,7 +71,8 @@ resolved before Phase 5B.2 resumes.
 
 Client-side event and observer ownership is lifecycle-scoped rather than
 document-global. The registered runtimes own grid timeline/VCR behavior,
-variable/grid/tab drag-and-drop, pane-divider resizing, context menus, floating-panel movement,
+variable/grid/tab drag-and-drop, Freeform canvas placement and resizing,
+pane-divider resizing, context menus, floating-panel movement,
 variable-panel and grid-track resizing, media pan/zoom, plot interaction, and
 plot rendering observation. Timeline/VCR policy lives in
 `seurat/module/serve/seurat-timeline-runtime.js`; media pan/zoom and its reset
@@ -242,6 +245,13 @@ settings, selected cells, and timeline driver. Rendered plots, image/video
 bytes, frame payloads, and other derived media are intentionally excluded.
 Seurat validates the state-file version and campaign name, then rebuilds
 derived content from the campaign when loading.
+
+The grid settings menu offers **Uniform**, **Spanning**, and **Freeform**
+layouts. Freeform uses a 24-column canvas with a fixed vertical unit. Drag tile
+headers to move them, use the bottom-right handle to resize, and control grid
+snapping, collision nudging, and grid visibility from the same menu. Workspace
+files store Freeform tile positions and sizes in canvas units rather than
+pixels.
 
 ## Optional Interaction Log
 
