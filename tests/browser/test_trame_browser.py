@@ -56,6 +56,91 @@ def _drag(page, locator, delta_x=0, delta_y=0, release=True, button="left"):
         page.mouse.up(button=button)
 
 
+def _split_workspace_pane_by_drag(page, pane_bar, direction):
+    pane_count = page.locator(".seurat-workspace-tab-bar").count()
+    pane_id = pane_bar.get_attribute("data-pane-frame-id")
+    assert pane_id
+    original = pane_bar.locator(".seurat-workspace-tab.is-pane-tab-active")
+    original_tab_id = original.get_attribute("data-tab-id")
+    assert original_tab_id
+    tab_count = pane_bar.locator(".seurat-workspace-tab").count()
+    pane_bar.get_by_role("button", name="New tab").click()
+    page.wait_for_function(
+        f"""() => {{
+          const bar = document.querySelector(
+            '.seurat-workspace-tab-bar[data-pane-frame-id="{pane_id}"]'
+          );
+          const active = bar && bar.querySelector(
+            '.seurat-workspace-tab.is-pane-tab-active'
+          );
+          return bar
+            && bar.querySelectorAll('.seurat-workspace-tab').length === {tab_count + 1}
+            && active
+            && active.getAttribute('data-tab-id') !== {original_tab_id!r};
+        }}"""
+    )
+    source = pane_bar.locator(".seurat-workspace-tab.is-pane-tab-active")
+    source.wait_for(state="visible")
+    moved_tab_id = source.get_attribute("data-tab-id")
+    assert moved_tab_id
+    source_bounds = source.bounding_box()
+    assert source_bounds is not None
+    page.mouse.move(
+        source_bounds["x"] + source_bounds["width"] / 2,
+        source_bounds["y"] + source_bounds["height"] / 2,
+    )
+    page.mouse.down()
+    page.mouse.move(
+        source_bounds["x"] + source_bounds["width"] / 2 + 12,
+        source_bounds["y"] + source_bounds["height"] / 2,
+        steps=3,
+    )
+    page.wait_for_function(
+        "document.querySelector('.v-application')"
+        ".classList.contains('is-workspace-tab-dragging')"
+    )
+    preview = page.locator(
+        f'.seurat-workspace-tab-dock-preview[data-tab-dock-pane-id="{pane_id}"]'
+    )
+    preview_bounds = preview.bounding_box()
+    assert preview_bounds is not None
+    if direction == "vertical":
+        target_x = preview_bounds["x"] + preview_bounds["width"] / 2
+        target_y = preview_bounds["y"] + preview_bounds["height"] - 8
+    else:
+        target_x = preview_bounds["x"] + preview_bounds["width"] - 8
+        target_y = preview_bounds["y"] + preview_bounds["height"] * 0.4
+    page.mouse.move(
+        target_x,
+        target_y,
+        steps=10,
+    )
+    page.wait_for_function(
+        "document.querySelectorAll("
+        "'.seurat-workspace-tab-dock-target.is-tab-dock-active'"
+        ").length === 1"
+    )
+    page.mouse.up()
+    page.wait_for_function(
+        f"document.querySelectorAll('.seurat-workspace-tab-bar').length === {pane_count + 1}"
+    )
+    page.locator(
+        f'.seurat-workspace-tab[data-pane-id="{pane_id}"]'
+        f'[data-tab-id="{original_tab_id}"]'
+    ).click()
+    page.wait_for_function(
+        f"document.querySelector('.seurat-workspace-active-grid')"
+        f".getAttribute('data-pane-id') === {pane_id!r}"
+    )
+    page.locator(
+        f'.seurat-workspace-tab[data-tab-id="{moved_tab_id}"]'
+    ).click()
+    page.wait_for_function(
+        f"document.querySelector('.seurat-workspace-active-grid')"
+        f".getAttribute('data-tab-id') === {moved_tab_id!r}"
+    )
+
+
 def test_canvas_layout_shared_conformance_fixtures(page, seurat_server):
     _open_app(page, seurat_server)
     fixture_path = (
@@ -206,13 +291,32 @@ def test_workspace_tabs_and_split_panes_preserve_grid_content(
     page.get_by_role("tab", name="View 2").wait_for(state="visible")
     assert page.locator(".seurat-workspace-tab").count() == 2
 
+    add_tab = first_bar.get_by_role("button", name="New tab")
+    assert add_tab.evaluate(
+        """button => {
+            const strip = button.parentElement;
+            const tabs = strip.querySelectorAll(':scope > .seurat-workspace-tab-shell');
+            return strip.classList.contains('seurat-workspace-tabs')
+                && strip.lastElementChild === button
+                && button.previousElementSibling === tabs[tabs.length - 1];
+        }"""
+    )
+    last_tab_bounds = first_bar.locator(
+        ".seurat-workspace-tab-shell"
+    ).last.bounding_box()
+    add_tab_bounds = add_tab.bounding_box()
+    assert last_tab_bounds is not None
+    assert add_tab_bounds is not None
+    assert abs(
+        add_tab_bounds["x"] - (last_tab_bounds["x"] + last_tab_bounds["width"] + 4)
+    ) <= 1
+
     page.get_by_role("tab", name="View 1").click()
     page.locator(".seurat-workspace-active-grid").get_by_text(
         "internal_energy", exact=True
     ).wait_for(state="visible")
 
-    first_bar.get_by_role("button", name="Pane and tab actions").click()
-    page.get_by_text("Split right", exact=True).click()
+    _split_workspace_pane_by_drag(page, first_bar, "horizontal")
     page.get_by_role("tab", name="View 3").wait_for(state="visible")
 
     assert page.locator(".seurat-workspace-tab-bar").count() == 2
@@ -339,8 +443,7 @@ def test_visualization_drop_on_inactive_pane_moves_and_activates_it(
     pane_one_bar = page.locator(
         '.seurat-workspace-tab-bar[data-pane-frame-id="pane-1"]'
     )
-    pane_one_bar.get_by_role("button", name="Pane and tab actions").click()
-    page.get_by_text("Split right", exact=True).click()
+    _split_workspace_pane_by_drag(page, pane_one_bar, "horizontal")
     page.get_by_role("tab", name="View 2").wait_for(state="visible")
     page.get_by_role("button", name="Settings", exact=True).click()
     page.get_by_role("button", name="Uniform", exact=True).click()
@@ -391,8 +494,7 @@ def test_vertical_split_keeps_inactive_grid_backgrounds_visible(
     first_bar = page.locator(
         ".seurat-workspace-tab-bar.seurat-workspace-slot-first"
     )
-    first_bar.get_by_role("button", name="Pane and tab actions").click()
-    page.get_by_text("Split down", exact=True).click()
+    _split_workspace_pane_by_drag(page, first_bar, "vertical")
     page.get_by_role("tab", name="View 2").wait_for(state="visible")
 
     page.get_by_role("tab", name="View 1").click()
@@ -423,8 +525,7 @@ def test_split_pane_slider_updates_inactive_1d_plot(page, seurat_server):
     first_bar = page.locator(
         '.seurat-workspace-tab-bar[data-pane-frame-id="pane-1"]'
     )
-    first_bar.get_by_role("button", name="Pane and tab actions").click()
-    page.get_by_text("Split right", exact=True).click()
+    _split_workspace_pane_by_drag(page, first_bar, "horizontal")
     page.get_by_role("tab", name="View 2").wait_for(state="visible")
 
     preview = page.locator(
@@ -486,8 +587,11 @@ def test_split_pane_tab_switch_keeps_2d_image_fitted(page, seurat_server):
     first_bar.get_by_role("button", name="New tab").click()
     page.get_by_role("tab", name="View 2").wait_for(state="visible")
     page.get_by_role("tab", name="View 1").click()
-    first_bar.get_by_role("button", name="Pane and tab actions").click()
-    page.get_by_text("Split right", exact=True).click()
+    page.wait_for_function(
+        "document.querySelector('[data-tab-id=\"tab-1\"]')"
+        ".classList.contains('is-pane-tab-active')"
+    )
+    _split_workspace_pane_by_drag(page, first_bar, "horizontal")
     page.get_by_role("tab", name="View 3").wait_for(state="visible")
 
     preview_image = page.locator(
@@ -547,17 +651,15 @@ def test_workspace_can_create_a_nested_three_pane_layout(page, seurat_server):
     pane_one = page.locator(
         '.seurat-workspace-tab-bar[data-pane-frame-id="pane-1"]'
     )
-    pane_one.get_by_role("button", name="Pane and tab actions").click()
-    page.get_by_text("Split right", exact=True).click()
+    _split_workspace_pane_by_drag(page, pane_one, "horizontal")
     page.get_by_role("tab", name="View 2").wait_for(state="visible")
 
     page.get_by_role("tab", name="View 1").click()
-    pane_one.get_by_role("button", name="Pane and tab actions").click()
-    split_down = page.locator(".v-overlay--active").get_by_text(
-        "Split down", exact=True
+    page.wait_for_function(
+        "document.querySelector('[data-tab-id=\"tab-1\"]')"
+        ".classList.contains('is-pane-tab-active')"
     )
-    split_down.wait_for(state="visible")
-    split_down.click()
+    _split_workspace_pane_by_drag(page, pane_one, "vertical")
     page.get_by_role("tab", name="View 3").wait_for(state="visible")
 
     pane_two = page.locator(
@@ -583,6 +685,27 @@ def test_workspace_can_create_a_nested_three_pane_layout(page, seurat_server):
         pane_one_bounds["width"], abs=2
     )
 
+    root_splitter = page.locator(
+        '.seurat-workspace-splitter[data-split-id="split-1"]'
+    )
+    _drag(page, root_splitter, delta_x=-60, release=False)
+    assert page.locator(
+        ".seurat-workspace-tab-dock-preview.is-split-resize-first"
+    ).count() == 2
+    assert page.locator(
+        ".seurat-workspace-tab-dock-preview.is-split-resize-second"
+    ).count() == 1
+    assert "% / " in root_splitter.locator(
+        ".seurat-workspace-split-readout"
+    ).text_content()
+    page.mouse.up()
+    page.wait_for_function(
+        "document.querySelectorAll("
+        "'.seurat-workspace-tab-dock-preview.is-split-resize-first, "
+        ".seurat-workspace-tab-dock-preview.is-split-resize-second'"
+        ").length === 0"
+    )
+
     assert page_errors == []
     assert console_errors == [], response_errors
 
@@ -593,8 +716,7 @@ def test_workspace_splitter_resizes_and_resets_panes(page, seurat_server):
     pane_one = page.locator(
         '.seurat-workspace-tab-bar[data-pane-frame-id="pane-1"]'
     )
-    pane_one.get_by_role("button", name="Pane and tab actions").click()
-    page.get_by_text("Split right", exact=True).click()
+    _split_workspace_pane_by_drag(page, pane_one, "horizontal")
     page.get_by_role("tab", name="View 2").wait_for(state="visible")
 
     splitter = page.locator(
@@ -603,7 +725,28 @@ def test_workspace_splitter_resizes_and_resets_panes(page, seurat_server):
     splitter.wait_for(state="visible")
     initial_width = pane_one.bounding_box()["width"]
 
-    _drag(page, splitter, delta_x=120)
+    _drag(page, splitter, delta_x=120, release=False)
+    assert "is-resizing" in (splitter.get_attribute("class") or "")
+    readout = splitter.locator(".seurat-workspace-split-readout")
+    assert readout.is_visible()
+    assert "% / " in readout.text_content()
+    assert page.locator(
+        ".seurat-workspace-tab-dock-preview.is-split-resize-first"
+    ).count() == 1
+    assert page.locator(
+        ".seurat-workspace-tab-dock-preview.is-split-resize-second"
+    ).count() == 1
+    live_width = pane_one.bounding_box()["width"]
+    live_ratio = splitter.get_attribute("data-split-ratio")
+    live_pane_width = pane_one.evaluate(
+        "element => element.style.getPropertyValue('--pane-width')"
+    )
+    assert live_width > initial_width + 80, (
+        live_ratio,
+        live_pane_width,
+        readout.text_content(),
+    )
+    page.mouse.up()
     page.wait_for_function(
         "Number(document.querySelector('[data-split-id=\"split-1\"]')"
         ".getAttribute('data-split-ratio')) > 0.55"
@@ -613,6 +756,15 @@ def test_workspace_splitter_resizes_and_resets_panes(page, seurat_server):
     assert splitter.get_attribute("aria-valuenow") == str(
         round(float(splitter.get_attribute("data-split-ratio")) * 100)
     )
+    page.wait_for_function(
+        "getComputedStyle(document.querySelector("
+        "'.seurat-workspace-split-readout')).opacity === '0'"
+    )
+    assert readout.text_content() == ""
+    assert page.locator(
+        ".seurat-workspace-tab-dock-preview.is-split-resize-first, "
+        ".seurat-workspace-tab-dock-preview.is-split-resize-second"
+    ).count() == 0
 
     splitter.dblclick()
     page.wait_for_function(
@@ -742,8 +894,7 @@ def test_workspace_tabs_drag_between_panes_at_the_drop_position(
     )
     pane_one.get_by_role("button", name="New tab").click()
     page.get_by_role("tab", name="View 2").wait_for(state="visible")
-    pane_one.get_by_role("button", name="Pane and tab actions").click()
-    page.get_by_text("Split right", exact=True).click()
+    _split_workspace_pane_by_drag(page, pane_one, "horizontal")
     page.get_by_role("tab", name="View 3").wait_for(state="visible")
     page.wait_for_function(
         """() => {
@@ -802,6 +953,160 @@ def test_workspace_tabs_drag_between_panes_at_the_drop_position(
         ".seurat-workspace-tab-shell.is-tab-drop-before, "
         ".seurat-workspace-tab-shell.is-tab-drop-after"
     ).count() == 0
+
+    assert page_errors == []
+    assert console_errors == [], response_errors
+
+
+def test_workspace_tab_drag_to_right_edge_creates_split_and_undoes_once(
+    page, seurat_server
+):
+    console_errors, page_errors, response_errors = _open_app(page, seurat_server)
+
+    first_bar = page.locator(
+        '.seurat-workspace-tab-bar[data-pane-frame-id="pane-1"]'
+    )
+    first_bar.get_by_role("button", name="New tab").click()
+    page.get_by_role("tab", name="View 2").wait_for(state="visible")
+
+    source = page.get_by_role("tab", name="View 1")
+    source_bounds = source.bounding_box()
+    target_bounds = first_bar.bounding_box()
+    assert source_bounds is not None
+    assert target_bounds is not None
+
+    page.mouse.move(
+        source_bounds["x"] + source_bounds["width"] / 2,
+        source_bounds["y"] + source_bounds["height"] / 2,
+    )
+    page.mouse.down()
+    page.mouse.move(
+        source_bounds["x"] + source_bounds["width"] / 2 + 12,
+        source_bounds["y"] + source_bounds["height"] / 2,
+        steps=3,
+    )
+    page.wait_for_function(
+        "document.querySelector('.v-application')"
+        ".classList.contains('is-workspace-tab-dragging')"
+    )
+    dock_preview = page.locator(
+        '.seurat-workspace-tab-dock-preview[data-tab-dock-pane-id="pane-1"]'
+    )
+    right_target = dock_preview.locator(
+        '.seurat-workspace-tab-dock-target[data-tab-dock-direction="horizontal"]'
+    )
+    bottom_target = dock_preview.locator(
+        '.seurat-workspace-tab-dock-target[data-tab-dock-direction="vertical"]'
+    )
+    preview_bounds = dock_preview.bounding_box()
+    right_bounds = right_target.bounding_box()
+    bottom_bounds = bottom_target.bounding_box()
+    assert preview_bounds is not None
+    assert right_bounds is not None
+    assert bottom_bounds is not None
+    assert right_bounds["width"] == pytest.approx(
+        preview_bounds["width"] * 0.15, abs=2
+    )
+    assert bottom_bounds["height"] == pytest.approx(
+        preview_bounds["height"] * 0.15, abs=2
+    )
+    page.mouse.move(
+        target_bounds["x"] + target_bounds["width"] - 12,
+        source_bounds["y"] + source_bounds["height"] / 2,
+        steps=10,
+    )
+    page.wait_for_function(
+        "document.querySelectorAll("
+        "'.seurat-workspace-tab-dock-target.is-tab-dock-active.is-tab-dock-right'"
+        ").length === 1"
+    )
+    page.mouse.up()
+
+    page.get_by_role("tab", name="View 1").wait_for(state="visible")
+    page.wait_for_function(
+        "document.querySelectorAll('.seurat-workspace-tab-bar').length === 2"
+    )
+    assert page.locator(
+        '.seurat-workspace-tabs[data-pane-id="pane-1"] .seurat-workspace-tab'
+    ).all_text_contents() == ["View 2"]
+    assert page.locator(
+        '.seurat-workspace-tabs[data-pane-id="pane-2"] .seurat-workspace-tab'
+    ).all_text_contents() == ["View 1"]
+    assert page.get_by_role("tab", name="View 1").get_attribute(
+        "aria-selected"
+    ) == "true"
+    assert page.locator(
+        ".seurat-workspace-tab-dock-target.is-tab-dock-active"
+    ).count() == 0
+    assert page.locator(
+        '.seurat-workspace-splitter[data-split-direction="horizontal"]'
+    ).count() == 1
+
+    undo_button = page.locator(".seurat-history-button").first
+    assert "Undo Split tab" in undo_button.get_attribute("title")
+    undo_button.click()
+    page.wait_for_function(
+        "document.querySelectorAll('.seurat-workspace-tab-bar').length === 1"
+    )
+    assert page.locator(".seurat-workspace-tab").all_text_contents() == [
+        "View 1",
+        "View 2",
+    ]
+
+    assert page_errors == []
+    assert console_errors == [], response_errors
+
+
+def test_workspace_only_tab_drag_to_bottom_leaves_empty_source_tab(
+    page, seurat_server
+):
+    console_errors, page_errors, response_errors = _open_app(page, seurat_server)
+
+    source = page.get_by_role("tab", name="View 1")
+    target = page.locator(
+        '.seurat-workspace-active-grid[data-pane-frame-id="pane-1"]'
+    )
+    source_bounds = source.bounding_box()
+    target_bounds = target.bounding_box()
+    assert source_bounds is not None
+    assert target_bounds is not None
+
+    page.mouse.move(
+        source_bounds["x"] + source_bounds["width"] / 2,
+        source_bounds["y"] + source_bounds["height"] / 2,
+    )
+    page.mouse.down()
+    page.mouse.move(
+        target_bounds["x"] + target_bounds["width"] / 2,
+        target_bounds["y"] + target_bounds["height"] - 12,
+        steps=10,
+    )
+    page.wait_for_function(
+        "document.querySelectorAll("
+        "'.seurat-workspace-tab-dock-target.is-tab-dock-active.is-tab-dock-bottom'"
+        ").length === 1"
+    )
+    page.mouse.up()
+
+    page.wait_for_function(
+        "document.querySelectorAll('.seurat-workspace-tab-bar').length === 2"
+    )
+    assert page.locator(
+        '.seurat-workspace-tabs[data-pane-id="pane-1"] .seurat-workspace-tab'
+    ).all_text_contents() == ["View 2"]
+    assert page.locator(
+        '.seurat-workspace-tabs[data-pane-id="pane-2"] .seurat-workspace-tab'
+    ).all_text_contents() == ["View 1"]
+    assert page.locator(
+        '.seurat-workspace-splitter[data-split-direction="vertical"]'
+    ).count() == 1
+    page.locator(
+        '.seurat-workspace-active-grid[data-pane-frame-id="pane-2"]'
+    ).get_by_text("internal_energy", exact=True).wait_for(state="visible")
+    empty_preview = page.locator(
+        '.seurat-workspace-grid-preview[data-pane-frame-id="pane-1"]'
+    )
+    assert empty_preview.locator(".seurat-dropcell").count() == 0
 
     assert page_errors == []
     assert console_errors == [], response_errors
@@ -899,6 +1204,14 @@ def test_workspace_tab_strip_marks_hidden_tabs_at_each_scroll_edge(
             const stripBounds = strip.getBoundingClientRect();
             return tabBounds.left >= stripBounds.left
                 && tabBounds.right <= stripBounds.right + 1;
+        }"""
+    )
+    assert add_tab.evaluate(
+        """button => {
+            const stripBounds = button.parentElement.getBoundingClientRect();
+            const buttonBounds = button.getBoundingClientRect();
+            return buttonBounds.left >= stripBounds.left
+                && buttonBounds.right <= stripBounds.right + 1;
         }"""
     )
 
@@ -2132,8 +2445,7 @@ def test_freeform_tile_moves_to_another_freeform_pane(page, seurat_server):
     pane_one_bar = page.locator(
         '.seurat-workspace-tab-bar[data-pane-frame-id="pane-1"]'
     )
-    pane_one_bar.get_by_role("button", name="Pane and tab actions").click()
-    page.get_by_text("Split right", exact=True).click()
+    _split_workspace_pane_by_drag(page, pane_one_bar, "horizontal")
     page.get_by_role("tab", name="View 2").wait_for(state="visible")
     page.get_by_role("tab", name="View 1").click()
 
@@ -2997,8 +3309,7 @@ def test_mixed_step_sequence_uses_declared_time_for_split_plot_cursor(
     first_bar = page.locator(
         '.seurat-workspace-tab-bar[data-pane-frame-id="pane-1"]'
     )
-    first_bar.get_by_role("button", name="Pane and tab actions").click()
-    page.get_by_text("Split down", exact=True).click()
+    _split_workspace_pane_by_drag(page, first_bar, "vertical")
     page.get_by_role("tab", name="View 2").wait_for(state="visible")
 
     slider = page.locator("#seurat-vcr-step-slider")

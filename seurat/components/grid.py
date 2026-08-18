@@ -437,77 +437,13 @@ def _build_workspace_tab_bars(ctrl):
                                     ':title="\'Close \' + tab.title"',
                                 ],
                             )
-            html.Button(
-                "+",
-                classes="seurat-workspace-tab-add",
-                click=(ctrl.add_workspace_tab, "[pane.id]"),
-                raw_attrs=['type="button"', 'aria-label="New tab"'],
-                title="New tab",
-            )
-            with html.Div(classes="seurat-toolbar-menu"):
-                html.Button(
-                    "⋯",
-                    classes="seurat-workspace-pane-menu-button",
-                    raw_attrs=[
-                        'type="button"',
-                        'aria-label="Pane and tab actions"',
-                    ],
-                    title="Pane and tab actions",
-                )
-                with vuetify.VMenu(
-                    activator="parent",
-                    location="bottom end",
-                    close_on_content_click=True,
-                ):
-                    with vuetify.VList(density="compact", min_width=210):
-                        vuetify.VListItem(
-                            title="Rename active tab…",
-                            prepend_icon="mdi-pencil-outline",
-                            click=(
-                                ctrl.rename_workspace_tab,
-                                "[pane.id, pane.active_tab_id, window.prompt('Tab name', ((pane.tabs || []).find(tab => tab.id === pane.active_tab_id) || {}).title || 'View')]",
-                            ),
-                        )
-                        vuetify.VListItem(
-                            title="Move tab to next pane",
-                            prepend_icon="mdi-tab-move",
-                            v_if="workspacePanes.length > 1",
-                            click=(
-                                ctrl.move_workspace_tab,
-                                "[pane.id, pane.active_tab_id]",
-                            ),
-                        )
-                        vuetify.VListItem(
-                            title="Close active tab",
-                            prepend_icon="mdi-close",
-                            v_if="workspacePanes.reduce((count, item) => count + ((item.tabs || []).length), 0) > 1",
-                            click=(
-                                ctrl.close_workspace_tab,
-                                "[pane.id, pane.active_tab_id, window.confirm('Close this tab and remove its visualizations?')]",
-                            ),
-                        )
-                        vuetify.VDivider()
-                        vuetify.VListItem(
-                            title="Split right",
-                            prepend_icon="mdi-view-split-vertical",
-                            disabled=("workspacePanes.length >= 4",),
-                            click=(ctrl.split_workspace_pane, "['horizontal', pane.id]"),
-                        )
-                        vuetify.VListItem(
-                            title="Split down",
-                            prepend_icon="mdi-view-split-horizontal",
-                            disabled=("workspacePanes.length >= 4",),
-                            click=(ctrl.split_workspace_pane, "['vertical', pane.id]"),
-                        )
-                        vuetify.VListItem(
-                            title="Close split pane",
-                            prepend_icon="mdi-dock-window",
-                            v_if="workspacePanes.length > 1",
-                            click=(
-                                ctrl.close_workspace_pane,
-                                "[pane.id, window.confirm('Close this pane? Its tabs will move to the other pane.')]",
-                            ),
-                        )
+                    html.Button(
+                        "+",
+                        classes="seurat-workspace-tab-add",
+                        click=(ctrl.add_workspace_tab, "[pane.id]"),
+                        raw_attrs=['type="button"', 'aria-label="New tab"'],
+                        title="New tab",
+                    )
 
 
 def _build_inactive_workspace_grids(ctrl):
@@ -677,8 +613,47 @@ def _build_workspace_splitters():
             ':data-layout-tree="JSON.stringify((workspaceLayout || {}).root || {})"'
         ],
     )
+    with vuetify.Template(v_for="pane in workspacePanes", key="'dock-' + pane.id"):
+        with html.Div(
+            classes="seurat-workspace-tab-dock-preview",
+            raw_attrs=[
+                ':data-tab-dock-pane-id="pane.id"',
+                ':data-pane-frame-id="pane.id"',
+                'aria-hidden="true"',
+                ":style=\"{"
+                " '--pane-left': Number(((workspacePaneFrames || {})[pane.id] || {}).left || 0) + '%',"
+                " '--pane-top': Number(((workspacePaneFrames || {})[pane.id] || {}).top || 0) + '%',"
+                " '--pane-width': Number(((workspacePaneFrames || {})[pane.id] || {}).width || 100) + '%',"
+                " '--pane-height': Number(((workspacePaneFrames || {})[pane.id] || {}).height || 100) + '%'"
+                "}\"",
+            ],
+        ):
+            html.Div(
+                classes=(
+                    "seurat-workspace-tab-dock-target "
+                    "is-tab-dock-right"
+                ),
+                raw_attrs=[
+                    ':data-tab-dock-pane-id="pane.id"',
+                    'data-tab-dock-direction="horizontal"',
+                    'data-tab-dock-label="Split right"',
+                    'aria-hidden="true"',
+                ],
+            )
+            html.Div(
+                classes=(
+                    "seurat-workspace-tab-dock-target "
+                    "is-tab-dock-bottom"
+                ),
+                raw_attrs=[
+                    ':data-tab-dock-pane-id="pane.id"',
+                    'data-tab-dock-direction="vertical"',
+                    'data-tab-dock-label="Split down"',
+                    'aria-hidden="true"',
+                ],
+            )
     with vuetify.Template(v_for="split in workspaceSplitters", key="split.id"):
-        html.Div(
+        with html.Div(
             classes="seurat-workspace-splitter",
             raw_attrs=[
                 ":class=\"split.direction === 'vertical' ? 'is-horizontal-divider' : 'is-vertical-divider'\"",
@@ -702,7 +677,11 @@ def _build_workspace_splitters():
                 " '--split-span': Number(split.span || 0) + '%'"
                 "}\"",
             ],
-        )
+        ):
+            html.Span(
+                classes="seurat-workspace-split-readout",
+                raw_attrs=['aria-hidden="true"'],
+            )
 
 
 class GridWorkspace(TrameComponent):

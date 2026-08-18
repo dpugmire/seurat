@@ -502,6 +502,7 @@ class CampaignDbNavigationTests(unittest.TestCase):
                 "show_cell_context_menu",
                 "show_item_context_menu",
                 "show_tab_context_menu",
+                "split_workspace_tab_trigger",
                 "undo_workspace_trigger",
                 "redo_workspace_trigger",
             },
@@ -830,6 +831,37 @@ class CampaignDbNavigationTests(unittest.TestCase):
         )
         self.assertEqual(state.workspaceActivePaneId, "pane-2")
         self.assertEqual(state.workspaceActiveTabId, "tab-1")
+
+    def test_workspace_tab_split_trigger_is_atomic_and_undoable(self):
+        interaction_log = RecordingInteractionLog()
+        state, controller = self.make_controller(interaction_log)
+        controller.actions["add_workspace_tab"]("pane-1")
+
+        controller.triggers["split_workspace_tab_trigger"](
+            "pane-1", "tab-1", "pane-1", "vertical"
+        )
+
+        self.assertEqual(len(state.workspacePanes), 2)
+        self.assertEqual(state.workspaceLayout["root"]["direction"], "vertical")
+        self.assertEqual(
+            [tab["id"] for tab in state.workspacePanes[0]["tabs"]], ["tab-2"]
+        )
+        self.assertEqual(
+            [tab["id"] for tab in state.workspacePanes[1]["tabs"]], ["tab-1"]
+        )
+        self.assertEqual(state.workspaceActivePaneId, "pane-2")
+        self.assertEqual(state.workspaceActiveTabId, "tab-1")
+        self.assertEqual(
+            interaction_log.events[-1][:2],
+            ("workspace.pane_split", "tab_drag"),
+        )
+
+        self.assertTrue(controller.actions["undo_workspace"]())
+        self.assertEqual(len(state.workspacePanes), 1)
+        self.assertEqual(
+            [tab["id"] for tab in state.workspacePanes[0]["tabs"]],
+            ["tab-1", "tab-2"],
+        )
 
     def test_workspace_grid_move_trigger_activates_the_destination_pane(self):
         state, controller = self.make_controller()

@@ -37,6 +37,7 @@ from seurat.models.workspace_layout import (  # noqa: E402
     reorder_workspace_tab as reorder_workspace_tab_model,
     resize_workspace_split as resize_workspace_split_model,
     split_workspace as split_workspace_model,
+    split_workspace_tab as split_workspace_tab_model,
     workspace_geometry,
 )
 from seurat.state import init_state  # noqa: E402
@@ -427,6 +428,22 @@ def build_fixture_server(mode):
             direction,
             grid_snapshot(state),
             pane_id=pane_id or state.workspaceActivePaneId,
+        )
+        load_active_workspace_grid(layout)
+
+    def split_workspace_tab(
+        source_pane_id,
+        tab_id,
+        target_pane_id,
+        direction,
+    ):
+        layout, _pane_id = split_workspace_tab_model(
+            stash_active_workspace_grid(),
+            direction,
+            grid_snapshot(state),
+            source_pane_id,
+            tab_id,
+            target_pane_id,
         )
         load_active_workspace_grid(layout)
 
@@ -1168,6 +1185,9 @@ def build_fixture_server(mode):
     )
     server.controller.trigger("resize_workspace_split_trigger")(
         history_edit("Resize pane", resize_workspace_split)
+    )
+    server.controller.trigger("split_workspace_tab_trigger")(
+        history_edit("Split tab", split_workspace_tab)
     )
     server.controller.trigger("set_grid_track_sizes_trigger")(
         history_edit("Resize grid track", set_grid_track_sizes)

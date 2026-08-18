@@ -30,6 +30,7 @@ from seurat.models.workspace_layout import (
     reorder_workspace_tab as reorder_workspace_tab_model,
     resize_workspace_split as resize_workspace_split_model,
     split_workspace as split_workspace_model,
+    split_workspace_tab as split_workspace_tab_model,
     workspace_geometry,
 )
 from seurat.models.workspace_state import (
@@ -88,6 +89,7 @@ class WorkspaceControllerMixin:
         ("move_workspace_tab_trigger", "move_workspace_tab"),
         ("reorder_workspace_tab_trigger", "reorder_workspace_tab"),
         ("resize_workspace_split_trigger", "resize_workspace_split"),
+        ("split_workspace_tab_trigger", "split_workspace_tab"),
     )
     STATE_CHANGE_BINDINGS = ()
     HISTORY_ACTIONS = {
@@ -104,6 +106,7 @@ class WorkspaceControllerMixin:
         "move_workspace_tab_trigger": "Move tab",
         "reorder_workspace_tab_trigger": "Reorder tab",
         "resize_workspace_split_trigger": "Resize pane",
+        "split_workspace_tab_trigger": "Split tab",
     }
 
     def capture_workspace_history(self) -> Dict[str, Any]:
@@ -609,6 +612,46 @@ class WorkspaceControllerMixin:
                 "direction": str(direction or "horizontal"),
             },
         )
+
+    def split_workspace_tab(
+        self,
+        source_pane_id: str,
+        tab_id: str,
+        target_pane_id: str,
+        direction: str,
+        **_,
+    ):
+        layout = self._stash_active_workspace_grid()
+        layout, new_pane_id = split_workspace_tab_model(
+            layout,
+            direction,
+            grid_snapshot(self.state),
+            source_pane_id,
+            tab_id,
+            target_pane_id,
+        )
+        if not new_pane_id:
+            return
+        self._publish_workspace_layout(layout)
+        self._activate_workspace_target(
+            str(layout.get("active_pane_id", "")),
+            str(layout.get("active_tab_id", "")),
+            stash=False,
+        )
+        self.record_interaction(
+            "workspace.pane_split",
+            source="tab_drag",
+            payload={
+                "source_pane_id": str(source_pane_id or ""),
+                "target_pane_id": str(target_pane_id or ""),
+                "new_pane_id": str(new_pane_id),
+                "tab_id": str(tab_id or ""),
+                "direction": (
+                    "vertical" if str(direction) == "vertical" else "horizontal"
+                ),
+            },
+        )
+        self.clear_interaction_assignment()
 
     def close_workspace_pane(
         self, pane_id: str, confirmed: bool = True, **_

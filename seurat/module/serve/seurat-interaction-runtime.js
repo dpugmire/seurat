@@ -48,7 +48,15 @@
             const tabsRect = tabs.getBoundingClientRect();
             const shellRect = shell.getBoundingClientRect();
             const shellLeft = tabs.scrollLeft + shellRect.left - tabsRect.left;
-            const shellRight = shellLeft + shellRect.width;
+            const addButton = tabs.querySelector(".seurat-workspace-tab-add");
+            const isLastTab =
+              !shell.nextElementSibling || shell.nextElementSibling === addButton;
+            const targetRect =
+              isLastTab && addButton
+                ? addButton.getBoundingClientRect()
+                : shellRect;
+            const shellRight =
+              tabs.scrollLeft + targetRect.right - tabsRect.left;
             if (shellLeft < tabs.scrollLeft) tabs.scrollLeft = shellLeft;
             else if (shellRight > tabs.scrollLeft + tabs.clientWidth) {
               tabs.scrollLeft = shellRight - tabs.clientWidth;
@@ -210,6 +218,10 @@
     }
 
     function syncWorkspaceLayoutGeometry() {
+      if (workspaceSplitDrag) {
+        applyWorkspaceLayoutGeometry(workspaceSplitDrag.tree);
+        return;
+      }
       const layout = workspaceLayoutTree();
       if (layout) applyWorkspaceLayoutGeometry(layout.tree);
     }
@@ -223,6 +235,63 @@
       );
     }
 
+    function workspacePaneIds(node, result) {
+      const paneIds = result || [];
+      if (!node || node.kind !== "split") {
+        const paneId = String((node && node.pane_id) || "");
+        if (paneId) paneIds.push(paneId);
+        return paneIds;
+      }
+      workspacePaneIds(node.first, paneIds);
+      workspacePaneIds(node.second, paneIds);
+      return paneIds;
+    }
+
+    function clearWorkspaceSplitFeedback(drag) {
+      for (const preview of root.querySelectorAll(
+        ".seurat-workspace-tab-dock-preview.is-split-resize-first, " +
+          ".seurat-workspace-tab-dock-preview.is-split-resize-second"
+      )) {
+        preview.classList.remove(
+          "is-split-resize-first",
+          "is-split-resize-second"
+        );
+      }
+      const handle = drag && drag.handle;
+      if (!handle) return;
+      handle.removeAttribute("aria-valuetext");
+      const readout = handle.querySelector(".seurat-workspace-split-readout");
+      if (readout) readout.textContent = "";
+    }
+
+    function updateWorkspaceSplitFeedback(drag) {
+      if (!drag) return;
+      const firstPercent = Math.round(drag.ratio * 100);
+      const secondPercent = 100 - firstPercent;
+      const label = firstPercent + "% / " + secondPercent + "%";
+      drag.handle.setAttribute("aria-valuetext", label);
+      const readout = drag.handle.querySelector(
+        ".seurat-workspace-split-readout"
+      );
+      if (readout) readout.textContent = label;
+    }
+
+    function showWorkspaceSplitFeedback(drag) {
+      if (!drag) return;
+      const firstPaneIds = new Set(workspacePaneIds(drag.split.first));
+      const secondPaneIds = new Set(workspacePaneIds(drag.split.second));
+      for (const preview of root.querySelectorAll(
+        ".seurat-workspace-tab-dock-preview"
+      )) {
+        const paneId = preview.getAttribute("data-tab-dock-pane-id") || "";
+        if (firstPaneIds.has(paneId))
+          preview.classList.add("is-split-resize-first");
+        else if (secondPaneIds.has(paneId))
+          preview.classList.add("is-split-resize-second");
+      }
+      updateWorkspaceSplitFeedback(drag);
+    }
+
     function finishWorkspaceSplitDrag(commit) {
       if (!workspaceSplitDrag) return;
       const current = workspaceSplitDrag;
@@ -232,6 +301,7 @@
         "seurat-pane-resizing-horizontal",
         "seurat-pane-resizing-vertical"
       );
+      clearWorkspaceSplitFeedback(current);
       releasePointerCapture(current);
       if (commit) {
         trameTrigger("resize_workspace_split_trigger", [
@@ -273,6 +343,7 @@
           containerHeight: Number(splitHandle.getAttribute("data-container-height")) || 100,
         };
         splitHandle.classList.add("is-resizing");
+        showWorkspaceSplitFeedback(workspaceSplitDrag);
         document.body.classList.add(
           workspaceSplitDrag.direction === "vertical"
             ? "seurat-pane-resizing-horizontal"
@@ -348,6 +419,7 @@
         workspaceSplitDrag.ratio = ratio;
         workspaceSplitDrag.split.ratio = ratio;
         applyWorkspaceLayoutGeometry(workspaceSplitDrag.tree);
+        updateWorkspaceSplitFeedback(workspaceSplitDrag);
         event.preventDefault();
         return;
       }
@@ -421,6 +493,16 @@
       )) {
         tabs.classList.remove("is-tab-drop-target");
       }
+      for (const target of root.querySelectorAll(
+        ".seurat-workspace-tab-dock-target.is-tab-dock-active"
+      )) {
+        target.classList.remove("is-tab-dock-active");
+      }
+      for (const preview of root.querySelectorAll(
+        ".seurat-workspace-tab-dock-preview.is-tab-dock-preview-active"
+      )) {
+        preview.classList.remove("is-tab-dock-preview-active");
+      }
     }
 
     function finishWorkspaceTabDrag() {
@@ -435,6 +517,7 @@
       )) {
         shell.classList.remove("is-tab-dragging");
       }
+      root.classList.remove("is-workspace-tab-dragging");
       workspaceTabDrag = null;
     }
 
@@ -458,6 +541,11 @@
       clearWorkspaceTabDropMarkers();
       workspaceTabDrag.targetPaneId = null;
       workspaceTabDrag.insertionIndex = null;
+      workspaceTabDrag.splitDirection = null;
+      const targetShell = tabs
+        ? closestWithinRoot(target, ".seurat-workspace-tab-shell", tabs)
+        : null;
+      if (!targetShell && updateWorkspaceTabDockTarget(event)) return true;
       if (!tabs) return false;
 
       const targetPaneId = tabs.getAttribute("data-pane-id") || "";
@@ -467,11 +555,6 @@
 
       const shells = Array.from(
         tabs.querySelectorAll(".seurat-workspace-tab-shell")
-      );
-      const targetShell = closestWithinRoot(
-        target,
-        ".seurat-workspace-tab-shell",
-        tabs
       );
       if (targetShell) {
         const targetIndex = shells.indexOf(targetShell);
@@ -488,6 +571,70 @@
         workspaceTabDrag.insertionIndex = shells.length;
       }
       return true;
+    }
+
+    function updateWorkspaceTabDockTarget(event) {
+      if (!workspaceTabDrag) return false;
+      if (root.querySelectorAll(".seurat-workspace-tab-bar").length >= 4) {
+        return false;
+      }
+
+      function activateTarget(target) {
+        if (!target) return false;
+        const paneId = target.getAttribute("data-tab-dock-pane-id") || "";
+        const direction =
+          target.getAttribute("data-tab-dock-direction") === "vertical"
+            ? "vertical"
+            : "horizontal";
+        if (!paneId) return false;
+        workspaceTabDrag.targetPaneId = paneId;
+        workspaceTabDrag.splitDirection = direction;
+        target.classList.add("is-tab-dock-active");
+        const preview = target.closest(".seurat-workspace-tab-dock-preview");
+        if (preview) preview.classList.add("is-tab-dock-preview-active");
+        return true;
+      }
+
+      const directTarget = closestWithinRoot(
+        event && event.target,
+        ".seurat-workspace-tab-dock-target",
+        root
+      );
+      if (directTarget) return activateTarget(directTarget);
+
+      const clientX = Number(event && event.clientX);
+      const clientY = Number(event && event.clientY);
+      if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) return false;
+
+      const previews = Array.from(
+        root.querySelectorAll(".seurat-workspace-tab-dock-preview")
+      );
+      const preview = previews.find((candidate) => {
+        const bounds = candidate.getBoundingClientRect();
+        return (
+          clientX >= bounds.left &&
+          clientX <= bounds.right &&
+          clientY >= bounds.top &&
+          clientY <= bounds.bottom
+        );
+      });
+      if (!preview) return false;
+
+      const bounds = preview.getBoundingClientRect();
+      const rightDistance = bounds.right - clientX;
+      const bottomDistance = bounds.bottom - clientY;
+      const nearRight =
+        rightDistance >= 0 && rightDistance <= bounds.width * 0.15;
+      const nearBottom =
+        bottomDistance >= 0 && bottomDistance <= bounds.height * 0.15;
+      if (!nearRight && !nearBottom) return false;
+
+      const direction = nearBottom ? "vertical" : "horizontal";
+      return activateTarget(
+        preview.querySelector(
+          `.seurat-workspace-tab-dock-target[data-tab-dock-direction="${direction}"]`
+        )
+      );
     }
 
     function onDragStart(event) {
@@ -510,9 +657,13 @@
           tabId,
           targetPaneId: null,
           insertionIndex: null,
+          splitDirection: null,
         };
         workspaceTab.setAttribute("aria-grabbed", "true");
         shell.classList.add("is-tab-dragging");
+        if (root.querySelectorAll(".seurat-workspace-tab-bar").length < 4) {
+          root.classList.add("is-workspace-tab-dragging");
+        }
         event.dataTransfer.setData(
           "application/x-seurat-workspace-tab",
           tabId
@@ -606,6 +757,15 @@
     }
 
     function onDragLeave(event) {
+      if (workspaceTabDrag) {
+        if (!root.contains(event.relatedTarget)) {
+          clearWorkspaceTabDropMarkers();
+          workspaceTabDrag.targetPaneId = null;
+          workspaceTabDrag.insertionIndex = null;
+          workspaceTabDrag.splitDirection = null;
+        }
+        return;
+      }
       const cell = closestWithinRoot(
         event && event.target,
         ".seurat-dropcell",
@@ -627,9 +787,17 @@
         const targetPaneId = workspaceTabDrag.targetPaneId;
         const tabId = workspaceTabDrag.tabId;
         const insertionIndex = workspaceTabDrag.insertionIndex;
+        const splitDirection = workspaceTabDrag.splitDirection;
         if (accepted) event.preventDefault();
         finishWorkspaceTabDrag();
-        if (accepted && Number.isInteger(insertionIndex)) {
+        if (accepted && splitDirection && targetPaneId) {
+          trameTrigger("split_workspace_tab_trigger", [
+            sourcePaneId,
+            tabId,
+            targetPaneId,
+            splitDirection,
+          ]);
+        } else if (accepted && Number.isInteger(insertionIndex)) {
           if (sourcePaneId === targetPaneId) {
             trameTrigger("reorder_workspace_tab_trigger", [
               sourcePaneId,
