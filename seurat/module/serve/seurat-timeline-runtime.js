@@ -924,6 +924,11 @@
   }
 
   function syncGridMediaToCurrentVcrTime() {
+    // The playback timer already re-queries and synchronizes all grid media.
+    // Resyncing from the slider during playback discards fractional progress
+    // whenever Vue updates an observed media attribute between timer ticks.
+    if (gridVcrState.playing) return;
+
     const sequences = getGridImageSequences();
     const videos = getGridVideos();
     const plots = getGridPlots();
