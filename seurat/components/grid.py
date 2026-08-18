@@ -746,18 +746,10 @@ class GridWorkspace(TrameComponent):
                                 classes="seurat-vcr-btn",
                                 raw_attrs=[
                                     'type="button"',
-                                    'data-vcr-action="play"',
+                                    'data-vcr-action="toggle"',
+                                    'aria-label="Play all"',
                                 ],
                                 title="Play all",
-                            )
-                            html.Button(
-                                "⏸",
-                                classes="seurat-vcr-btn",
-                                raw_attrs=[
-                                    'type="button"',
-                                    'data-vcr-action="pause"',
-                                ],
-                                title="Pause all",
                             )
                             html.Button(
                                 ">>",
