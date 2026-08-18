@@ -37,6 +37,7 @@ _BUILTIN_PLUGIN_MODULES = (
     "seurat_plugins.divertor_load_map",
     "seurat_plugins.divertor_target_totals_timeseries",
 )
+_FAILED_BUILTIN_PLUGIN_IMPORTS: set[str] = set()
 
 
 def plugin_visualization_name(plugin_id: str) -> str:
@@ -58,7 +59,17 @@ def discover_plugins() -> List[PluginInfo]:
     plugin_ids: set[str] = set()
     plugins: List[PluginInfo] = []
     for module_name in _BUILTIN_PLUGIN_MODULES:
-        mod = importlib.import_module(module_name)
+        try:
+            mod = importlib.import_module(module_name)
+        except ImportError as exc:
+            if module_name not in _FAILED_BUILTIN_PLUGIN_IMPORTS:
+                print(
+                    f"Skipping unavailable Seurat plugin {module_name}: "
+                    f"{type(exc).__name__}: {exc}",
+                    file=sys.stderr,
+                )
+                _FAILED_BUILTIN_PLUGIN_IMPORTS.add(module_name)
+            continue
         info = _plugin_info_from_module(mod, module_name)
         if info is None:
             continue

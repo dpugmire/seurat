@@ -136,7 +136,13 @@ def _x_axis(ctx, helpers, x_axis_name, steps_count):
     if x_axis_name == "adios_step":
         return np.arange(steps_count, dtype=float), "adios_step"
 
-    values = helpers.read_source_variable(x_axis_name, step_selection=(0, steps_count))
+    try:
+        values = helpers.read_source_variable(
+            x_axis_name,
+            step_selection=(0, steps_count),
+        )
+    except Exception:
+        return np.arange(steps_count, dtype=float), "adios_step"
     x = np.asarray(values, dtype=float).reshape(-1)
     if x.size != steps_count:
         return np.arange(steps_count, dtype=float), "adios_step"

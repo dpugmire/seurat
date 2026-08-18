@@ -22,6 +22,7 @@ from ui import build_ui
 
 from . import module as seurat_module
 from .backends import LocalCampaignBackend
+from .demo_campaign import DemoDependencyError, temporary_demo_campaign
 from .learning import InteractionLog
 from .query_assistant import make_chat_completions_query_translator
 from .state import init_state
@@ -107,7 +108,16 @@ class SeuratApp(TrameApp):
 
 def build_parser():
     parser = argparse.ArgumentParser()
-    parser.add_argument("campaign_path", help="Path to .aca campaign file")
+    parser.add_argument(
+        "campaign_path",
+        nargs="?",
+        help="Path to .aca campaign file",
+    )
+    parser.add_argument(
+        "--demo",
+        action="store_true",
+        help="Generate an ephemeral synthetic campaign and launch the viewer.",
+    )
     parser.add_argument(
         "--image-association-schema",
         default="",
@@ -122,7 +132,32 @@ def build_parser():
 
 
 def main(argv=None):
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if bool(args.campaign_path) == bool(args.demo):
+        parser.error("provide exactly one of campaign_path or --demo")
+    if args.demo and (args.image_association_schema or args.campaign_schema):
+        parser.error("--demo cannot be combined with external schema options")
+
+    if args.demo:
+        try:
+            with temporary_demo_campaign() as demo:
+                collection = open_sqlite_collection(
+                    str(demo.campaign_path),
+                    db_path=str(demo.sidecar_path),
+                )
+                try:
+                    app = SeuratApp(
+                        campaign_path=str(demo.campaign_path),
+                        collection=collection,
+                    )
+                    app.server.start()
+                finally:
+                    collection.close()
+            return
+        except DemoDependencyError as exc:
+            parser.error(str(exc))
+
     app = SeuratApp(
         campaign_path=args.campaign_path,
         image_association_schema_path=args.image_association_schema,

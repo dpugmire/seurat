@@ -1,12 +1,14 @@
 import tempfile
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 from trame.app import TrameComponent, get_server
 
 import app as compatibility_app
-from seurat.app import SeuratApp, build_parser
+from seurat.app import SeuratApp, build_parser, main
 from seurat.backends import LocalCampaignBackend
 from seurat import module as seurat_module
 from seurat.components import SeuratUI
@@ -125,6 +127,51 @@ class SeuratAppTests(unittest.TestCase):
         self.assertEqual(args.campaign_path, "campaign.aca")
         self.assertEqual(args.image_association_schema, "images.yaml")
         self.assertEqual(args.campaign_schema, "campaign.yaml")
+        self.assertFalse(args.demo)
+
+        demo_args = build_parser().parse_args(["--demo"])
+        self.assertTrue(demo_args.demo)
+        self.assertIsNone(demo_args.campaign_path)
+
+    def test_demo_cli_launches_generated_campaign_and_closes_sidecar(self):
+        generated = SimpleNamespace(
+            campaign_path=Path("/tmp/seurat-demo/synthetic-demo.aca"),
+            sidecar_path=Path("/tmp/seurat-demo/synthetic-demo.sqlite"),
+        )
+
+        @contextmanager
+        def demo_context():
+            yield generated
+
+        collection = MagicMock()
+        application = MagicMock()
+        with patch("seurat.app.temporary_demo_campaign", side_effect=demo_context), patch(
+            "seurat.app.open_sqlite_collection",
+            return_value=collection,
+        ) as open_collection, patch(
+            "seurat.app.SeuratApp",
+            return_value=application,
+        ) as app_class:
+            main(["--demo"])
+
+        open_collection.assert_called_once_with(
+            str(generated.campaign_path),
+            db_path=str(generated.sidecar_path),
+        )
+        app_class.assert_called_once_with(
+            campaign_path=str(generated.campaign_path),
+            collection=collection,
+        )
+        application.server.start.assert_called_once_with()
+        collection.close.assert_called_once_with()
+
+    def test_cli_requires_exactly_one_input_mode(self):
+        for argv in ([], ["campaign.aca", "--demo"]):
+            with self.subTest(argv=argv), self.assertRaises(SystemExit):
+                main(argv)
+
+        with self.assertRaises(SystemExit):
+            main(["--demo", "--campaign-schema", "schema.yaml"])
 
     def test_ui_is_composed_from_trame_components(self):
         server = get_server(

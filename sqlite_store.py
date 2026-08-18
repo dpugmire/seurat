@@ -363,6 +363,9 @@ class SQLiteCampaignCollection:
         self._con.execute("delete from campaign_entries")
         self._con.commit()
 
+    def close(self):
+        self._con.close()
+
     def delete_many(self, query):
         where_sql, params = self._where_sql(query or {})
         cur = self._con.execute(f"delete from campaign_entries where {where_sql}", params)
