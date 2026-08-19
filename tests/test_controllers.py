@@ -21,6 +21,7 @@ NON_HISTORICAL_ACTIONS = {
     "clear_source_filter",
     "close_help_modal",
     "close_query_assistant",
+    "choose_preference_alternative",
     "context_menu_cell_add_source",
     "context_menu_cell_plot_settings",
     "context_menu_cell_reset_view",
@@ -28,11 +29,13 @@ NON_HISTORICAL_ACTIONS = {
     "context_menu_cell_sources",
     "context_menu_item_select",
     "hide_context_menu",
+    "dismiss_preference_suggestion",
     "load_workspace_state",
     "open_plot_settings_plugin_options",
     "open_query_assistant",
     "open_source_query_assistant",
     "open_visualization_assistant",
+    "open_workspace_suggestion",
     "pick_tile_visualization",
     "pick_var",
     "redo_workspace",
@@ -84,7 +87,7 @@ NON_HISTORICAL_TRIGGERS = {
 class ControllerOwnershipTests(unittest.TestCase):
     def test_domain_bindings_are_unique_and_owned_by_the_declaring_controller(self):
         expected_counts = {
-            "ACTION_BINDINGS": 110,
+            "ACTION_BINDINGS": 114,
             "TRIGGER_BINDINGS": 20,
             "STATE_CHANGE_BINDINGS": 4,
         }

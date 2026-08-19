@@ -19,3 +19,6 @@ class ControllerContext:
     campaign_schema_path: str = ""
     query_translator: Optional[QueryTranslator] = None
     interaction_log: Optional[Any] = None
+    preference_profile: Optional[Any] = None
+    preference_mode: str = "off"
+    preference_status: str = ""

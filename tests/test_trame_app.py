@@ -13,11 +13,49 @@ from seurat.backends import LocalCampaignBackend
 from seurat import module as seurat_module
 from seurat.components import SeuratUI
 from seurat.components.query_assistant import QueryAssistantDialog
+from seurat.components.preferences import PreferenceSuggestionDialog
 from seurat.widgets import CanvasRuntime, GridRuntime, InteractionRuntime, ResizeRuntime
 from ui import build_ui
 
 
 class SeuratAppTests(unittest.TestCase):
+    def test_clean_close_records_final_workspace_snapshot(self):
+        class ClosingLog:
+            def __init__(self):
+                self.enabled = True
+                self.events = []
+                self.closed = False
+
+            def record(self, event_type, *, source, payload):
+                self.events.append((event_type, source, payload))
+                return "event:1"
+
+            def close(self):
+                self.closed = True
+                self.enabled = False
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            log = ClosingLog()
+            server = get_server(
+                f"seurat-close-log-{id(self)}",
+                client_type="vue3",
+            )
+            app = SeuratApp(
+                Path(temp_dir) / "sample.aca",
+                server=server,
+                collection=SimpleNamespace(path=Path(temp_dir) / "sample.sqlite"),
+                db=SimpleNamespace(ok=True, last_error=""),
+                interaction_log=log,
+                controller_attacher=lambda **_kwargs: object(),
+                ui_builder=lambda *_args, **_kwargs: object(),
+            )
+
+            app._close_interaction_log()
+
+        self.assertTrue(log.closed)
+        self.assertEqual(log.events[0][0], "workspace.snapshot")
+        self.assertEqual(log.events[0][2]["reason"], "session_ended")
+
     def test_composition_root_connects_application_dependencies(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             campaign_path = Path(temp_dir) / "sample.aca"
@@ -28,6 +66,7 @@ class SeuratAppTests(unittest.TestCase):
             refresh_variable_list = object()
             built_ui = object()
             interaction_log = SimpleNamespace(enabled=False)
+            preference_profile = SimpleNamespace()
 
             def attach(**kwargs):
                 controller_calls.append(kwargs)
@@ -49,6 +88,8 @@ class SeuratAppTests(unittest.TestCase):
                 collection=collection,
                 db=db,
                 interaction_log=interaction_log,
+                preference_profile=preference_profile,
+                preference_mode="suggest",
                 controller_attacher=attach,
                 ui_builder=build,
             )
@@ -57,6 +98,8 @@ class SeuratAppTests(unittest.TestCase):
         self.assertIs(app.collection, collection)
         self.assertIs(app.db, db)
         self.assertIs(app.interaction_log, interaction_log)
+        self.assertIs(app.preference_profile, preference_profile)
+        self.assertEqual(app.preference_mode, "suggest")
         self.assertIsInstance(app.backend, LocalCampaignBackend)
         self.assertIs(app.refresh_variable_list, refresh_variable_list)
         self.assertIs(app.ui, built_ui)
@@ -107,6 +150,10 @@ class SeuratAppTests(unittest.TestCase):
         self.assertIs(controller_calls[0]["db"], db)
         self.assertIs(controller_calls[0]["collection"], collection)
         self.assertIs(controller_calls[0]["interaction_log"], interaction_log)
+        self.assertIs(
+            controller_calls[0]["preference_profile"], preference_profile
+        )
+        self.assertEqual(controller_calls[0]["preference_mode"], "suggest")
         self.assertEqual(controller_calls[0]["campaign_path"], str(campaign_path))
         self.assertEqual(
             ui_calls,
@@ -198,6 +245,7 @@ class SeuratAppTests(unittest.TestCase):
         for component in (
             ui.query_toolbar,
             ui.query_assistant,
+            ui.preference_suggestion,
             ui.help_dialog,
             ui.workspace_menu,
             ui.variable_panel,
@@ -229,6 +277,12 @@ class SeuratAppTests(unittest.TestCase):
         self.assertIn("Search variables", ui.layout.html)
         self.assertIn("variableSearchText", ui.layout.html)
         self.assertIsInstance(ui.query_assistant, QueryAssistantDialog)
+        self.assertIsInstance(
+            ui.preference_suggestion, PreferenceSuggestionDialog
+        )
+        self.assertIn("preferenceSuggestionTitle", ui.layout.html)
+        self.assertIn("Suggest Workspace", ui.layout.html)
+        self.assertIn("Use Suggestion", ui.layout.html)
         self.assertIn("Query Assistant", ui.layout.html)
         self.assertIn("Source Filter Assistant", ui.layout.html)
         self.assertIn("Visualization Assistant", ui.layout.html)

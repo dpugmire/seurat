@@ -108,7 +108,10 @@ class InteractionLog:
         if self.directory is None:
             return
         try:
+            directory_existed = self.directory.exists()
             self.directory.mkdir(parents=True, exist_ok=True)
+            if not directory_existed:
+                os.chmod(self.directory, 0o700)
             self.user_profile_id = _profile_id(self.directory)
             self._open_segment()
             self.record(

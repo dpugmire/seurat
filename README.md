@@ -298,6 +298,35 @@ python -m seurat.learning.audit /path/to/private/seurat-logs
 See [Interaction Log v1](docs/interaction-log-v1.md) for the event contract,
 privacy boundaries, and workspace snapshot schema.
 
+## Local Preference Intelligence
+
+Interaction logs can be evaluated chronologically and converted into a local
+preference profile:
+
+```bash
+python -m seurat.learning.evaluate /path/to/private/seurat-logs
+python -m seurat.learning.build_profile \
+  /path/to/private/seurat-logs \
+  --output ~/.local/share/seurat/preference-profile-v1.json
+```
+
+Load the profile explicitly in `shadow` mode to record recommendations without
+changing the UI, or in `suggest` mode to show actions that require confirmation:
+
+```bash
+export SEURAT_PREFERENCE_PROFILE=~/.local/share/seurat/preference-profile-v1.json
+export SEURAT_PREFERENCE_MODE=suggest  # off, shadow, or suggest
+python app.py campaign.aca
+```
+
+Confident visualization suggestions are revalidated and applied through the
+existing undoable grid controller only after acceptance. Repeated variable
+groups from saved and clean-exit workspaces can be proposed as a new tab from
+**Suggest Workspace** in the workspace drawer. Automatic application is not
+supported. See [Preference Intelligence v1](docs/preference-intelligence-v1.md)
+for evidence rules, evaluation interpretation, thresholds, and a demonstration
+workflow.
+
 By default, Seurat stores its viewer sidecar DB under `~/.cache/seurat` using a
 filename derived from the resolved campaign path. Override the location with:
 

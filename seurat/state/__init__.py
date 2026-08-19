@@ -5,6 +5,7 @@ from . import (
     context_menu,
     grid,
     history,
+    preferences,
     query_assistant,
     sources,
     visualization,
@@ -21,6 +22,7 @@ STATE_SECTIONS = (
     ("context_menu", context_menu.defaults),
     ("workspace", workspace.defaults),
     ("history", history.defaults),
+    ("preferences", preferences.defaults),
 )
 
 

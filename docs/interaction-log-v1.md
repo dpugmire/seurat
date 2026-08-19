@@ -1,14 +1,15 @@
 # Seurat Interaction Log v1
 
 Seurat can write a local, append-only JSON Lines log of semantic user
-interactions. The log supports usage auditing and future offline training for
-visualization ranking and workspace-organization recommendations. It does not
-change visualization selection behavior.
+interactions. The log supports usage auditing, offline preference profiles,
+visualization ranking, and workspace-organization recommendations. Logging by
+itself does not change visualization selection behavior.
 
 Logging is disabled unless `SEURAT_INTERACTION_LOG_DIR` is set. Seurat creates
-the directory, a pseudonymous `.seurat-profile-id`, and one or more mode-0600
-session files. `SEURAT_INTERACTION_LOG_MAX_MB` controls segment rotation and
-defaults to 64 MiB. Rotation never deletes old segments.
+the mode-0700 directory, a pseudonymous `.seurat-profile-id`, and one or more
+mode-0600 session files. Existing directories retain their permissions.
+`SEURAT_INTERACTION_LOG_MAX_MB` controls segment rotation and defaults to 64
+MiB. Rotation never deletes old segments.
 
 ```bash
 export SEURAT_INTERACTION_LOG_DIR=/path/to/private/seurat-logs
@@ -37,13 +38,19 @@ Every line is one JSON object with these required fields:
 
 V1 records session lifecycle, normalized query application and clearing,
 visualization assignment/change/removal, workspace tab and pane operations,
-grid layout and cell operations, saved/loaded workspace snapshots, and timeline
-driver changes.
+grid layout and cell operations, saved/loaded/final workspace snapshots,
+timeline driver changes, and recommendation outcomes.
 
 Visualization assignments include the complete supported candidate set, the
 chosen default, the active normalized query ID, and the semantic workspace
-location. Manual changes reference the original assignment event and record
-the elapsed time since assignment.
+location. Safe variable characteristics such as dimensionality, type, shape
+bucket, and time-varying status are included when available. Manual changes
+reference the original assignment event and record the elapsed time since
+assignment.
+
+Recommendation events distinguish generation, display, acceptance, dismissal,
+and application failure. They contain structured action context, not model
+prompts or arbitrary executable content.
 
 ## Query data
 
@@ -58,7 +65,8 @@ Snapshots contain the pane tree and split ratios, ordered pane/tab identifiers,
 grid dimensions and sizing, semantic cell contents, cell spans, source
 fingerprints, visualization settings, and timeline driver. Tab titles are not
 recorded. The active grid is captured from live Trame state; inactive tab grids
-come from the workspace layout.
+come from the workspace layout. A final sanitized snapshot is recorded before a
+clean application exit.
 
 Snapshots and events intentionally exclude:
 
@@ -91,3 +99,6 @@ that co-occur in saved tabs.
 
 Raw logs are immutable training input. Future label builders and models must
 write separate versioned artifacts rather than changing v1 events.
+
+See [Preference Intelligence v1](preference-intelligence-v1.md) for profile
+building, offline evaluation, and runtime suggestion modes.

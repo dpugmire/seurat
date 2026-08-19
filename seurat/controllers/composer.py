@@ -15,6 +15,7 @@ from .grid import GridControllerMixin
 from .history import HistoryControllerMixin
 from .lifecycle import LifecycleControllerMixin
 from .query_assistant import QueryAssistantControllerMixin
+from .preferences import PreferenceControllerMixin
 from .sources import SourcesControllerMixin
 from .visualization import VisualizationControllerMixin
 from .workspace import WorkspaceControllerMixin
@@ -27,6 +28,7 @@ CONTROLLER_TYPES = (
     GridControllerMixin,
     VisualizationControllerMixin,
     ContextMenuControllerMixin,
+    PreferenceControllerMixin,
     HistoryControllerMixin,
     WorkspaceControllerMixin,
     LifecycleControllerMixin,
@@ -40,6 +42,7 @@ class SeuratController(
     GridControllerMixin,
     VisualizationControllerMixin,
     ContextMenuControllerMixin,
+    PreferenceControllerMixin,
     HistoryControllerMixin,
     WorkspaceControllerMixin,
     LifecycleControllerMixin,
@@ -108,6 +111,9 @@ def attach_controllers(
     backend: Optional[SeuratBackend] = None,
     query_translator=None,
     interaction_log=None,
+    preference_profile=None,
+    preference_mode="off",
+    preference_status="",
 ):
     catalog_backend = backend if backend is not None else LocalCampaignBackend(db)
     context = ControllerContext(
@@ -121,6 +127,9 @@ def attach_controllers(
         campaign_schema_path=campaign_schema_path,
         query_translator=query_translator,
         interaction_log=interaction_log,
+        preference_profile=preference_profile,
+        preference_mode=preference_mode,
+        preference_status=preference_status,
     )
     controller = SeuratController(context).register()
     return controller.refresh_variable_list

@@ -1,39 +1,12 @@
 """Validate and summarize Seurat interaction JSONL logs."""
 
 import argparse
-import json
 from collections import Counter
 from itertools import combinations
-from pathlib import Path
-from typing import Any, Dict, Iterable, Iterator, List, Tuple
+from typing import Any, Dict, Iterable, Iterator, Tuple
 
 from .events import validate_event
-
-
-def _log_files(paths: Iterable[str]) -> List[Path]:
-    files: List[Path] = []
-    for raw_path in paths:
-        path = Path(raw_path).expanduser()
-        if path.is_dir():
-            files.extend(sorted(path.glob("*.jsonl")))
-        elif path.is_file():
-            files.append(path)
-    return sorted(dict.fromkeys(files))
-
-
-def _events(path: Path) -> Iterator[Tuple[Any, bool]]:
-    content = path.read_bytes()
-    lines = content.splitlines(keepends=True)
-    for index, raw_line in enumerate(lines):
-        complete = raw_line.endswith((b"\n", b"\r"))
-        text = raw_line.decode("utf-8", errors="replace").strip()
-        if not text:
-            continue
-        try:
-            yield json.loads(text), False
-        except json.JSONDecodeError:
-            is_truncated_final = index == len(lines) - 1 and not complete
-            yield None, is_truncated_final
+from .io import decoded_lines, log_files
 
 
 def _saved_colocations(snapshot: Any) -> Iterator[Tuple[str, str]]:
@@ -61,9 +34,9 @@ def audit_logs(paths: Iterable[str]) -> Dict[str, Any]:
     invalid_events = 0
     truncated_final_lines = 0
 
-    files = _log_files(paths)
+    files = log_files(paths)
     for path in files:
-        for event, truncated in _events(path):
+        for event, truncated in decoded_lines(path):
             if truncated:
                 truncated_final_lines += 1
                 continue
@@ -112,6 +85,9 @@ def format_audit(summary: Dict[str, Any]) -> str:
         f"Queries applied: {int(counts.get('query.applied', 0) or 0)}",
         f"Visualizations assigned: {int(counts.get('visualization.assigned', 0) or 0)}",
         f"Manual visualization changes: {int(counts.get('visualization.changed', 0) or 0)}",
+        f"Recommendations generated: {int(counts.get('recommendation.generated', 0) or 0)}",
+        f"Recommendations accepted: {int(counts.get('recommendation.accepted', 0) or 0)}",
+        f"Recommendations dismissed: {int(counts.get('recommendation.dismissed', 0) or 0)}",
         f"Saved workspace snapshots: {int(counts.get('workspace.saved', 0) or 0)}",
         "",
         "Most common visualization changes:",

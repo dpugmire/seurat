@@ -1,4 +1,5 @@
 import json
+import stat
 import tempfile
 import unittest
 from pathlib import Path
@@ -74,6 +75,10 @@ class InteractionLogTests(unittest.TestCase):
             self.assertNotIn(
                 "/campaign/private/example.aca",
                 json.dumps(lines),
+            )
+            self.assertEqual(
+                stat.S_IMODE(log_dir.stat().st_mode),
+                stat.S_IRWXU,
             )
 
             next_session = InteractionLog(

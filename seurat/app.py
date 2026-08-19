@@ -13,6 +13,8 @@ from config import (
     SEURAT_LLM_TIMEOUT_SECONDS,
     SEURAT_INTERACTION_LOG_DIR,
     SEURAT_INTERACTION_LOG_MAX_MB,
+    SEURAT_PREFERENCE_MODE,
+    SEURAT_PREFERENCE_PROFILE,
 )
 from controllers import attach_controllers
 from db import CampaignDb
@@ -29,7 +31,8 @@ from .demo_campaign import (
     DemoDependencyError,
     temporary_demo_campaign,
 )
-from .learning import InteractionLog
+from .learning import InteractionLog, PreferenceProfile, normalize_preference_mode
+from .learning.context import sanitized_workspace_snapshot
 from .query_assistant import make_chat_completions_query_translator
 from .state import init_state
 
@@ -60,6 +63,8 @@ class SeuratApp(TrameApp):
         db=None,
         query_translator=None,
         interaction_log=None,
+        preference_profile=None,
+        preference_mode=None,
         controller_attacher=attach_controllers,
         ui_builder=build_ui,
     ):
@@ -86,11 +91,6 @@ class SeuratApp(TrameApp):
                 max_megabytes=SEURAT_INTERACTION_LOG_MAX_MB,
             )
         )
-        close_interaction_log = getattr(self.interaction_log, "close", None)
-        if bool(getattr(self.interaction_log, "enabled", False)) and callable(
-            close_interaction_log
-        ):
-            atexit.register(close_interaction_log)
         self.query_translator = (
             query_translator
             or make_chat_completions_query_translator(
@@ -100,6 +100,46 @@ class SeuratApp(TrameApp):
                 timeout_seconds=SEURAT_LLM_TIMEOUT_SECONDS,
             )
         )
+        requested_preference_mode = normalize_preference_mode(
+            SEURAT_PREFERENCE_MODE if preference_mode is None else preference_mode
+        )
+        self.preference_profile = preference_profile
+        self.preference_profile_status = ""
+        if self.preference_profile is not None:
+            self.preference_profile_status = "Preference profile loaded"
+        elif SEURAT_PREFERENCE_PROFILE:
+            try:
+                self.preference_profile = PreferenceProfile.load(
+                    SEURAT_PREFERENCE_PROFILE
+                )
+                self.preference_profile_status = (
+                    f"Preference profile loaded: {SEURAT_PREFERENCE_PROFILE}"
+                )
+            except Exception as error:
+                self.preference_profile_status = (
+                    "Preference profile unavailable: "
+                    f"{type(error).__name__}: {error}"
+                )
+        else:
+            self.preference_profile_status = "No preference profile configured"
+        log_profile_id = str(
+            getattr(self.interaction_log, "user_profile_id", "") or ""
+        )
+        loaded_profile_id = str(
+            getattr(self.preference_profile, "user_profile_id", "") or ""
+        )
+        if (
+            self.preference_profile is not None
+            and log_profile_id
+            and loaded_profile_id
+            and log_profile_id != loaded_profile_id
+        ):
+            self.preference_profile = None
+            self.preference_profile_status = (
+                "Preference profile unavailable: profile identity does not match "
+                "the interaction-log directory"
+            )
+        self.preference_mode = requested_preference_mode
         init_state(self.state, self.db)
 
         self.refresh_variable_list = controller_attacher(
@@ -113,12 +153,35 @@ class SeuratApp(TrameApp):
             campaign_schema_path=self.campaign_schema_path,
             query_translator=self.query_translator,
             interaction_log=self.interaction_log,
+            preference_profile=self.preference_profile,
+            preference_mode=self.preference_mode,
+            preference_status=self.preference_profile_status,
         )
         self.ui = ui_builder(
             self.server,
             self.refresh_variable_list,
             campaign_name=Path(self.campaign_path).name,
         )
+        if bool(getattr(self.interaction_log, "enabled", False)):
+            atexit.register(self._close_interaction_log)
+
+    def _close_interaction_log(self):
+        if not bool(getattr(self.interaction_log, "enabled", False)):
+            return
+        try:
+            self.interaction_log.record(
+                "workspace.snapshot",
+                source="application",
+                payload={
+                    "reason": "session_ended",
+                    "workspace": sanitized_workspace_snapshot(self.state),
+                },
+            )
+        except Exception:
+            pass
+        close_interaction_log = getattr(self.interaction_log, "close", None)
+        if callable(close_interaction_log):
+            close_interaction_log()
 
 
 def build_parser():

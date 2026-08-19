@@ -1,6 +1,7 @@
 """Sanitized query, visualization, and workspace learning context."""
 
 import hashlib
+import json
 import math
 from copy import deepcopy
 from typing import Any, Dict, Iterable, Mapping, Optional
@@ -87,6 +88,29 @@ def stable_fingerprint(value: Any, kind: str = "value") -> str:
         return ""
     digest = hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()
     return f"{kind}:sha256:{digest}"
+
+
+def query_feature_key(value: Any) -> str:
+    """Fingerprint normalized query semantics while ignoring counts and IDs."""
+
+    raw = dict(value or {}) if isinstance(value, Mapping) else {}
+    semantics = {
+        "target": str(raw.get("target", "catalog") or "catalog"),
+        "action_plan": _json_value(raw.get("action_plan", {}) or {}),
+        "query_filter": _json_value(raw.get("query_filter", {}) or {}),
+        "source_filters": _json_value(raw.get("source_filters", []) or []),
+    }
+    if not any(
+        semantics[key] for key in ("action_plan", "query_filter", "source_filters")
+    ):
+        return ""
+    encoded = json.dumps(
+        semantics,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+    return stable_fingerprint(encoded, "query-context")
 
 
 def _filtered_settings(raw: Any, fields: Iterable[str]) -> Dict[str, Any]:

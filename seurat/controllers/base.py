@@ -1,12 +1,14 @@
 """Base state and dependencies for domain controller mixins."""
 
 import time
+from collections.abc import Mapping
 from typing import Any, Dict, Optional
 
 from application import SeuratApplication
 from seurat.learning.context import (
     sanitized_query_context,
     sanitized_workspace_snapshot,
+    query_feature_key,
     stable_fingerprint,
     workspace_location,
 )
@@ -39,6 +41,15 @@ class ControllerBase:
         self.campaign_schema_path = context.campaign_schema_path
         self.query_translator = context.query_translator
         self.interaction_log = context.interaction_log
+        self.preference_profile = context.preference_profile
+        self.preference_mode = context.preference_mode
+        self.state.preferenceMode = str(context.preference_mode or "off")
+        self.state.preferenceProfileLoaded = context.preference_profile is not None
+        self.state.preferenceProfileStatus = str(context.preference_status or "")
+        self.state.preferenceWorkspaceSuggestionsAvailable = bool(
+            context.preference_profile is not None
+            and getattr(context.preference_profile, "has_workspace_preferences", lambda: False)()
+        )
         self._interaction_query_id = ""
         self._interaction_assignment_source = ""
         self._interaction_assignments: Dict[str, Dict[str, Any]] = {}
@@ -144,6 +155,18 @@ class ControllerBase:
             "query_id": self._interaction_query_id,
             "workspace": self.interaction_workspace_location(cell_index),
         }
+        current_query = sanitized_query_context(
+            self.state,
+            query_id=self._interaction_query_id,
+            origin="runtime",
+            target="catalog",
+        )
+        current_query_key = query_feature_key(current_query)
+        if current_query_key:
+            payload["query_feature_key"] = current_query_key
+        variable_features = self.interaction_variable_features(variable_id, item)
+        if variable_features:
+            payload["variable_features"] = variable_features
         source_identity = str(
             item.get("source_id", "") or item.get("_source_key", "") or ""
         )
@@ -159,7 +182,95 @@ class ControllerBase:
                 "event_id": event_id,
                 "started": time.monotonic(),
             }
+        preference_handler = getattr(
+            self, "handle_visualization_assignment_for_preferences", None
+        )
+        if callable(preference_handler):
+            try:
+                preference_handler(
+                    cell_index,
+                    item,
+                    assignment_event_id=event_id,
+                    assignment_payload=payload,
+                )
+            except Exception:
+                pass
         return event_id
+
+    def interaction_variable_features(
+        self, variable_id: str, cell: Optional[Mapping[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """Return bounded semantic features without copying campaign values."""
+
+        item = dict(cell or {})
+        catalog_item: Dict[str, Any] = {}
+        for group in list(getattr(self.state, "variableGroups", []) or []):
+            if not isinstance(group, Mapping):
+                continue
+            catalog_item = next(
+                (
+                    dict(variable)
+                    for variable in list(group.get("variables", []) or [])
+                    if isinstance(variable, Mapping)
+                    and str(variable.get("id", "") or "") == str(variable_id or "")
+                ),
+                {},
+            )
+            if catalog_item:
+                break
+
+        features: Dict[str, Any] = {}
+        variable_type = str(
+            item.get("variable_type", "")
+            or catalog_item.get("variable_type", "")
+            or catalog_item.get("type", "")
+            or ""
+        ).strip()
+        media_type = str(item.get("media_type", "") or "").strip()
+        if variable_type:
+            features["variable_type"] = variable_type[:80]
+        if media_type:
+            features["media_type"] = media_type[:80]
+
+        metadata = item.get("metadata", {}) or catalog_item.get("metadata", {}) or {}
+        if not isinstance(metadata, Mapping):
+            metadata = {}
+        raw_shape = metadata.get("Shape", catalog_item.get("shape", []))
+        dimensions = []
+        if isinstance(raw_shape, (list, tuple)):
+            raw_dimensions = list(raw_shape)
+        else:
+            raw_dimensions = str(raw_shape or "").replace("x", ",").split(",")
+        for raw_dimension in raw_dimensions:
+            try:
+                dimension = int(raw_dimension)
+            except (TypeError, ValueError):
+                continue
+            if dimension >= 0:
+                dimensions.append(dimension)
+        if dimensions:
+            features["dimensionality"] = len(dimensions)
+            cardinality = 1
+            for dimension in dimensions:
+                cardinality *= max(1, dimension)
+            if cardinality <= 1:
+                features["shape_bucket"] = "scalar"
+            elif cardinality <= 1_024:
+                features["shape_bucket"] = "small"
+            elif cardinality <= 1_048_576:
+                features["shape_bucket"] = "medium"
+            else:
+                features["shape_bucket"] = "large"
+
+        raw_steps = metadata.get(
+            "AvailableStepsCount", catalog_item.get("steps_count", None)
+        )
+        if raw_steps not in (None, ""):
+            try:
+                features["time_varying"] = int(raw_steps) > 1
+            except (TypeError, ValueError):
+                pass
+        return features
 
     def _interaction_cell_key(self, cell_index: int) -> str:
         location = self.interaction_workspace_location(cell_index)

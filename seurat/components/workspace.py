@@ -46,6 +46,18 @@ class WorkspaceMenu(TrameComponent):
                 prepend_icon="mdi-folder-open",
                 click=ctrl.load_workspace_state,
             )
+            with vuetify.Template(
+                v_if=(
+                    "preferenceMode === 'suggest' && "
+                    "preferenceWorkspaceSuggestionsAvailable"
+                )
+            ):
+                vuetify.VListItem(
+                    title="Suggest Workspace",
+                    subtitle="Create a tab from learned co-locations",
+                    prepend_icon="mdi-lightbulb-outline",
+                    click=ctrl.open_workspace_suggestion,
+                )
 
         vuetify.VDivider()
         with html.Div(class_="pa-4"):
@@ -70,6 +82,18 @@ class WorkspaceMenu(TrameComponent):
             with vuetify.Template(v_if="workspaceStateError"):
                 html.Div(
                     "{{ workspaceStateError }}",
+                    class_="text-caption mt-3",
+                    style="color:#b00020; overflow-wrap:anywhere;",
+                )
+            with vuetify.Template(v_if="preferenceProfileStatus"):
+                html.Div(
+                    "{{ preferenceProfileStatus }}",
+                    class_="text-caption mt-3 text-medium-emphasis",
+                    style="overflow-wrap:anywhere;",
+                )
+            with vuetify.Template(v_if="preferenceSuggestionStatus"):
+                html.Div(
+                    "{{ preferenceSuggestionStatus }}",
                     class_="text-caption mt-3",
                     style="color:#b00020; overflow-wrap:anywhere;",
                 )

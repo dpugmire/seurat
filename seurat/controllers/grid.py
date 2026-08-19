@@ -2080,7 +2080,10 @@ class GridControllerMixin:
             assignment = self.interaction_assignment_reference(idx)
             self.record_interaction(
                 "visualization.changed",
-                source="grid_menu",
+                source=(
+                    getattr(self, "_interaction_visualization_change_source", "")
+                    or "grid_menu"
+                ),
                 payload={
                     "variable_id": var,
                     "previous_visualization": previous_visualization,
