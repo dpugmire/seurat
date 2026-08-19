@@ -1837,8 +1837,9 @@ class CampaignDbNavigationTests(unittest.TestCase):
             state.detailsSelectedVarId = "internal_energy"
             state.selectedVar = "internal_energy"
             state.selectedSourceKeys = [source_keys[0]]
+            state.contextMenuCellIndex = 0
 
-            controller.actions["toggle_sources"]()
+            controller.actions["context_menu_cell_sources"]()
             self.assertEqual(state.sourceDialogMode, "add")
 
             controller.actions["source_dialog_select"](source_keys[1])

@@ -324,7 +324,7 @@ class ContextMenuControllerMixin:
             self.hide_context_menu()
             return
 
-        self.open_source_dialog_for_cell(idx, prefer_multi=False)
+        self.open_source_dialog_for_cell(idx, prefer_multi=True)
         self.hide_context_menu()
 
     def context_menu_cell_add_source(self, **_):
