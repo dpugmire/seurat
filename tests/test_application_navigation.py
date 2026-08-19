@@ -1754,6 +1754,104 @@ class CampaignDbNavigationTests(unittest.TestCase):
         self.assertFalse(state.sourceDialogStatusIsError)
         self.assertEqual(state.detailsSelectedVarId, "density")
 
+    def test_plugin_plot1d_source_dialog_applies_multiple_labeled_sources(self):
+        for source_dataset, producer in (
+            ("run-a/scalars.bp", "alpha"),
+            ("run-b/scalars.bp", "beta"),
+        ):
+            self.collection.insert_one(
+                {
+                    "campaign_path": "/campaign/example.aca",
+                    "variable_id": "internal_energy",
+                    "variable_name": "internal_energy",
+                    "variable_type": "variable",
+                    "source_dataset": source_dataset,
+                    "variable_path": f"{source_dataset}/internal_energy",
+                    "producer": producer,
+                    "metadata": {
+                        "SingleValue": True,
+                        "AvailableStepsCount": "3",
+                    },
+                }
+            )
+
+        def render_plugin(_campaign_path, _plugin_id, candidate, options=None):
+            source_dataset = candidate["source_fields"]["source_dataset"]
+            offset = 0.0 if source_dataset.startswith("run-a") else 10.0
+            return {
+                "media_type": "plot1d",
+                "display_title": "internal_energy time series",
+                "plot": {
+                    "x_label": "step",
+                    "y_label": "internal_energy",
+                    "x_min": 0.0,
+                    "x_max": 2.0,
+                    "y_min": offset,
+                    "y_max": offset + 2.0,
+                    "data_x_min": 0.0,
+                    "data_x_max": 2.0,
+                    "data_y_min": offset,
+                    "data_y_max": offset + 2.0,
+                    "series": [
+                        {
+                            "x": [0.0, 1.0, 2.0],
+                            "y": [offset, offset + 1.0, offset + 2.0],
+                            "source_label": "internal_energy",
+                            "source_key": "scalar",
+                        }
+                    ],
+                },
+                "status": "ok",
+                "note": "plugin: profile_timeseries",
+            }
+
+        state, controller = self.make_controller()
+        owner = controller.actions["toggle_sources"].__self__
+        state.variableLabelsById["internal_energy"] = "internal_energy"
+
+        with patch(
+            "seurat.controllers.visualization.render_plugin_tile",
+            side_effect=render_plugin,
+        ):
+            owner.update_selected_var_panels("internal_energy")
+            source_keys = [row["_key"] for row in state.sourceRowsAll]
+            first_row = state.sourceRowsAll[0]
+            state.gridCells[0].update(
+                {
+                    "variable_id": "internal_energy",
+                    "variable_name": "internal_energy",
+                    "media_type": "plot1d",
+                    "visualization_name": "plugin:profile_timeseries",
+                    "selected_visualization": "plugin:profile_timeseries",
+                    "source_dataset": first_row["source_dataset"],
+                    "_source_key": source_keys[0],
+                    "_source_keys": [source_keys[0]],
+                    "plot": render_plugin(
+                        "", "", {"source_fields": first_row}
+                    )["plot"],
+                    "status": "ok",
+                }
+            )
+            state.activeGridCell = 0
+            state.detailsSelectedVar = "internal_energy"
+            state.detailsSelectedVarId = "internal_energy"
+            state.selectedVar = "internal_energy"
+            state.selectedSourceKeys = [source_keys[0]]
+
+            controller.actions["toggle_sources"]()
+            self.assertEqual(state.sourceDialogMode, "add")
+
+            controller.actions["source_dialog_select"](source_keys[1])
+            controller.actions["apply_source_dialog"]()
+
+        cell = state.gridCells[0]
+        self.assertEqual(cell["selected_visualization"], "plugin:profile_timeseries")
+        self.assertEqual(cell["_source_keys"], source_keys)
+        self.assertEqual(
+            [series["source_label"] for series in cell["plot"]["series"]],
+            ["run-a/scalars.bp", "run-b/scalars.bp"],
+        )
+
     def test_explicit_schema_source_without_visualization_does_not_fall_back(self):
         for schema_file_group, schema_pattern in (
             ("xgc_3d", "xgc.3d.*.bp"),

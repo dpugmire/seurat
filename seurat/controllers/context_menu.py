@@ -152,7 +152,7 @@ class ContextMenuControllerMixin:
             vis_opts.append(selected_vis)
         targets = self.source_dialog_targets_for_anchor(idx, cells)
         can_add_source = bool(targets) and all(
-            self.is_generated_plot1d_cell(cells[target]) for target in targets
+            self.is_multi_source_plot1d_cell(cells[target]) for target in targets
         )
         is_plugin_cell = is_plugin_visualization(selected_vis)
         can_plot_settings = has_var and (
