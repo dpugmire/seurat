@@ -321,6 +321,21 @@ class VisualizationControllerMixin:
             or visualization_name == GENERATED_SCALAR_PLOT_VIS
         )
 
+    def is_multi_source_plot1d_cell(self, cell: Dict[str, Any]) -> bool:
+        if self.is_generated_plot1d_cell(cell):
+            return True
+        if str(cell.get("media_type", "") or "") != "plot1d":
+            return False
+        selected_vis = str(
+            cell.get("selected_visualization", "")
+            or cell.get("visualization_name", "")
+            or ""
+        ).strip()
+        if not is_plugin_visualization(selected_vis):
+            return False
+        plugin_id = plugin_id_from_visualization(selected_vis)
+        return bool(plugin_id) and plugin_scope(plugin_id) == "variable"
+
     def scalar_colormap(self, value: Any) -> str:
         name = str(value or "viridis").strip().lower()
         return name if name in SCALAR_FIELD_COLORMAPS else "viridis"

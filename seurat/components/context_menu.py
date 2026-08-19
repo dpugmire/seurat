@@ -69,10 +69,8 @@ class ContextMenu(TrameComponent):
                             html.Div("Shrink width", classes="menu-item", click=ctrl.context_menu_cell_shrink_width)
                             html.Div("Shrink height", classes="menu-item", click=ctrl.context_menu_cell_shrink_height)
                             html.Div("Reset span", classes="menu-item", click=ctrl.context_menu_cell_reset_span)
-                with vuetify.Template(v_if="contextMenuCellHasVariable && !contextMenuCellCanPlotSettings"):
+                with vuetify.Template(v_if="contextMenuCellHasVariable"):
                     html.Div("Sources...", classes="menu-item", click=ctrl.context_menu_cell_sources)
-                with vuetify.Template(v_if="contextMenuCellCanAddSource"):
-                    html.Div("Add Source", classes="menu-item", click=ctrl.context_menu_cell_add_source)
                 with vuetify.Template(v_if="contextMenuCellCanPlotSettings"):
                     html.Div("Plot settings...", classes="menu-item", click=ctrl.context_menu_cell_plot_settings)
                 with vuetify.Template(v_if="contextMenuCellCanScalarFieldSettings"):

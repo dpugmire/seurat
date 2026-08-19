@@ -8,6 +8,7 @@ from db import (
 )
 from plugin_runtime import (
     is_plugin_visualization,
+    plot1d_payload,
 )
 from query_parser import and_filter, mongo_filter_matches, python_query_to_filters
 from seurat.learning.context import stable_fingerprint
@@ -753,6 +754,134 @@ class SourcesControllerMixin:
         tile["visualization_options"] = [GENERATED_SCALAR_PLOT_VIS]
         return tile
 
+    def plugin_plot1d_cell_for_source_rows(
+        self,
+        variable_id: str,
+        source_rows: List[Dict[str, Any]],
+        existing_cell: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        var_id = str(variable_id or "").strip()
+        rows: List[Dict[str, Any]] = []
+        for source_row in source_rows:
+            if not source_row:
+                continue
+            row = self.source_row_for_variable(source_row, var_id)
+            source_id = str(
+                source_row.get("source_id", "")
+                or source_row.get("id", "")
+                or source_row.get("_key", "")
+                or ""
+            )
+            if source_id:
+                row["source_id"] = source_id
+                row["_key"] = source_id
+            rows.append(row)
+        plugin_vis = str(
+            existing_cell.get("selected_visualization", "")
+            or existing_cell.get("visualization_name", "")
+            or ""
+        ).strip()
+        if not var_id or not rows:
+            raise ValueError("No source selected")
+        if not is_plugin_visualization(plugin_vis):
+            raise ValueError("Cell is not a plugin plot")
+
+        prior_settings = self.existing_plot_settings(existing_cell, var_id)
+        plugin_options = dict(existing_cell.get("plugin_options", {}) or {})
+        merged_series: List[Dict[str, Any]] = []
+        rendered_tiles: List[Dict[str, Any]] = []
+        rendered_fields: List[Dict[str, Any]] = []
+        rendered_keys: List[str] = []
+        x_labels: List[str] = []
+        y_labels: List[str] = []
+
+        for source_index, row in enumerate(rows):
+            tile = self.build_plugin_grid_cell(
+                var_id,
+                plugin_vis,
+                source_row=row,
+                existing_cell=existing_cell,
+                plugin_options=plugin_options,
+            )
+            if str(tile.get("media_type", "") or "") != "plot1d":
+                raise ValueError("Selected plugin does not produce a 1D plot")
+
+            plot = dict(tile.get("plot", {}) or {})
+            series = self.plot_series(tile)
+            if not series:
+                continue
+
+            source_fields = source_fields_from_row(row)
+            source_key = str(source_fields.get("_source_key", "") or "")
+            source_label = (
+                self.source_name_for_row(row)
+                or source_key
+                or f"Source {source_index + 1}"
+            )
+            for series_index, raw_series in enumerate(series):
+                item = dict(raw_series)
+                item_label = str(item.get("source_label", "") or "").strip()
+                item_key = str(item.get("source_key", "") or "").strip()
+                if len(series) == 1:
+                    item["source_label"] = source_label
+                    item["source_key"] = source_key or item_key
+                else:
+                    suffix = item_label or f"Series {series_index + 1}"
+                    item["source_label"] = f"{source_label}: {suffix}"
+                    item["source_key"] = ":".join(
+                        part
+                        for part in (
+                            source_key,
+                            item_key or f"series-{series_index + 1}",
+                        )
+                        if part
+                    )
+                merged_series.append(item)
+
+            rendered_tiles.append(tile)
+            rendered_fields.append(source_fields)
+            if source_key:
+                rendered_keys.append(source_key)
+            x_labels.append(str(plot.get("x_label", "") or ""))
+            y_labels.append(str(plot.get("y_label", "") or ""))
+
+        if not rendered_tiles or not merged_series:
+            raise ValueError("Could not render the selected sources")
+
+        nonempty_x_labels = {label for label in x_labels if label}
+        nonempty_y_labels = {label for label in y_labels if label}
+        x_label = x_labels[0] if len(nonempty_x_labels) <= 1 else "x"
+        y_label = (
+            y_labels[0]
+            if len(nonempty_y_labels) <= 1
+            else self.variable_label(var_id)
+        )
+
+        tile = dict(rendered_tiles[0])
+        first_fields = rendered_fields[0]
+        tile.update(
+            {
+                key: value
+                for key, value in first_fields.items()
+                if value and key != "_source_key"
+            }
+        )
+        tile["_source_key"] = rendered_keys[0] if rendered_keys else ""
+        tile["_source_keys"] = rendered_keys
+        tile["_source_fields_list"] = rendered_fields
+        tile["plot"] = plot1d_payload(
+            merged_series,
+            x_label=x_label,
+            y_label=y_label,
+        )
+        tile["plot_settings"] = self.normalize_plot_settings(tile, prior_settings)
+        tile["source_count"] = len(rendered_tiles)
+        tile["note"] = (
+            f"plugin: {plugin_vis.removeprefix('plugin:')}; "
+            f"{len(rendered_tiles)} sources"
+        )
+        return tile
+
     def build_cell_for_source_rows(
         self,
         variable_id: str,
@@ -767,6 +896,18 @@ class SourcesControllerMixin:
             raise ValueError("No source selected")
 
         existing = dict(existing_cell or {})
+        if allow_multi_sources and is_plugin_visualization(
+            str(
+                existing.get("selected_visualization", "")
+                or existing.get("visualization_name", "")
+                or ""
+            )
+        ):
+            return self.plugin_plot1d_cell_for_source_rows(
+                var_id,
+                source_rows,
+                existing,
+            )
         if self.is_generated_plot1d_cell(existing):
             return self.generated_scalar_plot_cell_for_source_rows(
                 var_id,
@@ -807,7 +948,7 @@ class SourcesControllerMixin:
         self, targets: List[int], cells: List[Dict[str, Any]]
     ) -> bool:
         return bool(targets) and all(
-            self.is_generated_plot1d_cell(cells[idx]) for idx in targets
+            self.is_multi_source_plot1d_cell(cells[idx]) for idx in targets
         )
 
     def apply_source_rows_to_targets(
@@ -843,7 +984,8 @@ class SourcesControllerMixin:
                     var_id,
                     existing,
                     source_rows,
-                    allow_multi_sources and self.is_generated_plot1d_cell(existing),
+                    allow_multi_sources
+                    and self.is_multi_source_plot1d_cell(existing),
                 )
             except Exception as e:
                 failures.append(f"Cell {idx + 1}: {e}")
