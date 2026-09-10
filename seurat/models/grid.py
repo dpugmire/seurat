@@ -7,7 +7,7 @@ from . import canvas_layout
 
 GridCell = Dict[str, Any]
 GRID_LAYOUT_MODES = ("uniform", "spanning", "freeform")
-DEFAULT_GRID_LAYOUT_MODE = "freeform"
+DEFAULT_GRID_LAYOUT_MODE = "uniform"
 GRID_LAYOUT_FIELDS = (
     "grid_row",
     "grid_col",

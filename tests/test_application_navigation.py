@@ -549,8 +549,9 @@ class CampaignDbNavigationTests(unittest.TestCase):
         controller.actions["add_workspace_tab"]("pane-1")
 
         self.assertEqual(state.workspaceActiveTabId, "tab-2")
-        self.assertEqual(state.gridLayoutMode, "freeform")
-        self.assertEqual(state.gridCells, [])
+        self.assertEqual(state.gridLayoutMode, "uniform")
+        self.assertEqual(len(state.gridCells), 9)
+        self.assertTrue(all(cell["status"] == "empty" for cell in state.gridCells))
 
         controller.actions["activate_workspace_tab"]("pane-1", "tab-1")
 
@@ -910,6 +911,7 @@ class CampaignDbNavigationTests(unittest.TestCase):
         )
         controller.actions["set_grid_layout_mode"]("freeform")
         controller.actions["split_workspace_pane"]("horizontal", "pane-1")
+        controller.actions["set_grid_layout_mode"]("freeform")
 
         controller.triggers["move_workspace_canvas_tile_trigger"](
             "pane-1",

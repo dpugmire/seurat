@@ -43,7 +43,7 @@ class WorkspaceLayoutTests(unittest.TestCase):
         self.assertEqual(state.gridCells[0]["variable_id"], "density")
         self.assertIsNot(state.gridCells, snapshot["cells"])
 
-    def test_new_tabs_start_empty_in_default_freeform_mode(self):
+    def test_new_tabs_start_empty_in_default_uniform_mode(self):
         state = self.make_state()
         state.gridRows = 2
         state.gridCols = 2
@@ -57,8 +57,11 @@ class WorkspaceLayoutTests(unittest.TestCase):
         self.assertEqual(tab_id, "tab-2")
         self.assertEqual(pane["active_tab_id"], tab_id)
         self.assertEqual((tab["grid"]["rows"], tab["grid"]["columns"]), (2, 2))
-        self.assertEqual(tab["grid"]["layout_mode"], "freeform")
-        self.assertEqual(tab["grid"]["cells"], [])
+        self.assertEqual(tab["grid"]["layout_mode"], "uniform")
+        self.assertEqual(len(tab["grid"]["cells"]), 4)
+        self.assertTrue(
+            all(cell["status"] == "empty" for cell in tab["grid"]["cells"])
+        )
 
     def test_workspace_splits_active_panes_into_at_most_four_leaves(self):
         state = self.make_state()
@@ -149,7 +152,12 @@ class WorkspaceLayoutTests(unittest.TestCase):
         self.assertEqual(new_pane_id, "pane-2")
         self.assertEqual(layout["root"]["direction"], "vertical")
         self.assertEqual(layout["panes"][0]["tabs"][0]["id"], "tab-2")
-        self.assertEqual(layout["panes"][0]["tabs"][0]["grid"]["cells"], [])
+        replacement_grid = layout["panes"][0]["tabs"][0]["grid"]
+        self.assertEqual(replacement_grid["layout_mode"], "uniform")
+        self.assertEqual(len(replacement_grid["cells"]), 9)
+        self.assertTrue(
+            all(cell["status"] == "empty" for cell in replacement_grid["cells"])
+        )
         self.assertEqual(layout["panes"][1]["tabs"][0]["id"], "tab-1")
         self.assertEqual(
             layout["panes"][1]["tabs"][0]["grid"]["cells"][0]["variable_id"],
