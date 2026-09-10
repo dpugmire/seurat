@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import tempfile
@@ -19,6 +20,21 @@ import plugin_runtime
 
 
 class PersonalPluginDiscoveryTests(unittest.TestCase):
+    def write_plugin(self, plugin_dir, plugin_id):
+        plugin_dir.mkdir(parents=True, exist_ok=True)
+        (plugin_dir / f"{plugin_id}.py").write_text(
+            textwrap.dedent(
+                f"""
+                PLUGIN_ID = '{plugin_id}'
+                LABEL = '{plugin_id}'
+
+                def supports(meta):
+                    return meta.get('ndims') == 0
+                """
+            ),
+            encoding="utf-8",
+        )
+
     def test_external_plugin_can_use_relative_helper_module(self):
         with tempfile.TemporaryDirectory() as tmp:
             plugin_dir = Path(tmp)
@@ -79,6 +95,96 @@ class PersonalPluginDiscoveryTests(unittest.TestCase):
                     {"ndims": 0},
                 )
                 self.assertEqual(schema[0]["choices"], ["from-helper"])
+
+    def test_profile_plugin_paths_are_discovered(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            plugin_dir = root / "profile-plugins"
+            profile_path = root / "profile.json"
+            self.write_plugin(plugin_dir, "profile_plugin_path_test")
+            profile_path.write_text(
+                json.dumps({"plugin_paths": [str(plugin_dir)]}),
+                encoding="utf-8",
+            )
+
+            with patch.object(
+                plugin_runtime,
+                "DEFAULT_PERSONAL_PLUGIN_DIR",
+                root / "missing-default",
+            ), patch.object(
+                plugin_runtime,
+                "DEFAULT_PROFILE_PATH",
+                profile_path,
+            ), patch.dict(os.environ, {"SEURAT_PLUGIN_PATH": ""}):
+                discovered = {
+                    info.plugin_id: info
+                    for info in plugin_runtime.discover_plugins()
+                }
+                self.assertIn("profile_plugin_path_test", discovered)
+
+    def test_plugin_dirs_merge_profile_env_and_deduplicate_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            default_dir = root / "default"
+            profile_dir = root / "profile"
+            env_dir = root / "env"
+            profile_path = root / "profile.json"
+            profile_path.write_text(
+                json.dumps(
+                    {
+                        "plugin_paths": [
+                            "$SEURAT_PROFILE_PLUGIN_DIR",
+                            str(profile_dir),
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch.object(
+                plugin_runtime,
+                "DEFAULT_PERSONAL_PLUGIN_DIR",
+                default_dir,
+            ), patch.object(
+                plugin_runtime,
+                "DEFAULT_PROFILE_PATH",
+                profile_path,
+            ), patch.dict(
+                os.environ,
+                {
+                    "SEURAT_PROFILE_PLUGIN_DIR": str(profile_dir),
+                    "SEURAT_PLUGIN_PATH": os.pathsep.join(
+                        [str(profile_dir), str(env_dir)]
+                    ),
+                },
+            ):
+                self.assertEqual(
+                    plugin_runtime._personal_plugin_dirs(),
+                    [default_dir, profile_dir, env_dir],
+                )
+
+    def test_malformed_profile_does_not_block_env_plugin_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            plugin_dir = root / "env-plugins"
+            profile_path = root / "profile.json"
+            self.write_plugin(plugin_dir, "env_plugin_with_bad_profile_test")
+            profile_path.write_text("{bad json", encoding="utf-8")
+
+            with patch.object(
+                plugin_runtime,
+                "DEFAULT_PERSONAL_PLUGIN_DIR",
+                root / "missing-default",
+            ), patch.object(
+                plugin_runtime,
+                "DEFAULT_PROFILE_PATH",
+                profile_path,
+            ), patch.dict(os.environ, {"SEURAT_PLUGIN_PATH": str(plugin_dir)}):
+                discovered = {
+                    info.plugin_id: info
+                    for info in plugin_runtime.discover_plugins()
+                }
+                self.assertIn("env_plugin_with_bad_profile_test", discovered)
 
 
 if __name__ == "__main__":

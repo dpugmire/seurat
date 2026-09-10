@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import importlib
 import importlib.util
+import json
 import math
 import os
 import sys
@@ -19,6 +20,8 @@ from adios2 import FileReader
 PLUGIN_VIS_PREFIX = "plugin:"
 PERSONAL_PLUGIN_ENV = "SEURAT_PLUGIN_PATH"
 DEFAULT_PERSONAL_PLUGIN_DIR = Path("~/.seurat/plugins")
+DEFAULT_PROFILE_PATH = Path("~/.seurat/profile.json")
+PROFILE_PLUGIN_PATHS_KEY = "plugin_paths"
 
 
 @dataclass(frozen=True)
@@ -39,6 +42,7 @@ _BUILTIN_PLUGIN_MODULES = (
     "seurat_plugins.divertor_target_totals_timeseries",
 )
 _FAILED_BUILTIN_PLUGIN_IMPORTS: set[str] = set()
+_FAILED_PROFILE_WARNINGS: set[str] = set()
 
 
 def plugin_visualization_name(plugin_id: str) -> str:
@@ -116,16 +120,69 @@ def _personal_plugin_dirs() -> List[Path]:
     raw = os.environ.get(PERSONAL_PLUGIN_ENV, "")
     dirs: List[Path] = []
     candidates = [str(DEFAULT_PERSONAL_PLUGIN_DIR)]
+    candidates.extend(_profile_plugin_path_items())
     if raw.strip():
         candidates.extend(item.strip() for item in raw.split(os.pathsep))
 
     for item in candidates:
-        if not item:
+        path = _expand_plugin_path(item)
+        if path is None:
             continue
-        path = Path(item).expanduser()
         if path not in dirs:
             dirs.append(path)
     return dirs
+
+
+def _profile_plugin_path_items() -> List[str]:
+    profile_path = _expand_plugin_path(DEFAULT_PROFILE_PATH)
+    if profile_path is None or not profile_path.is_file():
+        return []
+
+    try:
+        with profile_path.open("r", encoding="utf-8") as stream:
+            profile = json.load(stream)
+    except Exception as exc:
+        _warn_profile(profile_path, f"{type(exc).__name__}: {exc}")
+        return []
+
+    if not isinstance(profile, dict):
+        _warn_profile(profile_path, "expected a JSON object")
+        return []
+
+    raw_paths = profile.get(PROFILE_PLUGIN_PATHS_KEY, [])
+    if raw_paths is None:
+        return []
+    if not isinstance(raw_paths, list):
+        _warn_profile(profile_path, f"{PROFILE_PLUGIN_PATHS_KEY} must be a list")
+        return []
+
+    paths: List[str] = []
+    for item in raw_paths:
+        if not isinstance(item, str):
+            _warn_profile(
+                profile_path,
+                f"ignored non-string {PROFILE_PLUGIN_PATHS_KEY} item",
+            )
+            continue
+        text = item.strip()
+        if text:
+            paths.append(text)
+    return paths
+
+
+def _expand_plugin_path(item: Any) -> Optional[Path]:
+    text = str(item or "").strip()
+    if not text:
+        return None
+    return Path(os.path.expandvars(text)).expanduser()
+
+
+def _warn_profile(profile_path: Path, message: str) -> None:
+    key = f"{profile_path}:{message}"
+    if key in _FAILED_PROFILE_WARNINGS:
+        return
+    print(f"Ignoring Seurat profile {profile_path}: {message}", file=sys.stderr)
+    _FAILED_PROFILE_WARNINGS.add(key)
 
 
 def _load_personal_plugin_modules() -> List[Tuple[Any, str]]:

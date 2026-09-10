@@ -397,6 +397,25 @@ variable:
 export SEURAT_PLUGIN_PATH=~/.seurat/plugins:/path/to/other/plugins
 ```
 
+For persistent per-user plugin paths, add `plugin_paths` to
+`~/.seurat/profile.json`:
+
+```json
+{
+  "plugin_paths": [
+    "/path/to/hpc-campaign-examples/plugins/seurat",
+    "~/other/seurat/plugins"
+  ]
+}
+```
+
+Seurat expands `~` and environment variables in these paths. Plugin paths are
+loaded in this order, with duplicates ignored:
+
+1. `~/.seurat/plugins`
+2. `~/.seurat/profile.json`
+3. `SEURAT_PLUGIN_PATH`
+
 Each plugin is a Python file. Files whose names start with `_` are ignored.
 Broken personal plugins are skipped and reported on stderr so one bad local
 plugin does not prevent Seurat from starting.
