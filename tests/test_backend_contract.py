@@ -1,3 +1,4 @@
+import copy
 import unittest
 from types import SimpleNamespace
 
@@ -5,7 +6,6 @@ from application import SeuratApplication
 from seurat.backends import BackendStatus, LocalCampaignBackend
 from seurat.controllers import attach_controllers
 from seurat.state import init_state
-
 
 VARIABLE_NAVIGATION = [
     {
@@ -78,6 +78,34 @@ SOURCE_SUMMARY = {
         }
     ],
 }
+
+
+def source_summary_with_one_source():
+    summary = copy.deepcopy(SOURCE_SUMMARY)
+    summary.update(
+        {
+            "num_sources": 1,
+            "sources": [
+                {
+                    "label": "run/output",
+                    "variable_id": "energy",
+                    "variable_name": "energy",
+                    "variable_type": "variable",
+                    "variable_path": "run/output.bp/energy",
+                    "source_dataset": "run/output.bp",
+                    "source_datasets": ["run/output.bp"],
+                    "files": ["output.bp"],
+                    "producer": "run",
+                    "casename": "case-a",
+                    "file": "output.bp",
+                    "num_timesteps": 34,
+                    "minimum": 1,
+                    "maximum": 4,
+                }
+            ],
+        }
+    )
+    return summary
 
 
 class RecordingCampaignDb:
@@ -558,6 +586,174 @@ class BackendInjectionTests(unittest.TestCase):
         self.assertEqual(
             state.detailsDerivedRepresentations[0]["global_max"],
             "3.56",
+        )
+
+    def test_controller_details_show_variable_provenance_for_selected_source(self):
+        backend = FakeCatalogBackend(source_summary=source_summary_with_one_source())
+        state = RecordingState()
+        db = SimpleNamespace(ok=True, last_error="")
+        init_state(state, db)
+        state.variableLabelsById = {"energy": "Energy"}
+        server = SimpleNamespace(state=state, controller=RecordingController())
+
+        attach_controllers(
+            server=server,
+            backend=backend,
+            db=db,
+            collection=SimpleNamespace(),
+            parse_campaign=lambda *_args, **_kwargs: None,
+            campaign_path="/campaign/example.aca",
+        )
+        state.change_callbacks["selectedVar"][0]("energy")
+
+        self.assertEqual(state.detailsProvenanceKind, "variable")
+        self.assertEqual(state.detailsProvenanceChain, "Energy --> run/output")
+
+    def test_controller_details_show_visualization_provenance_in_visualization_context(self):
+        backend = FakeCatalogBackend(source_summary=source_summary_with_one_source())
+        state = RecordingState()
+        db = SimpleNamespace(ok=True, last_error="")
+        db.distinct_visualization_names_for_variable = (
+            lambda *_args, **_kwargs: ["contour", "heatmap"]
+        )
+
+        def first_movie_tile(*_args, **kwargs):
+            vis = (
+                "heatmap"
+                if "heatmap" in repr(kwargs.get("extra_filter"))
+                else "contour"
+            )
+            return [
+                {
+                    "variable_id": "energy",
+                    "variable_name": "Energy",
+                    "visualization_name": vis,
+                    "visualization_kind": "scalar_field",
+                    "source_dataset": "run/output.bp",
+                    "status": "ok",
+                }
+            ]
+
+        db.get_first_movie_tiles_for_variable = first_movie_tile
+        init_state(state, db)
+        state.variableLabelsById = {"energy": "Energy"}
+        server = SimpleNamespace(state=state, controller=RecordingController())
+
+        attach_controllers(
+            server=server,
+            backend=backend,
+            db=db,
+            collection=SimpleNamespace(),
+            parse_campaign=lambda *_args, **_kwargs: None,
+            campaign_path="/campaign/example.aca",
+        )
+        state.change_callbacks["selectedVar"][0]("energy")
+
+        self.assertEqual(state.detailsProvenanceKind, "variable")
+        self.assertEqual(state.detailsProvenanceChain, "Energy --> run/output")
+
+        owner = server.controller.actions["pick_var"].__self__
+        owner.update_selected_var_panels(
+            "energy",
+            include_visualization_provenance=True,
+            preferred_visualization="heatmap",
+        )
+
+        self.assertEqual(state.detailsProvenanceKind, "visualization")
+        self.assertEqual(
+            state.detailsProvenanceChain,
+            "heatmap --> visualization: scalar_field --> Energy --> run/output",
+        )
+
+    def test_controller_details_show_streamline_activity_inputs(self):
+        backend = FakeCatalogBackend(source_summary=source_summary_with_one_source())
+        state = RecordingState()
+        db = SimpleNamespace(ok=True, last_error="")
+        db.distinct_visualization_names_for_variable = (
+            lambda *_args, **_kwargs: ["velocity_streamlines"]
+        )
+        db.get_first_movie_tiles_for_variable = lambda *_args, **_kwargs: [
+            {
+                "variable_id": "vx",
+                "variable_name": "vx",
+                "visualization_name": "velocity_streamlines",
+                "source_dataset": "run/output.bp",
+                "status": "ok",
+                "visualization_sequence_metadata": {
+                    "visualization_type": "streamlines",
+                },
+                "visualization_variables": [
+                    {"name": "vx", "roles": ["streamline_0"]},
+                    {"name": "vy", "roles": ["streamline_1"]},
+                    {"name": "speed", "roles": ["color"]},
+                ],
+            }
+        ]
+        init_state(state, db)
+        state.variableLabelsById = {"energy": "velocity"}
+        server = SimpleNamespace(state=state, controller=RecordingController())
+
+        attach_controllers(
+            server=server,
+            backend=backend,
+            db=db,
+            collection=SimpleNamespace(),
+            parse_campaign=lambda *_args, **_kwargs: None,
+            campaign_path="/campaign/example.aca",
+        )
+        owner = server.controller.actions["pick_var"].__self__
+        owner.update_selected_var_panels(
+            "energy",
+            include_visualization_provenance=True,
+        )
+
+        self.assertEqual(state.detailsProvenanceKind, "visualization")
+        self.assertEqual(
+            state.detailsProvenanceChain,
+            "velocity_streamlines --> visualization: streamlines --> vx + vy + speed --> run/output",
+        )
+
+    def test_controller_details_show_derived_activity_provenance(self):
+        summary = source_summary_with_one_source()
+        summary["variable_id"] = "div_b"
+        source = summary["sources"][0]
+        source.update(
+            {
+                "variable_id": "div_b",
+                "variable_name": "div_b",
+                "variable_path": "run/analysis.bp/div_b",
+                "source_dataset": "run/analysis.bp",
+                "activity_provenance": {
+                    "activity_kind": "quantity_of_interest",
+                    "activity_operation": "divergence",
+                    "inputs": [
+                        {"name": "bx", "roles": ["magnetic_x"]},
+                        {"name": "by", "roles": ["magnetic_y"]},
+                    ],
+                },
+            }
+        )
+        backend = FakeCatalogBackend(source_summary=summary)
+        state = RecordingState()
+        db = SimpleNamespace(ok=True, last_error="")
+        init_state(state, db)
+        state.variableLabelsById = {"div_b": "div_b"}
+        server = SimpleNamespace(state=state, controller=RecordingController())
+
+        attach_controllers(
+            server=server,
+            backend=backend,
+            db=db,
+            collection=SimpleNamespace(),
+            parse_campaign=lambda *_args, **_kwargs: None,
+            campaign_path="/campaign/example.aca",
+        )
+        state.change_callbacks["selectedVar"][0]("div_b")
+
+        self.assertEqual(state.detailsProvenanceKind, "activity")
+        self.assertEqual(
+            state.detailsProvenanceChain,
+            "div_b --> derived: divergence --> bx + by --> run/output",
         )
 
     def test_controller_source_restriction_uses_injected_backend(self):

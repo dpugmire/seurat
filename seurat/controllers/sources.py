@@ -369,6 +369,21 @@ class SourcesControllerMixin:
             "visualization_source_dataset": str(
                 source.get("visualization_source_dataset", "") or ""
             ),
+            "visualization_variables": list(
+                source.get("visualization_variables", []) or []
+            ),
+            "visualization_roles": [
+                str(item) for item in source.get("visualization_roles", []) or []
+            ],
+            "visualization_sequence_metadata": dict(
+                source.get("visualization_sequence_metadata", {}) or {}
+            ),
+            "visualization_item_metadata": dict(
+                source.get("visualization_item_metadata", {}) or {}
+            ),
+            "activity_provenance": dict(
+                source.get("activity_provenance", {}) or {}
+            ),
             "association_source": str(source.get("association_source", "") or ""),
             "campaign_path": str(source.get("campaign_path", "") or ""),
             "variable_location": str(source.get("variable_location", "") or ""),
@@ -682,6 +697,7 @@ class SourcesControllerMixin:
         self.state.gridCells = cells
         self.state.activeGridCell = idx
         if sync_selection:
+            self.set_details_provenance_context(True)
             self.state.selectedVar = variable_id
             self.state.draggedVar = variable_id
         return bool(tile)
@@ -1018,6 +1034,11 @@ class SourcesControllerMixin:
         ).strip()
         if not var:
             return
+        selected_visualization = str(
+            cell.get("selected_visualization", "")
+            or cell.get("visualization_name", "")
+            or ""
+        )
 
         multi_allowed = self.source_dialog_multi_source_allowed(targets, cells)
         source_keys = self.source_keys_from_cell(cell)
@@ -1038,13 +1059,24 @@ class SourcesControllerMixin:
             self.state.sourceDialogTitle = f"{'Add Source' if str(self.state.sourceDialogMode or '') == 'add' else 'Sources'}: {self.variable_label(var)}"
         self.state.sourceDialogStatus = ""
         self.state.sourceDialogStatusIsError = False
+        self.set_details_provenance_context(True)
         self.state.selectedVar = var
         self.state.draggedVar = var
 
         if str(self.state.sourceDialogMode or "") == "add":
-            self.update_selected_var_panels(var, preferred_source_keys=source_keys)
+            self.update_selected_var_panels(
+                var,
+                preferred_source_keys=source_keys,
+                include_visualization_provenance=True,
+                preferred_visualization=selected_visualization,
+            )
         else:
-            self.update_selected_var_panels(var, preferred_source_key=preferred_key)
+            self.update_selected_var_panels(
+                var,
+                preferred_source_key=preferred_key,
+                include_visualization_provenance=True,
+                preferred_visualization=selected_visualization,
+            )
         self.state.sourceDialogInitialSelectedSourceKeys = normalize_source_keys(
             self.state.selectedSourceKeys or source_keys
         )
@@ -1063,6 +1095,7 @@ class SourcesControllerMixin:
         self.state.sourceDialogTitle = f"Sources: {self.variable_label(var)}"
         self.state.sourceDialogStatus = ""
         self.state.sourceDialogStatusIsError = False
+        self.set_details_provenance_context(False)
         self.state.selectedVar = var
         self.state.draggedVar = var
         self.state.sourceDialogInitialSelectedSourceKeys = normalize_source_keys(
@@ -1157,6 +1190,40 @@ class SourcesControllerMixin:
             selected,
             allow_multi_sources,
         )
+        if applied:
+            try:
+                anchor = int(self.state.activeGridCell)
+            except Exception:
+                anchor = -1
+            refreshed_var = ""
+            cells = self.normalize_grid_cells(self.state.gridCells)
+            preferred_visualization = ""
+            if self.is_valid_grid_index(anchor):
+                refreshed_var = str(
+                    cells[anchor].get("variable_id", "")
+                    or cells[anchor].get("variable_name", "")
+                    or ""
+                ).strip()
+                preferred_visualization = str(
+                    cells[anchor].get("selected_visualization", "")
+                    or cells[anchor].get("visualization_name", "")
+                    or ""
+                )
+            if refreshed_var:
+                if allow_multi_sources:
+                    self.update_selected_var_panels(
+                        refreshed_var,
+                        preferred_source_keys=selected,
+                        include_visualization_provenance=True,
+                        preferred_visualization=preferred_visualization,
+                    )
+                else:
+                    self.update_selected_var_panels(
+                        refreshed_var,
+                        preferred_source_key=selected[0] if selected else "",
+                        include_visualization_provenance=True,
+                        preferred_visualization=preferred_visualization,
+                    )
 
         self.state.sourceDialogInitialSelectedSourceKeys = selected
         if failures:
@@ -1181,7 +1248,12 @@ class SourcesControllerMixin:
 
     def clear_source_filter(self, **_):
         self.select_first_source()
-        self.update_selected_var_panels(self.state.selectedVar)
+        self.update_selected_var_panels(
+            self.state.selectedVar,
+            include_visualization_provenance=(
+                self.details_provenance_includes_visualization()
+            ),
+        )
 
     def apply_source_dialog_filter(self, **_):
         self.state.sourceFilterText = str(
@@ -1239,7 +1311,12 @@ class SourcesControllerMixin:
                 rows,
                 sync_selection=False,
             )
-            self.update_selected_var_panels(var_id, preferred_source_keys=selected)
+            self.update_selected_var_panels(
+                var_id,
+                preferred_source_keys=selected,
+                include_visualization_provenance=True,
+                preferred_visualization=selected_vis or visualization_name,
+            )
 
     def toggle_add_source(self, key: str, **_):
         k = str(key or "").strip()
@@ -1296,6 +1373,7 @@ class SourcesControllerMixin:
             except Exception:
                 idx = -1
 
+        selected_vis = ""
         if row and var_id and self.is_valid_grid_index(idx):
             cells = self.normalize_grid_cells(self.state.gridCells)
             cell_var = str(
@@ -1330,7 +1408,14 @@ class SourcesControllerMixin:
                     )
                     self.state.gridCells = self.normalize_grid_cells(cells)
 
-        self.update_selected_var_panels(var_id, preferred_source_key=str(key or ""))
+        self.update_selected_var_panels(
+            var_id,
+            preferred_source_key=str(key or ""),
+            include_visualization_provenance=(
+                self.details_provenance_includes_visualization()
+            ),
+            preferred_visualization=selected_vis,
+        )
 
     def select_source(self, key: str, **_):
         self.commit_single_source_selection(key)
@@ -1370,7 +1455,13 @@ class SourcesControllerMixin:
         self.state.tileVisualizationBySource = by_source
 
         if self.state.selectedVar:
-            self.update_selected_var_panels(self.state.selectedVar)
+            self.update_selected_var_panels(
+                self.state.selectedVar,
+                include_visualization_provenance=(
+                    self.details_provenance_includes_visualization()
+                ),
+                preferred_visualization=picked,
+            )
         if picked and picked != previous:
             self.record_interaction(
                 "visualization.changed",

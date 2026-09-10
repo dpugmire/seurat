@@ -243,6 +243,7 @@ class ContextMenuControllerMixin:
     def context_menu_item_select(self, **_):
         item = str(self.state.contextMenuItem or "").strip()
         if item:
+            self.set_details_provenance_context(False)
             self.state.selectedVar = item
             self.state.draggedVar = item
         self.hide_context_menu()

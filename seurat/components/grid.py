@@ -1500,36 +1500,55 @@ class GridWorkspace(TrameComponent):
                     with vuetify.Template(v_if="detailsSelectedVar"):
                         with html.Div(
                             style=(
-                                "display:flex; align-items:center; gap:12px; "
-                                "width:100%; flex-wrap:wrap;"
+                                "display:flex; flex-direction:column; gap:6px; "
+                                "width:100%;"
                             )
                         ):
-                            html.Div("{{ 'Details: ' + detailsSelectedVar }}", class_="text-body-2")
-                            vuetify.VBtn(
-                                "{{ 'SOURCES(' + detailsNumSources + ')' }}",
-                                variant="tonal",
-                                size="small",
-                                click=ctrl.toggle_sources,
-                            )
                             with html.Div(
-                                class_="text-caption",
                                 style=(
                                     "display:flex; align-items:center; gap:12px; "
-                                    "white-space:nowrap;"
+                                    "width:100%; flex-wrap:wrap;"
                                 ),
                             ):
-                                html.Span("Min/Max")
-                                with html.Span():
-                                    html.Strong("Global ")
-                                    html.Span("{{ detailsGlobalMin + ' / ' + detailsGlobalMax }}")
-                                with html.Span():
-                                    html.Strong("Median ")
-                                    html.Span("{{ detailsMedianMin + ' / ' + detailsMedianMax }}")
-                                with html.Span():
-                                    html.Strong("Mean ")
-                                    html.Span("{{ detailsMeanMin + ' / ' + detailsMeanMax }}")
-                            vuetify.VSpacer()
-                            html.Div("{{ 'QueryView: ' + queryViewLabel }}", class_="text-caption")
+                                html.Div("{{ 'Details: ' + detailsSelectedVar }}", class_="text-body-2")
+                                vuetify.VBtn(
+                                    "{{ 'SOURCES(' + detailsNumSources + ')' }}",
+                                    variant="tonal",
+                                    size="small",
+                                    click=ctrl.toggle_sources,
+                                )
+                                with html.Div(
+                                    class_="text-caption",
+                                    style=(
+                                        "display:flex; align-items:center; gap:12px; "
+                                        "white-space:nowrap;"
+                                    ),
+                                ):
+                                    html.Span("Min/Max")
+                                    with html.Span():
+                                        html.Strong("Global ")
+                                        html.Span("{{ detailsGlobalMin + ' / ' + detailsGlobalMax }}")
+                                    with html.Span():
+                                        html.Strong("Median ")
+                                        html.Span("{{ detailsMedianMin + ' / ' + detailsMedianMax }}")
+                                    with html.Span():
+                                        html.Strong("Mean ")
+                                        html.Span("{{ detailsMeanMin + ' / ' + detailsMeanMax }}")
+                                vuetify.VSpacer()
+                                html.Div("{{ 'QueryView: ' + queryViewLabel }}", class_="text-caption")
+                            with vuetify.Template(v_if="detailsProvenanceChain"):
+                                with html.Div(
+                                    class_="text-caption",
+                                    style=(
+                                        "display:flex; align-items:center; gap:10px; "
+                                        "width:100%; flex-wrap:wrap;"
+                                    ),
+                                ):
+                                    html.Span("Provenance", class_="font-weight-bold")
+                                    html.Span(
+                                        "{{ detailsProvenanceChain }}",
+                                        style="overflow-wrap:anywhere;",
+                                    )
                     with vuetify.Template(v_if="!detailsSelectedVar"):
                         html.Div("Select a variable", class_="text-caption")
             self.source_dialog.build()

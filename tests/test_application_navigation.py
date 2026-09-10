@@ -1760,6 +1760,68 @@ class CampaignDbNavigationTests(unittest.TestCase):
         self.assertFalse(state.sourceDialogStatusIsError)
         self.assertEqual(state.detailsSelectedVarId, "density")
 
+    def test_source_dialog_apply_refreshes_details_provenance(self):
+        self.collection.insert_one(
+            {
+                "campaign_path": "/campaign/example.aca",
+                "variable_id": "density",
+                "variable_name": "density",
+                "variable_type": "image",
+                "source_dataset": "run-b/output.bp",
+                "variable_path": "run-b/images/density.0000.png",
+                "producer": "beta",
+                "visualization_name": "heatmap",
+                "visualization_kind": "scalar_field",
+                "frame_index": 0,
+                "metadata": {"Shape": "480,480"},
+            }
+        )
+
+        state, controller = self.make_controller()
+        owner = controller.actions["toggle_sources"].__self__
+        owner.update_selected_var_panels("density")
+        self.assertEqual(state.detailsProvenanceKind, "variable")
+        self.assertNotIn("heatmap", state.detailsProvenanceChain)
+        source_keys = {
+            row["source_dataset"]: row["_key"] for row in state.sourceRowsAll
+        }
+        run_a_key = source_keys["run-a/output.bp"]
+        run_b_key = source_keys["run-b/output.bp"]
+        run_a_row = next(
+            row for row in state.sourceRowsAll if row["_key"] == run_a_key
+        )
+        state.gridCells[0].update(
+            owner.build_grid_cell_for_variable(
+                "density",
+                preferred_vis="heatmap",
+                source_row=run_a_row,
+            )
+        )
+        state.activeGridCell = 0
+        state.selectedVar = "density"
+        state.draggedVar = "density"
+
+        controller.actions["set_active_grid_cell"](0)
+        self.assertEqual(state.detailsProvenanceKind, "visualization")
+        self.assertEqual(
+            state.detailsProvenanceChain,
+            "heatmap --> visualization --> density --> run-a/output.bp",
+        )
+
+        controller.actions["toggle_sources"]()
+        self.assertIn("run-a/output", state.detailsProvenanceChain)
+
+        controller.actions["source_dialog_select"](run_b_key)
+        controller.actions["apply_source_dialog"]()
+
+        self.assertFalse(state.showSourcesModal)
+        self.assertEqual(state.gridCells[0]["source_dataset"], "run-b/output.bp")
+        self.assertEqual(state.detailsProvenanceKind, "visualization")
+        self.assertEqual(
+            state.detailsProvenanceChain,
+            "heatmap --> visualization: scalar_field --> density --> run-b/output.bp",
+        )
+
     def test_plugin_plot1d_source_dialog_applies_multiple_labeled_sources(self):
         for source_dataset, producer in (
             ("run-a/scalars.bp", "alpha"),

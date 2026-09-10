@@ -2348,6 +2348,149 @@ def _load_unified_representation_index(
         con.close()
 
 
+def _normalize_activity_inputs(inputs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    grouped: Dict[tuple[str, str], Dict[str, Any]] = {}
+    for spec in inputs:
+        name = str(spec.get("name", "") or "").strip()
+        if not name:
+            continue
+        source_dataset = str(spec.get("source_dataset", "") or "").strip()
+        key = (name, source_dataset)
+        entry = grouped.setdefault(
+            key,
+            {
+                "name": name,
+                "source_dataset": source_dataset,
+                "definition": str(spec.get("definition", "") or ""),
+                "roles": [],
+            },
+        )
+        role = str(spec.get("role", "") or "source").strip().lower()
+        if role and role not in entry["roles"]:
+            entry["roles"].append(role)
+
+    normalized = list(grouped.values())
+    for entry in normalized:
+        entry["roles"].sort(key=_role_sort_key)
+    normalized.sort(
+        key=lambda entry: (
+            min((_role_sort_key(role)[0] for role in entry.get("roles", [])), default=50),
+            str(entry.get("name", "")),
+            str(entry.get("source_dataset", "")),
+        )
+    )
+    return normalized
+
+
+def _load_activity_provenance_index(campaign_path: str) -> Dict[tuple[str, str], Dict[str, Any]]:
+    """Load compact activity provenance keyed by output dataset and variable."""
+
+    path = Path(campaign_path).expanduser()
+    if not path.exists():
+        return {}
+
+    try:
+        con = sqlite3.connect(str(path))
+        con.row_factory = sqlite3.Row
+    except sqlite3.Error as e:
+        print(f"[warn] could not open ACA SQLite metadata for activities: {e}")
+        return {}
+
+    try:
+        available_tables = _sqlite_table_names(con)
+        required = {
+            "action_spec",
+            "activity",
+            "activity_input",
+            "activity_kind",
+            "activity_output",
+            "dataset",
+            "logical_variable",
+            "variable_definition",
+        }
+        if not required.issubset(available_tables):
+            return {}
+
+        rows = con.execute(
+            """
+            select
+                derived_dataset.name as output_dataset_name,
+                derived.name as output_variable_name,
+                derived_definition.name as output_definition_name,
+                output.role as output_role,
+                activity.uuid as activity_uuid,
+                kind.name as activity_kind,
+                spec.metadata as action_spec_metadata,
+                input.inputid as input_id,
+                input.role as input_role,
+                source.name as input_variable_name,
+                source_definition.name as input_definition_name,
+                source_dataset.name as input_dataset_name
+            from activity_output as output
+            join activity as activity on activity.activityid = output.activityid
+            join activity_kind as kind on kind.kindid = activity.kindid
+            join logical_variable as derived on derived.variableid = output.variableid
+            join variable_definition as derived_definition
+                on derived_definition.definitionid = derived.definitionid
+            join dataset as derived_dataset on derived_dataset.rowid = derived.datasetid
+            left join action_spec as spec on spec.specid = activity.specid
+            left join activity_input as input on input.activityid = activity.activityid
+            left join logical_variable as source on source.variableid = input.variableid
+            left join variable_definition as source_definition
+                on source_definition.definitionid = source.definitionid
+            left join dataset as source_dataset on source_dataset.rowid = source.datasetid
+            order by derived_dataset.name, derived.name, input.inputid
+            """
+        )
+
+        grouped: Dict[tuple[str, str], Dict[str, Any]] = {}
+        for row in rows:
+            output_dataset = str(row["output_dataset_name"] or "").strip("/")
+            output_variable = str(row["output_variable_name"] or "").strip("/")
+            if not output_dataset or not output_variable:
+                continue
+            key = (output_dataset, output_variable)
+            metadata = _json_object_or_empty(row["action_spec_metadata"])
+            operation = str(
+                metadata.get("operation", "")
+                or metadata.get("visualization_type", "")
+                or metadata.get("representation_kind", "")
+                or metadata.get("kind", "")
+                or ""
+            ).strip()
+            entry = grouped.setdefault(
+                key,
+                {
+                    "activity_uuid": str(row["activity_uuid"] or ""),
+                    "activity_kind": str(row["activity_kind"] or ""),
+                    "activity_operation": operation,
+                    "output_role": str(row["output_role"] or ""),
+                    "output_definition": str(row["output_definition_name"] or ""),
+                    "inputs": [],
+                },
+            )
+            source_variable = str(row["input_variable_name"] or "").strip()
+            if not source_variable:
+                continue
+            input_spec = {
+                "name": source_variable,
+                "definition": str(row["input_definition_name"] or ""),
+                "role": str(row["input_role"] or "source"),
+                "source_dataset": str(row["input_dataset_name"] or ""),
+            }
+            if input_spec not in entry["inputs"]:
+                entry["inputs"].append(input_spec)
+
+        for entry in grouped.values():
+            entry["inputs"] = _normalize_activity_inputs(entry.get("inputs", []))
+        return grouped
+    except sqlite3.Error as e:
+        print(f"[warn] could not read activity provenance metadata: {e}")
+        return {}
+    finally:
+        con.close()
+
+
 def _lookup_visualization_api_image(
     varpath: str,
     visualization_api_index: Dict[str, Dict[str, Any]],
@@ -2547,6 +2690,7 @@ def parse_campaign(
     legacy_visualization_api_index = _load_visualization_api_index(campaign_path)
     unified_representation_index = _load_unified_representation_index(campaign_path)
     visualization_api_index = unified_representation_index or legacy_visualization_api_index
+    activity_provenance_index = _load_activity_provenance_index(campaign_path)
     visualization_metadata_source = (
         "activity-backed"
         if unified_representation_index
@@ -2564,6 +2708,8 @@ def parse_campaign(
             "provenance visualization metadata items:",
             len(legacy_visualization_api_index),
         )
+    if activity_provenance_index:
+        print("activity provenance outputs:", len(activity_provenance_index))
 
     dataset_rows = _load_campaign_dataset_rows(campaign_path)
     dataset_names = [row["name"] for row in dataset_rows if row.get("name")]
@@ -2629,7 +2775,7 @@ def parse_campaign(
                 data = fr.read(varname)
                 if baseVar not in var_stats :
                     var_stats[baseVar] = []
-                var_stats[baseVar].append((producer, source_dataset, statType, data[0]))
+                var_stats[baseVar].append((producer, source_dataset, statType, data[0], physical_var))
                 continue
 
             if var_type == "image":
@@ -2865,6 +3011,11 @@ def parse_campaign(
                     "min": fmin,
                     "max": fmax,
                 }
+                activity_provenance = activity_provenance_index.get(
+                    (str(source_dataset or "").strip("/"), physical_var.strip("/"))
+                )
+                if activity_provenance:
+                    document["activity_provenance"] = activity_provenance
                 document.update(
                     _schema_metadata_for_variable(
                         schema_context,
@@ -2989,7 +3140,7 @@ def parse_campaign(
         vname, stats = v
         logical_vname = _map_physical_to_logical_name(vname, image_assoc_schema)
         for stat in stats :
-            producer, source_dataset, statType, data = stat
+            producer, source_dataset, statType, data, output_variable = stat
             document = {"campaign_path": campaign_path,
                         "variable_id": vname,
                         "variable_name": logical_vname,
@@ -2999,6 +3150,11 @@ def parse_campaign(
                         "producer": producer,
                         "statistic_type": statType,
                         "data": data.tolist()}
+            activity_provenance = activity_provenance_index.get(
+                (str(source_dataset or "").strip("/"), str(output_variable or "").strip("/"))
+            )
+            if activity_provenance:
+                document["activity_provenance"] = activity_provenance
             collection.insert_one(document)
 
     if image_assoc_schema is not None:

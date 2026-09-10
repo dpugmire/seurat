@@ -8,9 +8,9 @@ from unittest.mock import MagicMock, patch
 from trame.app import TrameComponent, get_server
 
 import app as compatibility_app
+from seurat import module as seurat_module
 from seurat.app import SeuratApp, build_parser, main
 from seurat.backends import LocalCampaignBackend
-from seurat import module as seurat_module
 from seurat.components import SeuratUI
 from seurat.components.query_assistant import QueryAssistantDialog
 from seurat.widgets import CanvasRuntime, GridRuntime, InteractionRuntime, ResizeRuntime
@@ -261,6 +261,9 @@ class SeuratAppTests(unittest.TestCase):
         self.assertIn("seurat-plot-options-assistant-panel", ui.layout.html)
         self.assertIn("Plot Options Assistant", ui.layout.html)
         self.assertIn("Min/Max", ui.layout.html)
+        self.assertIn("Provenance", ui.layout.html)
+        self.assertIn("detailsProvenanceChain", ui.layout.html)
+        self.assertNotIn("detailsProvenanceRows", ui.layout.html)
         self.assertIn("detailsGlobalMin", ui.layout.html)
         self.assertNotIn('id="seurat-representation-details"', ui.layout.html)
         self.assertNotIn("detailsDerivedRepresentations", ui.layout.html)

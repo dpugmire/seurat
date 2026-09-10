@@ -1279,6 +1279,7 @@ class GridControllerMixin:
         self.state.gridCells = self.normalize_grid_cells(cells)
         self.state.activeGridCell = target
         self.set_grid_selection([target], active=target)
+        self.set_details_provenance_context(True)
         self.state.selectedVar = var
         self.state.draggedVar = var
         self.record_visualization_assignment(
@@ -1322,11 +1323,18 @@ class GridControllerMixin:
                 or ""
             )
             if var:
+                self.set_details_provenance_context(True)
                 self.state.selectedVar = var
                 self.state.draggedVar = var
                 self.update_selected_var_panels(
                     var,
                     preferred_source_key=str(cells[idx].get("_source_key", "") or ""),
+                    include_visualization_provenance=True,
+                    preferred_visualization=str(
+                        cells[idx].get("selected_visualization", "")
+                        or cells[idx].get("visualization_name", "")
+                        or ""
+                    ),
                 )
             return
 
@@ -1338,10 +1346,18 @@ class GridControllerMixin:
         )
         if var:
             self.set_grid_selection([idx], active=idx)
+            self.set_details_provenance_context(True)
             self.state.selectedVar = var
             self.state.draggedVar = var
             self.update_selected_var_panels(
-                var, preferred_source_key=str(cells[idx].get("_source_key", "") or "")
+                var,
+                preferred_source_key=str(cells[idx].get("_source_key", "") or ""),
+                include_visualization_provenance=True,
+                preferred_visualization=str(
+                    cells[idx].get("selected_visualization", "")
+                    or cells[idx].get("visualization_name", "")
+                    or ""
+                ),
             )
             return
 
@@ -1991,6 +2007,7 @@ class GridControllerMixin:
         self.state.activeGridCell = idx
         self.set_grid_selection([idx], active=idx)
         if sync_selection:
+            self.set_details_provenance_context(True)
             self.state.selectedVar = var
             self.state.draggedVar = var
         self.record_visualization_assignment(
@@ -2060,8 +2077,19 @@ class GridControllerMixin:
         self.state.gridCells = self.normalize_grid_cells(cells)
         self.state.activeGridCell = idx
         self.set_grid_selection([idx], active=idx)
+        self.set_details_provenance_context(True)
         self.state.selectedVar = var
         current_cell = dict(list(self.state.gridCells or [])[idx] or {})
+        self.update_selected_var_panels(
+            var,
+            preferred_source_key=str(current_cell.get("_source_key", "") or ""),
+            include_visualization_provenance=True,
+            preferred_visualization=str(
+                current_cell.get("selected_visualization", "")
+                or current_cell.get("visualization_name", "")
+                or ""
+            ),
+        )
         previous_visualization = str(
             previous_cell.get("selected_visualization", "")
             or previous_cell.get("visualization_name", "")

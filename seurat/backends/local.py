@@ -239,6 +239,21 @@ class LocalCampaignBackend:
             "visualization_source_dataset": str(
                 source.get("visualization_source_dataset", "") or ""
             ),
+            "visualization_variables": list(
+                source.get("visualization_variables", []) or []
+            ),
+            "visualization_roles": [
+                str(item) for item in source.get("visualization_roles", []) or []
+            ],
+            "visualization_sequence_metadata": dict(
+                source.get("visualization_sequence_metadata", {}) or {}
+            ),
+            "visualization_item_metadata": dict(
+                source.get("visualization_item_metadata", {}) or {}
+            ),
+            "activity_provenance": dict(
+                source.get("activity_provenance", {}) or {}
+            ),
             "association_source": str(source.get("association_source", "") or ""),
             "campaign_path": str(source.get("campaign_path", "") or ""),
             "variable_location": str(source.get("variable_location", "") or ""),

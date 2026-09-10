@@ -1584,6 +1584,7 @@ class VisualizationControllerMixin:
         label = self.variable_label(variable_id)
         policy = self.normalize_scalar_plot_policy()
         self.state.activeGridCell = cell_index
+        self.set_details_provenance_context(True)
         self.state.selectedVar = variable_id
         self.state.draggedVar = variable_id
 

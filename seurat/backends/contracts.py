@@ -61,6 +61,11 @@ class SourceDescriptor(TypedDict, total=False):
     visualization_name: str
     visualization_kind: str
     visualization_source_dataset: str
+    visualization_variables: List[Dict[str, Any]]
+    visualization_roles: List[str]
+    visualization_sequence_metadata: Dict[str, Any]
+    visualization_item_metadata: Dict[str, Any]
+    activity_provenance: Dict[str, Any]
     association_source: str
     campaign_path: str
     variable_location: str

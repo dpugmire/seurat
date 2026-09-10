@@ -28,6 +28,14 @@ SCALAR_FIELD_DEFAULT_CONTOUR_COUNT = 10
 SCALAR_FIELD_MAX_CONTOUR_LEVELS = 100
 
 
+def _dict_field(value: Any) -> Dict[str, Any]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _list_field(value: Any) -> List[Any]:
+    return list(value) if isinstance(value, list) else []
+
+
 def _stops(values: List[List[int]]) -> np.ndarray:
     return np.array(values, dtype=np.float32)
 
@@ -766,6 +774,21 @@ class CampaignDb:
                     "visualization_name": str(doc.get("visualization_name", "") or ""),
                     "visualization_kind": str(doc.get("visualization_kind", "") or ""),
                     "visualization_source_dataset": "",
+                    "visualization_variables": _list_field(
+                        doc.get("visualization_variables", [])
+                    ),
+                    "visualization_roles": _list_field(
+                        doc.get("visualization_roles", [])
+                    ),
+                    "visualization_sequence_metadata": _dict_field(
+                        doc.get("visualization_sequence_metadata", {})
+                    ),
+                    "visualization_item_metadata": _dict_field(
+                        doc.get("visualization_item_metadata", {})
+                    ),
+                    "activity_provenance": _dict_field(
+                        doc.get("activity_provenance", {})
+                    ),
                     "association_source": str(doc.get("association_source", "") or ""),
                     "campaign_path": str(doc.get("campaign_path", "") or ""),
                     "variable_location": str(doc.get("variable_location", "") or ""),
@@ -799,6 +822,21 @@ class CampaignDb:
                 "visualization_name": str(doc.get("visualization_name", "") or ""),
                 "visualization_kind": str(doc.get("visualization_kind", "") or ""),
                 "visualization_source_dataset": str(doc.get("visualization_source_dataset", "") or ""),
+                "visualization_variables": _list_field(
+                    doc.get("visualization_variables", [])
+                ),
+                "visualization_roles": _list_field(
+                    doc.get("visualization_roles", [])
+                ),
+                "visualization_sequence_metadata": _dict_field(
+                    doc.get("visualization_sequence_metadata", {})
+                ),
+                "visualization_item_metadata": _dict_field(
+                    doc.get("visualization_item_metadata", {})
+                ),
+                "activity_provenance": _dict_field(
+                    doc.get("activity_provenance", {})
+                ),
                 "association_source": str(doc.get("association_source", "") or ""),
                 "campaign_path": str(doc.get("campaign_path", "") or ""),
                 "variable_location": str(doc.get("variable_location", "") or ""),
@@ -1288,6 +1326,10 @@ class CampaignDb:
             "visualization_name": 1,
             "visualization_kind": 1,
             "visualization_source_dataset": 1,
+            "visualization_variables": 1,
+            "visualization_roles": 1,
+            "visualization_sequence_metadata": 1,
+            "visualization_item_metadata": 1,
             "association_source": 1,
             "campaign_path": 1,
             "variable_location": 1,
@@ -2131,6 +2173,7 @@ class CampaignDb:
             "campaign_path": 1,
             "variable_location": 1,
             "metadata": 1,
+            "activity_provenance": 1,
             "Min": 1,
             "Max": 1,
             "min": 1,
@@ -2428,6 +2471,11 @@ class CampaignDb:
             "payload_type": 1,
             "visualization_item_type": 1,
             "scalar_field_metadata": 1,
+            "visualization_kind": 1,
+            "visualization_variables": 1,
+            "visualization_roles": 1,
+            "visualization_sequence_metadata": 1,
+            "visualization_item_metadata": 1,
             "min": 1,
             "max": 1,
         }
@@ -2511,6 +2559,19 @@ class CampaignDb:
                         "variable_type": str(doc.get("variable_type", "") or ""),
                         "payload_type": str(doc.get("payload_type", "") or ""),
                         "visualization_item_type": str(doc.get("visualization_item_type", "") or ""),
+                        "visualization_kind": str(doc.get("visualization_kind", "") or ""),
+                        "visualization_variables": _list_field(
+                            doc.get("visualization_variables", [])
+                        ),
+                        "visualization_roles": _list_field(
+                            doc.get("visualization_roles", [])
+                        ),
+                        "visualization_sequence_metadata": _dict_field(
+                            doc.get("visualization_sequence_metadata", {})
+                        ),
+                        "visualization_item_metadata": _dict_field(
+                            doc.get("visualization_item_metadata", {})
+                        ),
                         "scalar_field_axes": scalar_field_axis_spec(
                             doc.get("scalar_field_metadata", {})
                         ),

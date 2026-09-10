@@ -123,6 +123,239 @@ def _display_representation_summary(raw: Any) -> Dict[str, Any]:
     }
 
 
+def _text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _first_text(item: Dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = _text(item.get(key, ""))
+        if value:
+            return value
+    return ""
+
+
+def _source_label_for_provenance(row: Dict[str, Any]) -> str:
+    label = _first_text(
+        row,
+        "sourceName",
+        "source_label",
+        "schema_file_group",
+        "source_dataset",
+    )
+    if label:
+        return label
+    return "/".join(
+        part
+        for part in (
+            _text(row.get("producer", "")),
+            _text(row.get("casename", "")),
+            _text(row.get("file", "")),
+        )
+        if part
+    )
+
+
+def _dict_value(value: Any) -> Dict[str, Any]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _list_value(value: Any) -> List[Any]:
+    return list(value) if isinstance(value, list) else []
+
+
+def _short_variable_name(value: Any) -> str:
+    name = _text(value).strip("/")
+    if "/" in name:
+        return name.rsplit("/", 1)[-1]
+    return name
+
+
+def _input_roles(item: Dict[str, Any]) -> List[str]:
+    roles = item.get("roles", [])
+    if isinstance(roles, list):
+        return [_text(role).lower() for role in roles if _text(role)]
+    role = _text(item.get("role", "")).lower()
+    return [role] if role else []
+
+
+def _role_priority(role: str) -> tuple[int, int]:
+    normalized = _text(role).lower().replace("-", "_")
+    if normalized.startswith("streamline_"):
+        suffix = normalized.rsplit("_", 1)[-1]
+        try:
+            return (0, int(suffix))
+        except Exception:
+            return (0, 0)
+    if normalized in {"streamline", "streamline_by"}:
+        return (0, 0)
+    if normalized in {"color", "color_by"}:
+        return (20, 0)
+    if normalized in {"contour", "contour_by"}:
+        return (30, 0)
+    if normalized.startswith("y_axis"):
+        return (40, 0)
+    if normalized in {"primary", "variable", "source"}:
+        return (50, 0)
+    if normalized in {"x_axis"}:
+        return (90, 0)
+    return (60, 0)
+
+
+def _skip_input(roles: List[str]) -> bool:
+    normalized = {_text(role).lower().replace("-", "_") for role in roles}
+    return bool(normalized) and normalized <= {"x_axis"}
+
+
+def _provenance_input_names(raw_inputs: Any) -> List[str]:
+    inputs = _list_value(raw_inputs)
+    items: List[Dict[str, Any]] = []
+    for index, raw in enumerate(inputs):
+        if isinstance(raw, str):
+            raw = {"name": raw, "roles": ["source"]}
+        if not isinstance(raw, dict):
+            continue
+        item = dict(raw)
+        roles = _input_roles(item)
+        if _skip_input(roles):
+            continue
+        name = _short_variable_name(
+            _first_text(item, "label", "name", "variable_name", "variable_id", "definition")
+        )
+        if not name:
+            continue
+        priority = min((_role_priority(role) for role in roles), default=(60, index))
+        item["_display_name"] = name
+        item["_priority"] = priority
+        item["_index"] = index
+        items.append(item)
+
+    items.sort(
+        key=lambda item: (
+            item.get("_priority", (60, 0)),
+            int(item.get("_index", 0) or 0),
+            str(item.get("_display_name", "")),
+        )
+    )
+    names: List[str] = []
+    seen = set()
+    for item in items:
+        name = str(item.get("_display_name", "") or "")
+        key = name.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        names.append(name)
+    return names
+
+
+def _activity_label(kind: Any, operation: Any = "") -> str:
+    raw_kind = _text(kind)
+    kind_norm = raw_kind.lower()
+    op = _text(operation)
+    if kind_norm == "quantity_of_interest":
+        label = "statistics" if op == "descriptive_statistics" else "derived"
+    elif kind_norm:
+        label = raw_kind
+    else:
+        label = "activity"
+
+    if op and op.casefold() != label.casefold():
+        return f"{label}: {op}"
+    return label
+
+
+def _visualization_operation(tile: Dict[str, Any], row: Dict[str, Any]) -> str:
+    sequence_metadata = _dict_value(
+        tile.get("visualization_sequence_metadata")
+        or row.get("visualization_sequence_metadata")
+    )
+    item_metadata = _dict_value(
+        tile.get("visualization_item_metadata")
+        or row.get("visualization_item_metadata")
+    )
+    for item in (sequence_metadata, item_metadata, tile, row):
+        value = _first_text(
+            item,
+            "visualization_type",
+            "operation",
+            "visualization_kind",
+            "representation_kind",
+            "payload_type",
+            "visualization_item_type",
+            "kind",
+        )
+        if value:
+            return value
+    return ""
+
+
+def _chain(*parts: Any) -> str:
+    return " --> ".join(_text(part) for part in parts if _text(part))
+
+
+def _details_provenance_summary(
+    variable_label: str,
+    selected_rows: List[Dict[str, Any]],
+    tiles: List[Dict[str, Any]],
+    include_visualization: bool = False,
+) -> Dict[str, Any]:
+    label = _text(variable_label)
+    rows = [dict(row or {}) for row in selected_rows or [] if isinstance(row, dict)]
+    if not label or not rows:
+        return {"kind": "", "chain": ""}
+
+    if len(rows) > 1:
+        count = len(rows)
+        return {
+            "kind": "multiple_sources",
+            "chain": f"{label} --> {count} selected sources",
+        }
+
+    row = rows[0]
+    tile = dict(tiles[0] or {}) if tiles else {}
+    variable_name = label or _first_text(row, "variable_name", "variable_id")
+    source_label = _source_label_for_provenance(row) or "source"
+    visualization_name = ""
+    if include_visualization:
+        visualization_name = _first_text(
+            tile,
+            "selected_visualization",
+            "visualization_name",
+        )
+        if not visualization_name:
+            visualization_name = _first_text(row, "visualization_name")
+
+    if visualization_name:
+        activity = _activity_label("visualization", _visualization_operation(tile, row))
+        inputs = _provenance_input_names(
+            tile.get("visualization_variables")
+            or row.get("visualization_variables")
+            or []
+        )
+        input_label = " + ".join(inputs) if inputs else variable_name
+        chain = _chain(visualization_name, activity, input_label, source_label)
+        return {"kind": "visualization", "chain": chain}
+
+    activity_provenance = _dict_value(row.get("activity_provenance", {}))
+    if activity_provenance:
+        activity = _activity_label(
+            activity_provenance.get("activity_kind", ""),
+            activity_provenance.get("activity_operation", ""),
+        )
+        inputs = _provenance_input_names(activity_provenance.get("inputs", []))
+        if inputs:
+            chain = _chain(variable_name, activity, " + ".join(inputs), source_label)
+        else:
+            chain = _chain(variable_name, activity, source_label)
+        return {"kind": "activity", "chain": chain}
+
+    chain = _chain(variable_name, source_label)
+    kind = "variable"
+
+    return {"kind": kind, "chain": chain}
+
+
 class CatalogControllerMixin:
     ACTION_BINDINGS = (
         ("pick_var", "pick_var"),
@@ -302,7 +535,12 @@ Notes:
             self.state.selectedVar = ""
             clear_right_panes(self.state)
         else:
-            self.update_selected_var_panels(self.state.selectedVar)
+            self.update_selected_var_panels(
+                self.state.selectedVar,
+                include_visualization_provenance=(
+                    self.details_provenance_includes_visualization()
+                ),
+            )
         self.refresh_grid_cells()
 
     def update_selected_var_panels(
@@ -310,6 +548,8 @@ Notes:
         variable_id: str,
         preferred_source_key: str = "",
         preferred_source_keys: Optional[List[str]] = None,
+        include_visualization_provenance: bool = False,
+        preferred_visualization: str = "",
     ):
         var_id = str(variable_id or "").strip()
         if not var_id:
@@ -324,6 +564,7 @@ Notes:
             else {}
         )
         qf = self.active_query_filter()
+        preferred_vis = str(preferred_visualization or "").strip()
         summary = self.application.get_source_summary(
             {"variable_id": var_id, "query": qf or {}}
         )
@@ -394,12 +635,19 @@ Notes:
                 )
         self.update_selected_source_label()
 
+        selected_rows: List[Dict[str, Any]] = []
         try:
             if all_keys and not self.state.selectedSourceKeys:
                 self.state.movieTiles = []
                 self.state.movieDetailsOpen = {}
                 self.state.tileVisualizationBySource = {}
                 self.state.movieStatus = "No sources selected"
+                self.update_details_provenance(
+                    label,
+                    selected_rows,
+                    [],
+                    include_visualization=include_visualization_provenance,
+                )
                 return
 
             selected_rows = self.source_rows_for_keys(
@@ -419,7 +667,7 @@ Notes:
                     extra_filter=source_query,
                 )
                 selected_vis = self.choose_visualization_default(
-                    vis_names, previous_tile_map.get(source_key, "")
+                    vis_names, preferred_vis or previous_tile_map.get(source_key, "")
                 )
                 if selected_vis:
                     new_tile_map[source_key] = selected_vis
@@ -480,6 +728,12 @@ Notes:
                 self.state.movieStatus = (
                     f"{with_media}/{len(self.state.movieTiles)} sources with media"
                 )
+            self.update_details_provenance(
+                label,
+                selected_rows,
+                tiles,
+                include_visualization=include_visualization_provenance,
+            )
         except Exception as e:
             self.state.movieTiles = []
             self.state.movieDetailsOpen = {}
@@ -487,9 +741,48 @@ Notes:
             self.state.movieStatus = (
                 f"Movie query/build failed: {type(e).__name__}: {e}"
             )
+            self.update_details_provenance(
+                label,
+                selected_rows,
+                [],
+                include_visualization=include_visualization_provenance,
+            )
+
+    def update_details_provenance(
+        self,
+        variable_label: str,
+        selected_rows: List[Dict[str, Any]],
+        tiles: List[Dict[str, Any]],
+        include_visualization: bool = False,
+    ) -> None:
+        self.state.detailsProvenanceContext = (
+            "visualization" if include_visualization else "variable"
+        )
+        provenance = _details_provenance_summary(
+            variable_label,
+            selected_rows,
+            tiles,
+            include_visualization=include_visualization,
+        )
+        self.state.detailsProvenanceKind = str(provenance.get("kind", "") or "")
+        self.state.detailsProvenanceChain = str(provenance.get("chain", "") or "")
+
+    def details_provenance_includes_visualization(self) -> bool:
+        return (
+            str(getattr(self.state, "detailsProvenanceContext", "") or "variable")
+            == "visualization"
+        )
+
+    def set_details_provenance_context(
+        self, include_visualization: bool = False
+    ) -> None:
+        self.state.detailsProvenanceContext = (
+            "visualization" if include_visualization else "variable"
+        )
 
     def pick_var(self, var_name: str, **_):
         picked = str(var_name or "")
+        self.set_details_provenance_context(False)
         if str(self.state.selectedVar or "") == picked:
             self.state.selectedVar = ""
             self.state.draggedVar = ""
@@ -507,6 +800,7 @@ Notes:
         picked = str(var_name or "")
         if not picked:
             return
+        self.set_details_provenance_context(False)
         self.state.selectedVar = picked
         self.state.draggedVar = picked
 
@@ -676,4 +970,9 @@ Notes:
                 else f"DB error: {backend_status.error}"
             )
             return
-        self.update_selected_var_panels(selectedVar)
+        self.update_selected_var_panels(
+            selectedVar,
+            include_visualization_provenance=(
+                self.details_provenance_includes_visualization()
+            ),
+        )
