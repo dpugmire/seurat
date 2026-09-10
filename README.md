@@ -401,6 +401,22 @@ Each plugin is a Python file. Files whose names start with `_` are ignored.
 Broken personal plugins are skipped and reported on stderr so one bad local
 plugin does not prevent Seurat from starting.
 
+Plugin directories may also contain helper modules whose names start with `_`.
+Plugin files can import those helpers with relative imports, for example:
+
+```python
+from ._helpers import shared_function
+```
+
+Simulation-specific plugins should live with the simulation or example repo
+that defines the relevant variables. For example, the Orszag-Tang MHD energy
+diagnostic plugins live in `hpc-campaign-examples/plugins/seurat` and can be
+enabled with:
+
+```bash
+export SEURAT_PLUGIN_PATH=/path/to/hpc-campaign-examples/plugins/seurat
+```
+
 Minimal variable plugin:
 
 ```python

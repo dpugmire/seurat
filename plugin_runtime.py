@@ -2,18 +2,19 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib
 import importlib.util
 import math
 import os
 import sys
+import types
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 from adios2 import FileReader
-
 
 PLUGIN_VIS_PREFIX = "plugin:"
 PERSONAL_PLUGIN_ENV = "SEURAT_PLUGIN_PATH"
@@ -36,8 +37,6 @@ _BUILTIN_PLUGIN_MODULES = (
     "seurat_plugins.divertor_lambda_q_timeseries",
     "seurat_plugins.divertor_load_map",
     "seurat_plugins.divertor_target_totals_timeseries",
-    "seurat_plugins.mhd_energy_conservation",
-    "seurat_plugins.mhd_energy_partition",
 )
 _FAILED_BUILTIN_PLUGIN_IMPORTS: set[str] = set()
 
@@ -149,9 +148,44 @@ def _load_personal_plugin_modules() -> List[Tuple[Any, str]]:
 
 def _personal_plugin_module_name(path: Path) -> str:
     resolved = path.expanduser().resolve()
-    token = str(abs(hash(str(resolved))))
-    stem = "".join(ch if ch.isalnum() or ch == "_" else "_" for ch in resolved.stem)
-    return f"_seurat_personal_plugin_{stem}_{token}"
+    package_name = _personal_plugin_package_name(resolved.parent)
+    _ensure_personal_plugin_package(package_name, resolved.parent)
+    stem = _module_name_token(resolved.stem)
+    token = hashlib.sha256(str(resolved).encode("utf-8")).hexdigest()[:12]
+    return f"{package_name}.{stem}_{token}"
+
+
+def _personal_plugin_package_name(plugin_dir: Path) -> str:
+    resolved = plugin_dir.expanduser().resolve()
+    stem = _module_name_token(resolved.name or "plugins")
+    token = hashlib.sha256(str(resolved).encode("utf-8")).hexdigest()[:16]
+    return f"_seurat_personal_plugins_{stem}_{token}"
+
+
+def _ensure_personal_plugin_package(package_name: str, plugin_dir: Path) -> None:
+    resolved = plugin_dir.expanduser().resolve()
+    cached = sys.modules.get(package_name)
+    if cached is not None:
+        cached.__path__ = [str(resolved)]
+        return
+
+    mod = types.ModuleType(package_name)
+    mod.__file__ = str(resolved / "__init__.py")
+    mod.__package__ = package_name
+    mod.__path__ = [str(resolved)]
+    spec = importlib.util.spec_from_loader(package_name, loader=None, is_package=True)
+    if spec is not None:
+        spec.submodule_search_locations = [str(resolved)]
+    mod.__spec__ = spec
+    sys.modules[package_name] = mod
+
+
+def _module_name_token(text: str) -> str:
+    token = "".join(ch if ch.isascii() and (ch.isalnum() or ch == "_") else "_" for ch in str(text or ""))
+    token = token.strip("_") or "plugin"
+    if token[0].isdigit():
+        token = f"_{token}"
+    return token
 
 
 def _load_module_from_path(module_name: str, path: Path):
