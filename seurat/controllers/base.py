@@ -38,6 +38,7 @@ class ControllerBase:
         self.image_association_schema_path = context.image_association_schema_path
         self.campaign_schema_path = context.campaign_schema_path
         self.query_translator = context.query_translator
+        self.plot_options_translator = context.plot_options_translator
         self.interaction_log = context.interaction_log
         self._interaction_query_id = ""
         self._interaction_assignment_source = ""
@@ -45,6 +46,14 @@ class ControllerBase:
         self.state.queryAssistantAvailable = self.query_translator is not None
         self.state.queryAssistantProvider = (
             self.query_translator.description if self.query_translator else ""
+        )
+        self.state.scalarFieldAssistantAvailable = (
+            self.plot_options_translator is not None
+        )
+        self.state.scalarFieldAssistantProvider = (
+            self.plot_options_translator.description
+            if self.plot_options_translator
+            else ""
         )
         self.application = SeuratApplication(backend=context.backend)
         self.plugin_source_variables_cache = {}

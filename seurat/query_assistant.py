@@ -18,6 +18,7 @@ from seurat.viewer_actions import (
 MAX_ASSISTANT_REQUEST_LENGTH = 2000
 MAX_CONTEXT_VARIABLES = 200
 MAX_CONTEXT_SOURCES = 200
+MAX_CONTEXT_SOURCE_FILTER_VALUES = 24
 MAX_CONTEXT_VALUE_LENGTH = 512
 MAX_PROPOSAL_MESSAGE_LENGTH = 1000
 MAX_PROPOSAL_ASSUMPTIONS = 8
@@ -47,6 +48,19 @@ class QueryContextVariable:
 
 
 @dataclass(frozen=True)
+class QuerySourceFilterContext:
+    row_count: int = 0
+    visible_row_count: int = 0
+    source_datasets: Tuple[str, ...] = ()
+    producers: Tuple[str, ...] = ()
+    casenames: Tuple[str, ...] = ()
+    files: Tuple[str, ...] = ()
+    minimum_range: Tuple[Optional[float], Optional[float]] = (None, None)
+    maximum_range: Tuple[Optional[float], Optional[float]] = (None, None)
+    context_truncated: bool = False
+
+
+@dataclass(frozen=True)
 class QueryTranslationRequest:
     request_text: str
     variables: Tuple[QueryContextVariable, ...]
@@ -54,6 +68,7 @@ class QueryTranslationRequest:
     selected_variable_id: str = ""
     target: str = "catalog"
     context_truncated: bool = False
+    source_filter_context: Optional[QuerySourceFilterContext] = None
 
 
 class QueryTranslator(Protocol):
@@ -126,6 +141,14 @@ The request context has a target:
   Unqualified minimum, maximum, and source-dataset conditions apply to that
   selected variable and belong in conditions, not source_conditions.
   Conditions on a different variable belong in source_conditions.
+  Unqualified dataset, source, producer, case/casename, and file phrases refer
+  to fields of the source rows for the selected variable.
+  "min between A and B" means minimum gte A and minimum lte B.
+  "max between A and B" means maximum gte A and maximum lte B.
+  "largest max" means rank by maximum descending; "smallest min" means rank by
+  minimum ascending. Do not invent rank values; the application resolves them.
+  For source-dataset/file/casename/producer text without an exact value from
+  context, prefer contains over eq.
 - visualization adds one variable to the active grid cell. For visualization,
   return visualization.add with the exact variable_id and target active_cell.
   The application chooses the source and default visualization using the active
@@ -149,6 +172,9 @@ Examples:
   variable_id pressure and target active_cell.
 - "Add temperature to the selected cell" with target visualization:
   visualization.add with variable_id temperature and target active_cell.
+- "min between 0 and 1" with target source_filter and selected pressure:
+  catalog.query selecting sources, result_variable_id pressure, minimum gte 0
+  and minimum lte 1.
 
 Phase 1 supports one action. Catalog queries support AND-combined conditions and
 top-1 ranking with ties. Visualization actions support one exact variable and
@@ -348,6 +374,59 @@ class ChatCompletionsQueryTranslator:
                 f"Requests are limited to {MAX_ASSISTANT_REQUEST_LENGTH} characters"
             )
 
+        source_filter_context = getattr(request, "source_filter_context", None)
+        serialized_source_filter_context = None
+        if source_filter_context is not None:
+            serialized_source_filter_context = {
+                "row_count": int(source_filter_context.row_count),
+                "visible_row_count": int(source_filter_context.visible_row_count),
+                "fields": [
+                    "source_dataset",
+                    "producer",
+                    "casename",
+                    "file",
+                    "minimum",
+                    "maximum",
+                ],
+                "examples": {
+                    "source_datasets": [
+                        _context_text(value)
+                        for value in source_filter_context.source_datasets[
+                            :MAX_CONTEXT_SOURCE_FILTER_VALUES
+                        ]
+                    ],
+                    "producers": [
+                        _context_text(value)
+                        for value in source_filter_context.producers[
+                            :MAX_CONTEXT_SOURCE_FILTER_VALUES
+                        ]
+                    ],
+                    "casenames": [
+                        _context_text(value)
+                        for value in source_filter_context.casenames[
+                            :MAX_CONTEXT_SOURCE_FILTER_VALUES
+                        ]
+                    ],
+                    "files": [
+                        _context_text(value)
+                        for value in source_filter_context.files[
+                            :MAX_CONTEXT_SOURCE_FILTER_VALUES
+                        ]
+                    ],
+                },
+                "ranges": {
+                    "minimum": {
+                        "min": source_filter_context.minimum_range[0],
+                        "max": source_filter_context.minimum_range[1],
+                    },
+                    "maximum": {
+                        "min": source_filter_context.maximum_range[0],
+                        "max": source_filter_context.maximum_range[1],
+                    },
+                },
+                "truncated": bool(source_filter_context.context_truncated),
+            }
+
         context = {
             "request": request_text,
             "campaign_context": {
@@ -375,6 +454,7 @@ class ChatCompletionsQueryTranslator:
                 "target": _context_text(
                     getattr(request, "target", "catalog") or "catalog"
                 ),
+                "source_filter": serialized_source_filter_context,
                 "truncated": bool(request.context_truncated),
             },
         }

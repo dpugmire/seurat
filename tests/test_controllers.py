@@ -14,6 +14,7 @@ NON_HISTORICAL_ACTIONS = {
     "cancel_plot_settings",
     "cancel_plugin_options",
     "cancel_scalar_field_settings",
+    "cancel_scalar_field_options_assistant",
     "cancel_scalar_plot_generation",
     "cancel_source_dialog",
     "clear_all_sources",
@@ -31,6 +32,7 @@ NON_HISTORICAL_ACTIONS = {
     "load_workspace_state",
     "open_plot_settings_plugin_options",
     "open_query_assistant",
+    "open_scalar_field_options_assistant",
     "open_source_query_assistant",
     "open_visualization_assistant",
     "pick_tile_visualization",
@@ -59,6 +61,7 @@ NON_HISTORICAL_ACTIONS = {
     "toggle_sources",
     "toggle_variable_group",
     "translate_query_request",
+    "translate_scalar_field_options_request",
     "undo_workspace",
     "update_plot_background_color",
     "update_plot_cursor_color",
@@ -84,7 +87,7 @@ NON_HISTORICAL_TRIGGERS = {
 class ControllerOwnershipTests(unittest.TestCase):
     def test_domain_bindings_are_unique_and_owned_by_the_declaring_controller(self):
         expected_counts = {
-            "ACTION_BINDINGS": 110,
+            "ACTION_BINDINGS": 114,
             "TRIGGER_BINDINGS": 20,
             "STATE_CHANGE_BINDINGS": 4,
         }

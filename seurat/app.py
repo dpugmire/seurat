@@ -30,6 +30,7 @@ from .demo_campaign import (
     temporary_demo_campaign,
 )
 from .learning import InteractionLog
+from .plot_options_assistant import make_chat_completions_plot_options_translator
 from .query_assistant import make_chat_completions_query_translator
 from .state import init_state
 
@@ -59,6 +60,7 @@ class SeuratApp(TrameApp):
         collection=None,
         db=None,
         query_translator=None,
+        plot_options_translator=None,
         interaction_log=None,
         controller_attacher=attach_controllers,
         ui_builder=build_ui,
@@ -100,6 +102,15 @@ class SeuratApp(TrameApp):
                 timeout_seconds=SEURAT_LLM_TIMEOUT_SECONDS,
             )
         )
+        self.plot_options_translator = (
+            plot_options_translator
+            or make_chat_completions_plot_options_translator(
+                model=SEURAT_LLM_MODEL,
+                base_url=SEURAT_LLM_BASE_URL,
+                api_key=SEURAT_LLM_API_KEY,
+                timeout_seconds=SEURAT_LLM_TIMEOUT_SECONDS,
+            )
+        )
         init_state(self.state, self.db)
 
         self.refresh_variable_list = controller_attacher(
@@ -112,6 +123,7 @@ class SeuratApp(TrameApp):
             image_association_schema_path=self.image_association_schema_path,
             campaign_schema_path=self.campaign_schema_path,
             query_translator=self.query_translator,
+            plot_options_translator=self.plot_options_translator,
             interaction_log=self.interaction_log,
         )
         self.ui = ui_builder(

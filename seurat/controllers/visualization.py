@@ -1,5 +1,6 @@
 """Visualization, plot, scalar-field, and plugin controller behavior."""
 
+import asyncio
 from typing import Any, Dict, List, Optional
 
 from config import MAX_MOVIE_FRAMES, MOVIE_FPS
@@ -38,6 +39,15 @@ from seurat.models.source_selection import (
     source_fields_from_row,
     source_filter_from_row,
 )
+from seurat.plot_options_assistant import (
+    PlotOptionsTranslationRequest,
+    PlotOptionsTranslationResult,
+    plot1d_options_patch_from_dict,
+    plot1d_options_patch_to_dict,
+    scalar_field_options_patch_from_dict,
+    scalar_field_options_patch_to_dict,
+)
+from seurat.query_assistant import MAX_ASSISTANT_REQUEST_LENGTH, QueryAssistantError
 from state_init import fmt
 
 
@@ -56,6 +66,22 @@ class VisualizationControllerMixin:
         ("apply_scalar_field_settings", "apply_scalar_field_settings"),
         ("toggle_scalar_field_background", "toggle_scalar_field_background"),
         ("update_scalar_field_contour_color", "update_scalar_field_contour_color"),
+        (
+            "open_scalar_field_options_assistant",
+            "open_scalar_field_options_assistant",
+        ),
+        (
+            "cancel_scalar_field_options_assistant",
+            "cancel_scalar_field_options_assistant",
+        ),
+        (
+            "translate_scalar_field_options_request",
+            "translate_scalar_field_options_request",
+        ),
+        (
+            "apply_scalar_field_options_patch",
+            "apply_scalar_field_options_patch",
+        ),
         ("reset_plot_settings", "reset_plot_settings"),
         ("update_plot_background_color", "update_plot_background_color"),
         ("update_plot_grid_color", "update_plot_grid_color"),
@@ -70,6 +96,7 @@ class VisualizationControllerMixin:
         "confirm_scalar_plot_generation": "Generate scalar plot",
         "apply_plugin_options": "Change plugin settings",
         "apply_scalar_field_settings": "Change scalar field settings",
+        "apply_scalar_field_options_patch": "Change scalar field settings",
         "apply_plot_settings": "Change plot settings",
     }
     HISTORY_TRIGGERS = {}
@@ -575,6 +602,558 @@ class VisualizationControllerMixin:
             contours.get("color", "#ffffff") or "#ffffff"
         )
         self.state.showScalarFieldSettingsModal = True
+
+    def reset_scalar_field_options_assistant_proposal(self) -> None:
+        self.state.scalarFieldAssistantStatus = ""
+        self.state.scalarFieldAssistantError = ""
+        self.state.scalarFieldAssistantProposalSummary = ""
+        self.state.scalarFieldAssistantClarification = ""
+        self.state.scalarFieldAssistantPatch = {}
+
+    def open_scalar_field_options_assistant(self, idx: int, **_) -> bool:
+        if not self.plot_options_translator:
+            return False
+        try:
+            cell_index = int(idx)
+        except (TypeError, ValueError):
+            cell_index = -1
+        cells = self.normalize_grid_cells(self.state.gridCells)
+        if not self.is_valid_grid_index(cell_index):
+            return False
+        cell = dict(cells[cell_index] or {})
+        if not self.is_scalar_field_cell(cell) and str(
+            cell.get("media_type", "") or ""
+        ) != "plot1d":
+            return False
+
+        self._invalidate_scalar_field_assistant_request()
+        self.reset_scalar_field_options_assistant_proposal()
+        self.state.scalarFieldAssistantCellIndex = cell_index
+        self.state.scalarFieldAssistantTitle = str(
+            cell.get("variable_name", "") or f"Cell {cell_index + 1}"
+        )
+        self.state.scalarFieldAssistantRequestText = ""
+        self.state.scalarFieldAssistantBusy = False
+        self.state.showScalarFieldAssistantModal = True
+        self.state.activeGridCell = cell_index
+        return True
+
+    def cancel_scalar_field_options_assistant(self, **_) -> None:
+        self._invalidate_scalar_field_assistant_request()
+        self.state.scalarFieldAssistantBusy = False
+        self.state.showScalarFieldAssistantModal = False
+        self.state.scalarFieldAssistantCellIndex = -1
+        self.reset_scalar_field_options_assistant_proposal()
+
+    def _invalidate_scalar_field_assistant_request(self) -> int:
+        request_id = int(
+            getattr(self, "_scalar_field_assistant_request_id", 0) or 0
+        ) + 1
+        self._scalar_field_assistant_request_id = request_id
+        return request_id
+
+    def _flush_scalar_field_assistant_state(self) -> None:
+        flush = getattr(self.state, "flush", None)
+        if callable(flush):
+            flush()
+
+    def scalar_field_options_translation_request(
+        self, request_text: str
+    ) -> PlotOptionsTranslationRequest:
+        try:
+            idx = int(self.state.scalarFieldAssistantCellIndex)
+        except (TypeError, ValueError):
+            idx = -1
+        if not self.is_valid_grid_index(idx):
+            raise QueryAssistantError("No scalar-field cell selected.")
+        cells = self.normalize_grid_cells(self.state.gridCells)
+        cell = dict(cells[idx] or {})
+        is_plot1d = str(cell.get("media_type", "") or "") == "plot1d"
+        if not self.is_scalar_field_cell(cell) and not is_plot1d:
+            raise QueryAssistantError("Selected cell does not support plot options.")
+
+        if is_plot1d:
+            settings = self.normalize_plot_settings(
+                cell,
+                cell.get("plot_settings", {}),
+            )
+            plot = dict(cell.get("plot", {}) or {})
+            return PlotOptionsTranslationRequest(
+                request_text=request_text,
+                plot_type="plot1d",
+                variable_id=str(
+                    cell.get("variable_id", "")
+                    or cell.get("variable_name", "")
+                    or ""
+                ),
+                variable_name=str(cell.get("variable_name", "") or ""),
+                current_settings=settings,
+                x_label=str(plot.get("x_label", "") or ""),
+                y_label=str(plot.get("y_label", "") or ""),
+                series=tuple(self.plot_series_rows_for_tile(cell, settings)),
+            )
+
+        settings = self.normalize_scalar_field_settings(
+            cell.get("scalar_field_settings", {})
+        )
+        return PlotOptionsTranslationRequest(
+            request_text=request_text,
+            plot_type="scalar_field",
+            variable_id=str(
+                cell.get("variable_id", "") or cell.get("variable_name", "") or ""
+            ),
+            variable_name=str(cell.get("variable_name", "") or ""),
+            current_settings=settings,
+            data_min=self.finite_float(
+                cell.get("scalar_field_colorbar_min", cell.get("min", None))
+            ),
+            data_max=self.finite_float(
+                cell.get("scalar_field_colorbar_max", cell.get("max", None))
+            ),
+        )
+
+    async def translate_scalar_field_options_request(self, **_) -> bool:
+        if not self.plot_options_translator:
+            self.state.scalarFieldAssistantError = (
+                "Plot Options Assistant is not configured."
+            )
+            return False
+
+        request_text = str(
+            self.state.scalarFieldAssistantRequestText or ""
+        ).strip()
+        if not request_text:
+            self.state.scalarFieldAssistantError = "Enter a plot option request."
+            return False
+        if len(request_text) > MAX_ASSISTANT_REQUEST_LENGTH:
+            self.state.scalarFieldAssistantError = (
+                f"Requests are limited to {MAX_ASSISTANT_REQUEST_LENGTH} characters."
+            )
+            return False
+
+        request_id = self._invalidate_scalar_field_assistant_request()
+        self.reset_scalar_field_options_assistant_proposal()
+        self.state.scalarFieldAssistantBusy = True
+        self.state.scalarFieldAssistantStatus = "Translating request..."
+        self._flush_scalar_field_assistant_state()
+
+        try:
+            translation_request = self.scalar_field_options_translation_request(
+                request_text
+            )
+            timeout_seconds = max(
+                1.0,
+                float(self.plot_options_translator.timeout_seconds),
+            )
+            result = await asyncio.wait_for(
+                asyncio.to_thread(
+                    self.plot_options_translator.translate,
+                    translation_request,
+                ),
+                timeout=timeout_seconds + 1.0,
+            )
+            if not isinstance(result, PlotOptionsTranslationResult):
+                raise QueryAssistantError(
+                    "Translator returned an invalid option proposal object."
+                )
+        except asyncio.TimeoutError:
+            if request_id == self._scalar_field_assistant_request_id:
+                self.state.scalarFieldAssistantError = (
+                    "Plot option translation timed out."
+                )
+                self.state.scalarFieldAssistantStatus = ""
+            return False
+        except Exception as e:
+            if request_id == self._scalar_field_assistant_request_id:
+                message = (
+                    str(e)
+                    if isinstance(e, QueryAssistantError)
+                    else f"Plot option translation failed ({type(e).__name__})."
+                )
+                self.state.scalarFieldAssistantError = message
+                self.state.scalarFieldAssistantStatus = ""
+            return False
+        finally:
+            if request_id == self._scalar_field_assistant_request_id:
+                self.state.scalarFieldAssistantBusy = False
+
+        if request_id != self._scalar_field_assistant_request_id:
+            return False
+
+        self.state.scalarFieldAssistantClarification = result.clarification
+        if result.status == "needs_clarification":
+            self.state.scalarFieldAssistantStatus = "Clarification needed"
+            return False
+
+        if translation_request.plot_type == "plot1d":
+            self.state.scalarFieldAssistantPatch = plot1d_options_patch_to_dict(
+                result.patch
+            )
+        else:
+            self.state.scalarFieldAssistantPatch = scalar_field_options_patch_to_dict(
+                result.patch
+            )
+        self.state.scalarFieldAssistantProposalSummary = (
+            result.summary or "Ready to apply plot option changes."
+        )
+        self.state.scalarFieldAssistantStatus = "Proposal ready"
+        return True
+
+    def scalar_field_settings_with_options_patch(
+        self,
+        cell: Dict[str, Any],
+        patch_payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        patch = scalar_field_options_patch_from_dict(patch_payload)
+        settings = self.normalize_scalar_field_settings(
+            cell.get("scalar_field_settings", {})
+        )
+        contours = dict(settings.get("contours", {}) or {})
+        raw = {
+            "render_mode": settings.get("render_mode", "colormap"),
+            "colormap": settings.get("colormap", "viridis"),
+            "background": settings.get("background", "black"),
+            "range_auto": bool(settings.get("range_auto", True)),
+            "min": settings.get("min", None),
+            "max": settings.get("max", None),
+            "show_colorbar": bool(settings.get("show_colorbar", False)),
+            "show_axes": bool(settings.get("show_axes", False)),
+            "contours": contours,
+        }
+
+        if patch.render_mode is not None:
+            raw["render_mode"] = patch.render_mode
+        if patch.colormap is not None:
+            if self.scalar_colormap(patch.colormap) != patch.colormap:
+                raise ValueError(f"Unsupported colormap: {patch.colormap}")
+            raw["colormap"] = patch.colormap
+        if patch.background is not None:
+            raw["background"] = patch.background
+        if patch.range_auto is not None:
+            raw["range_auto"] = patch.range_auto
+            if patch.range_auto:
+                raw["min"] = None
+                raw["max"] = None
+        if patch.min is not None or patch.max is not None:
+            raw["range_auto"] = False if patch.range_auto is None else patch.range_auto
+            if patch.min is not None:
+                raw["min"] = patch.min
+            if patch.max is not None:
+                raw["max"] = patch.max
+        if patch.show_colorbar is not None:
+            raw["show_colorbar"] = patch.show_colorbar
+        if patch.show_axes is not None:
+            raw["show_axes"] = patch.show_axes
+
+        contour_patch = patch.contours
+        if contour_patch.level_mode is not None:
+            contours["level_mode"] = contour_patch.level_mode
+        if contour_patch.values is not None:
+            contours["level_mode"] = (
+                contour_patch.level_mode
+                if contour_patch.level_mode is not None
+                else "values"
+            )
+            contours["values"] = list(contour_patch.values)
+        if contour_patch.min is not None:
+            contours["level_mode"] = (
+                contour_patch.level_mode
+                if contour_patch.level_mode is not None
+                else "range"
+            )
+            contours["min"] = contour_patch.min
+        if contour_patch.max is not None:
+            contours["level_mode"] = (
+                contour_patch.level_mode
+                if contour_patch.level_mode is not None
+                else "range"
+            )
+            contours["max"] = contour_patch.max
+        if contour_patch.count is not None:
+            contours["level_mode"] = (
+                contour_patch.level_mode
+                if contour_patch.level_mode is not None
+                else "range"
+            )
+            contours["count"] = contour_patch.count
+        if contour_patch.color is not None:
+            color = self.clean_plot_color(contour_patch.color, "")
+            if not color:
+                raise ValueError(f"Invalid contour color: {contour_patch.color}")
+            contours["color"] = color
+
+        range_auto = bool(raw.get("range_auto", True))
+        min_value = self.finite_float(raw.get("min", None))
+        max_value = self.finite_float(raw.get("max", None))
+        if not range_auto:
+            if min_value is None or max_value is None:
+                raise ValueError("Manual range requires min and max values.")
+            if min_value >= max_value:
+                raise ValueError("Manual range must have min < max.")
+
+        render_mode = self.scalar_field_render_mode(raw.get("render_mode", "colormap"))
+        contour_level_mode = self.scalar_field_contour_level_mode(
+            contours.get("level_mode", "range")
+        )
+        if render_mode != "colormap" and contour_level_mode == "values":
+            contour_values = list(contours.get("values", []) or [])
+            if not contour_values:
+                raise ValueError("Enter at least one contour value.")
+
+        return self.normalize_scalar_field_settings(raw)
+
+    def update_scalar_field_cell_settings(
+        self,
+        idx: int,
+        settings: Dict[str, Any],
+    ) -> None:
+        if not self.is_valid_grid_index(idx):
+            raise ValueError("No scalar-field cell selected.")
+        cells = self.normalize_grid_cells(self.state.gridCells)
+        cell = dict(cells[idx] or {})
+        if not self.is_scalar_field_cell(cell):
+            raise ValueError("Selected cell is not a scalar-field visualization.")
+
+        var = str(
+            cell.get("variable_id", "") or cell.get("variable_name", "") or ""
+        ).strip()
+        selected_vis = str(
+            cell.get("selected_visualization", "")
+            or cell.get("visualization_name", "")
+            or ""
+        ).strip()
+        if not var or not selected_vis:
+            raise ValueError("Cell is missing a variable or visualization.")
+
+        cell["scalar_field_settings"] = settings
+        new_cell = self.build_grid_cell_for_variable(
+            var,
+            preferred_vis=selected_vis,
+            existing_cell=cell,
+        )
+        assign_cell(cells, idx, new_cell)
+        self.state.gridCells = self.normalize_grid_cells(cells)
+        self.state.activeGridCell = idx
+
+    def validated_plot_settings(
+        self,
+        cell: Dict[str, Any],
+        raw_settings: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        raw = dict(raw_settings or {})
+        x_auto = bool(raw.get("x_auto", True))
+        y_auto = bool(raw.get("y_auto", True))
+        x_min = self.finite_float(raw.get("x_min", None))
+        x_max = self.finite_float(raw.get("x_max", None))
+        y_min = self.finite_float(raw.get("y_min", None))
+        y_max = self.finite_float(raw.get("y_max", None))
+        x_scale = str(raw.get("x_scale", "linear") or "linear").strip().lower()
+        y_scale = str(raw.get("y_scale", "linear") or "linear").strip().lower()
+        if x_scale not in {"linear", "log"}:
+            x_scale = "linear"
+        if y_scale not in {"linear", "log"}:
+            y_scale = "linear"
+
+        if not x_auto:
+            if x_min is None or x_max is None:
+                raise ValueError("Manual X range requires min and max values.")
+            if x_min >= x_max:
+                raise ValueError("Manual X range must have min < max.")
+        if not y_auto:
+            if y_min is None or y_max is None:
+                raise ValueError("Manual Y range requires min and max values.")
+            if y_min >= y_max:
+                raise ValueError("Manual Y range must have min < max.")
+
+        if x_scale == "log":
+            if not self.axis_has_positive_data(cell, "x"):
+                raise ValueError("X log scale requires positive X values.")
+            if not x_auto and (
+                x_min is None or x_max is None or x_min <= 0 or x_max <= 0
+            ):
+                raise ValueError("Manual X log range must be positive.")
+        if y_scale == "log":
+            if not self.axis_has_positive_data(cell, "y"):
+                raise ValueError("Y log scale requires positive Y values.")
+            if not y_auto and (
+                y_min is None or y_max is None or y_min <= 0 or y_max <= 0
+            ):
+                raise ValueError("Manual Y log range must be positive.")
+
+        line_width = self.finite_float(raw.get("line_width", 2.5))
+        if line_width is None:
+            raise ValueError("Line width must be a number.")
+        line_width = max(0.5, min(8.0, line_width))
+
+        return self.normalize_plot_settings(
+            cell,
+            {
+                "x_auto": x_auto,
+                "x_min": None if x_auto else x_min,
+                "x_max": None if x_auto else x_max,
+                "x_scale": x_scale,
+                "y_auto": y_auto,
+                "y_min": None if y_auto else y_min,
+                "y_max": None if y_auto else y_max,
+                "y_scale": y_scale,
+                "series_colors": dict(raw.get("series_colors", {}) or {}),
+                "series_styles": dict(raw.get("series_styles", {}) or {}),
+                "line_width": line_width,
+                "show_grid": bool(raw.get("show_grid", True)),
+                "show_cursor": bool(raw.get("show_cursor", True)),
+                "background_color": self.clean_plot_color(
+                    raw.get("background_color", ""), "#ffffff"
+                ),
+                "grid_color": self.clean_plot_color(
+                    raw.get("grid_color", ""), "#e8e8e8"
+                ),
+                "cursor_color": self.clean_plot_color(
+                    raw.get("cursor_color", ""), "#111111"
+                ),
+            },
+        )
+
+    def plot1d_settings_with_options_patch(
+        self,
+        cell: Dict[str, Any],
+        patch_payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        patch = plot1d_options_patch_from_dict(patch_payload)
+        current = self.normalize_plot_settings(cell, cell.get("plot_settings", {}))
+        raw = dict(current)
+        raw["series_colors"] = dict(current.get("series_colors", {}) or {})
+        raw["series_styles"] = {
+            key: dict(value or {})
+            for key, value in dict(current.get("series_styles", {}) or {}).items()
+        }
+
+        if patch.x_auto is not None:
+            raw["x_auto"] = patch.x_auto
+            if patch.x_auto:
+                raw["x_min"] = None
+                raw["x_max"] = None
+        if patch.x_min is not None or patch.x_max is not None:
+            raw["x_auto"] = False if patch.x_auto is None else patch.x_auto
+            if patch.x_min is not None:
+                raw["x_min"] = patch.x_min
+            if patch.x_max is not None:
+                raw["x_max"] = patch.x_max
+        if patch.x_scale is not None:
+            raw["x_scale"] = patch.x_scale
+        if patch.y_auto is not None:
+            raw["y_auto"] = patch.y_auto
+            if patch.y_auto:
+                raw["y_min"] = None
+                raw["y_max"] = None
+        if patch.y_min is not None or patch.y_max is not None:
+            raw["y_auto"] = False if patch.y_auto is None else patch.y_auto
+            if patch.y_min is not None:
+                raw["y_min"] = patch.y_min
+            if patch.y_max is not None:
+                raw["y_max"] = patch.y_max
+        if patch.y_scale is not None:
+            raw["y_scale"] = patch.y_scale
+        if patch.line_width is not None:
+            raw["line_width"] = patch.line_width
+        if patch.show_grid is not None:
+            raw["show_grid"] = patch.show_grid
+        if patch.show_cursor is not None:
+            raw["show_cursor"] = patch.show_cursor
+        if patch.background_color is not None:
+            color = self.clean_plot_color(patch.background_color, "")
+            if not color:
+                raise ValueError(f"Invalid background color: {patch.background_color}")
+            raw["background_color"] = color
+        if patch.grid_color is not None:
+            color = self.clean_plot_color(patch.grid_color, "")
+            if not color:
+                raise ValueError(f"Invalid grid color: {patch.grid_color}")
+            raw["grid_color"] = color
+        if patch.cursor_color is not None:
+            color = self.clean_plot_color(patch.cursor_color, "")
+            if not color:
+                raise ValueError(f"Invalid cursor color: {patch.cursor_color}")
+            raw["cursor_color"] = color
+
+        known_keys = {
+            str(row.get("key", "") or "")
+            for row in self.plot_series_rows_for_tile(cell, current)
+        }
+        for item in patch.series:
+            key = str(item.series_key or "").strip()
+            if key not in known_keys:
+                raise ValueError(f"Unknown plot series: {key}")
+            style = dict(raw["series_styles"].get(key, {}) or {})
+            if item.color is not None:
+                color = self.clean_plot_color(item.color, "")
+                if not color:
+                    raise ValueError(f"Invalid series color: {item.color}")
+                raw["series_colors"][key] = color
+                style["color"] = color
+            if item.line_style is not None:
+                style["line_style"] = self.clean_line_style(item.line_style)
+            raw["series_styles"][key] = style
+
+        return self.validated_plot_settings(cell, raw)
+
+    def update_plot1d_cell_settings(
+        self,
+        idx: int,
+        settings: Dict[str, Any],
+    ) -> None:
+        if not self.is_valid_grid_index(idx):
+            raise ValueError("No plot cell selected.")
+        cells = self.normalize_grid_cells(self.state.gridCells)
+        cell = dict(cells[idx] or {})
+        if str(cell.get("media_type", "") or "") != "plot1d":
+            raise ValueError("Selected cell is not a 1D plot.")
+        cell["plot_settings"] = settings
+        cells[idx] = cell
+        self.state.gridCells = self.normalize_grid_cells(cells)
+        self.state.activeGridCell = idx
+
+    def apply_scalar_field_options_patch(self, **_) -> bool:
+        try:
+            idx = int(self.state.scalarFieldAssistantCellIndex)
+        except (TypeError, ValueError):
+            idx = -1
+        if not self.is_valid_grid_index(idx):
+            self.state.scalarFieldAssistantError = "No scalar-field cell selected."
+            return False
+
+        patch_payload = dict(self.state.scalarFieldAssistantPatch or {})
+        if not patch_payload:
+            self.state.scalarFieldAssistantError = (
+                "Translate a plot option request before applying."
+            )
+            return False
+
+        try:
+            cells = self.normalize_grid_cells(self.state.gridCells)
+            cell = dict(cells[idx] or {})
+            if str(cell.get("media_type", "") or "") == "plot1d":
+                settings = self.plot1d_settings_with_options_patch(
+                    cell,
+                    patch_payload,
+                )
+                self.update_plot1d_cell_settings(idx, settings)
+            else:
+                if not self.is_scalar_field_cell(cell):
+                    raise ValueError("Selected cell does not support plot options.")
+                settings = self.scalar_field_settings_with_options_patch(
+                    cell,
+                    patch_payload,
+                )
+                self.update_scalar_field_cell_settings(idx, settings)
+        except Exception as e:
+            self.state.scalarFieldAssistantError = f"{type(e).__name__}: {e}"
+            self.state.scalarFieldAssistantStatus = ""
+            return False
+
+        self.state.scalarFieldAssistantError = ""
+        self.state.scalarFieldAssistantStatus = "Applied."
+        self.state.scalarFieldAssistantPatch = {}
+        return True
 
     def load_plot_settings_dialog(self, idx: int, reset: bool = False) -> None:
         cells = self.normalize_grid_cells(self.state.gridCells)
@@ -1554,35 +2133,13 @@ class VisualizationControllerMixin:
                 },
             }
         )
-        cell["scalar_field_settings"] = settings
-
-        var = str(
-            cell.get("variable_id", "") or cell.get("variable_name", "") or ""
-        ).strip()
-        selected_vis = str(
-            cell.get("selected_visualization", "")
-            or cell.get("visualization_name", "")
-            or ""
-        ).strip()
-        if not var or not selected_vis:
-            self.state.scalarFieldSettingsStatus = (
-                "Cell is missing a variable or visualization."
-            )
-            self.state.scalarFieldSettingsStatusIsError = True
-            return
-
         try:
-            new_cell = self.build_grid_cell_for_variable(
-                var, preferred_vis=selected_vis, existing_cell=cell
-            )
-            assign_cell(cells, idx, new_cell)
+            self.update_scalar_field_cell_settings(idx, settings)
         except Exception as e:
             self.state.scalarFieldSettingsStatus = f"{type(e).__name__}: {e}"
             self.state.scalarFieldSettingsStatusIsError = True
             return
 
-        self.state.gridCells = self.normalize_grid_cells(cells)
-        self.state.activeGridCell = idx
         self.state.scalarFieldSettingsStatus = "Applied."
         self.state.scalarFieldSettingsStatusIsError = False
 

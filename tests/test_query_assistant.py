@@ -11,6 +11,8 @@ from seurat.controllers import attach_controllers
 from seurat.query_assistant import (
     ChatCompletionsQueryTranslator,
     QueryAssistantError,
+    QuerySourceFilterContext,
+    QueryTranslationRequest,
     make_chat_completions_query_translator,
     parse_query_proposal,
 )
@@ -413,12 +415,23 @@ class QueryProposalTests(unittest.TestCase):
             base_url="http://localhost:11434/v1/",
             api_key="ollama",
         )
-        request = SimpleNamespace(
+        request = QueryTranslationRequest(
             request_text="Show temperature",
             variables=(),
             source_datasets=(),
-            selected_variable_id="",
+            selected_variable_id="pressure",
+            target="source_filter",
             context_truncated=False,
+            source_filter_context=QuerySourceFilterContext(
+                row_count=3,
+                visible_row_count=2,
+                source_datasets=("run/a.bp", "run/b.bp"),
+                producers=("xgc",),
+                casenames=("case-a",),
+                files=("restart.bp",),
+                minimum_range=(-1.0, 0.5),
+                maximum_range=(2.0, 9.0),
+            ),
         )
         with patch(
             "seurat.query_assistant.urllib.request.urlopen",
@@ -456,11 +469,28 @@ class QueryProposalTests(unittest.TestCase):
             '"largest max" means field maximum',
             system_message,
         )
+        self.assertIn("min between A and B", system_message)
         self.assertIn("visualization: visualization.add", system_message)
         sent_context = json.loads(sent_payload["messages"][1]["content"])
         self.assertEqual(
             sent_context["campaign_context"]["target"],
-            "catalog",
+            "source_filter",
+        )
+        self.assertEqual(
+            sent_context["campaign_context"]["source_filter"]["row_count"],
+            3,
+        )
+        self.assertEqual(
+            sent_context["campaign_context"]["source_filter"]["examples"][
+                "source_datasets"
+            ],
+            ["run/a.bp", "run/b.bp"],
+        )
+        self.assertEqual(
+            sent_context["campaign_context"]["source_filter"]["ranges"][
+                "maximum"
+            ],
+            {"min": 2.0, "max": 9.0},
         )
         self.assertEqual(proposal.actions[0].result_variable_id, "temperature")
 
@@ -573,7 +603,13 @@ class QueryAssistantControllerTests(unittest.TestCase):
             FakeTranslator(action_proposal(variable_action()))
         )
 
-        self.assertEqual(controller.set_actions, {"translate_query_request"})
+        self.assertEqual(
+            controller.set_actions,
+            {
+                "translate_query_request",
+                "translate_scalar_field_options_request",
+            },
+        )
 
     def test_real_trame_controller_exposes_an_awaitable_action(self):
         state = RecordingState()
@@ -837,6 +873,62 @@ class QueryAssistantControllerTests(unittest.TestCase):
         self.assertEqual(state.queryText, 'id == "temperature"')
         self.assertTrue(state.showSourcesModal)
         self.assertFalse(state.showQueryAssistant)
+        self.assertIn(
+            "Preview: 1 matching source row.",
+            state.queryAssistantProposalSummary,
+        )
+
+    def test_source_filter_request_includes_source_row_context(self):
+        translator = FakeTranslator(
+            action_proposal(
+                CatalogQueryAction(
+                    action_type="catalog.query",
+                    select="sources",
+                    result_variable_id="pressure",
+                    conditions=(CatalogCondition("maximum", "gt", 0.0),),
+                    rank=disabled_rank(),
+                )
+            )
+        )
+        state, controller, _backend = make_controller(translator)
+        state.detailsSelectedVarId = "pressure"
+        state.selectedVar = "pressure"
+        state.sourceRowsAll = [
+            {
+                "_key": "a",
+                "source_dataset": "run/b.bp",
+                "producer": "xgc",
+                "casename": "case-b",
+                "file": "restart-b.bp",
+                "min_value": -2.0,
+                "max_value": 9.0,
+            },
+            {
+                "_key": "b",
+                "source_dataset": "run/a.bp",
+                "producer": "xgc",
+                "casename": "case-a",
+                "file": "restart-a.bp",
+                "min_value": 0.5,
+                "max_value": 4.0,
+            },
+        ]
+        state.sourceRows = [state.sourceRowsAll[0]]
+        state.sourceFilterDraftText = "max > 0"
+
+        controller.actions["open_source_query_assistant"]()
+        self.assertTrue(asyncio.run(controller.actions["translate_query_request"]()))
+
+        context = translator.requests[0].source_filter_context
+        self.assertIsNotNone(context)
+        self.assertEqual(context.row_count, 2)
+        self.assertEqual(context.visible_row_count, 1)
+        self.assertEqual(context.source_datasets, ("run/a.bp", "run/b.bp"))
+        self.assertEqual(context.producers, ("xgc",))
+        self.assertEqual(context.casenames, ("case-a", "case-b"))
+        self.assertEqual(context.files, ("restart-a.bp", "restart-b.bp"))
+        self.assertEqual(context.minimum_range, (-2.0, 0.5))
+        self.assertEqual(context.maximum_range, (4.0, 9.0))
 
     def test_source_dialog_ranking_uses_current_source_rows(self):
         translator = FakeTranslator(
@@ -891,6 +983,46 @@ class QueryAssistantControllerTests(unittest.TestCase):
         self.assertEqual(
             state.queryAssistantProposalText,
             "max == 9.0",
+        )
+
+    def test_source_dialog_minimum_range_preview_counts_matching_rows(self):
+        translator = FakeTranslator(
+            action_proposal(
+                CatalogQueryAction(
+                    action_type="catalog.query",
+                    select="sources",
+                    result_variable_id="pressure",
+                    conditions=(
+                        CatalogCondition("minimum", "gte", 0.0),
+                        CatalogCondition("minimum", "lte", 1.0),
+                    ),
+                    rank=disabled_rank(),
+                )
+            )
+        )
+        state, controller, _backend = make_controller(translator)
+        state.detailsSelectedVarId = "pressure"
+        state.selectedVar = "pressure"
+        state.sourceRowsAll = [
+            {"_key": "low", "min_value": -1.0, "max_value": 2.0},
+            {"_key": "match", "min_value": 0.5, "max_value": 3.0},
+            {"_key": "high", "min_value": 1.5, "max_value": 4.0},
+        ]
+        state.sourceRows = list(state.sourceRowsAll)
+        state.sourceFilterDraftText = "min between 0 and 1"
+
+        controller.actions["open_source_query_assistant"]()
+        result = asyncio.run(controller.actions["translate_query_request"]())
+
+        self.assertTrue(result)
+        self.assertEqual(
+            state.queryAssistantProposalText,
+            "min >= 0.0 and min <= 1.0",
+        )
+        self.assertEqual(state.queryAssistantSourceCount, 1)
+        self.assertIn(
+            "Preview: 1 matching source row.",
+            state.queryAssistantProposalSummary,
         )
 
     def test_exact_source_dataset_still_requires_a_campaign_name(self):

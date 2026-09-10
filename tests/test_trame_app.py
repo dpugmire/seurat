@@ -208,6 +208,7 @@ class SeuratAppTests(unittest.TestCase):
             ui.grid_workspace.plot_settings_panel,
             ui.grid_workspace.plugin_options_panel,
             ui.grid_workspace.scalar_field_settings_panel,
+            ui.grid_workspace.scalar_field_assistant_panel,
         ):
             self.assertIsInstance(component, TrameComponent)
             self.assertIs(component.server, server)
@@ -229,6 +230,10 @@ class SeuratAppTests(unittest.TestCase):
         self.assertIn("Search variables", ui.layout.html)
         self.assertIn("variableSearchText", ui.layout.html)
         self.assertIsInstance(ui.query_assistant, QueryAssistantDialog)
+        self.assertIn('id="seurat-query-assistant-panel"', ui.layout.html)
+        self.assertIn("seurat-query-assistant-panel", ui.layout.html)
+        self.assertIn("seurat-ai-assistant-panel", ui.layout.html)
+        self.assertIn("seurat-floating-panel-drag-handle", ui.layout.html)
         self.assertIn("Query Assistant", ui.layout.html)
         self.assertIn("Source Filter Assistant", ui.layout.html)
         self.assertIn("Visualization Assistant", ui.layout.html)
@@ -249,6 +254,12 @@ class SeuratAppTests(unittest.TestCase):
         self.assertIn("scalarFieldSettingsContourValues", ui.layout.html)
         self.assertIn("scalarFieldSettingsContourCount", ui.layout.html)
         self.assertIn("scalarFieldSettingsContourColor", ui.layout.html)
+        self.assertIn("scalarFieldAssistantRequestText", ui.layout.html)
+        self.assertIn("seurat-scalar-field-ai-btn", ui.layout.html)
+        self.assertIn("tile.media_type === 'plot1d'", ui.layout.html)
+        self.assertIn('id="seurat-plot-options-assistant-panel"', ui.layout.html)
+        self.assertIn("seurat-plot-options-assistant-panel", ui.layout.html)
+        self.assertIn("Plot Options Assistant", ui.layout.html)
         self.assertIn("Min/Max", ui.layout.html)
         self.assertIn("detailsGlobalMin", ui.layout.html)
         self.assertNotIn('id="seurat-representation-details"', ui.layout.html)

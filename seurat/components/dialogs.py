@@ -932,3 +932,93 @@ class ScalarFieldSettingsPanel(TrameComponent):
                     vuetify.VBtn("Reset", variant="text", click=ctrl.reset_scalar_field_settings)
                     vuetify.VBtn("Close", variant="text", click=ctrl.cancel_scalar_field_settings)
                     vuetify.VBtn("Apply", variant="tonal", click=ctrl.apply_scalar_field_settings)
+
+
+class ScalarFieldAssistantPanel(TrameComponent):
+    def build(self):
+        ctrl = self.ctrl
+        with html.Div(
+            id="seurat-plot-options-assistant-panel",
+            v_show=("showScalarFieldAssistantModal",),
+            classes=(
+                "seurat-floating-options-panel "
+                "seurat-ai-assistant-panel "
+                "seurat-plot-options-assistant-panel"
+            ),
+        ):
+            with vuetify.VCard(classes="seurat-floating-options-card", elevation=6):
+                with vuetify.VCardTitle(classes="seurat-floating-options-titlebar"):
+                    with html.Div(
+                        style="display:flex; align-items:center; gap:8px; width:100%;"
+                    ):
+                        html.Div(
+                            "{{ 'Plot Options Assistant: ' + (scalarFieldAssistantTitle || '') }}",
+                            classes="seurat-floating-panel-drag-handle",
+                        )
+                        vuetify.VSpacer()
+                        vuetify.VBtn(
+                            "Close",
+                            variant="text",
+                            size="small",
+                            click=ctrl.cancel_scalar_field_options_assistant,
+                        )
+                with vuetify.VCardText(classes="seurat-floating-options-content"):
+                    html.Div(
+                        "{{ scalarFieldAssistantProvider ? ('Provider: ' + scalarFieldAssistantProvider) : '' }}",
+                        class_="text-caption mb-2",
+                    )
+                    vuetify.VTextarea(
+                        v_model=("scalarFieldAssistantRequestText",),
+                        placeholder="use plasma colormap",
+                        auto_grow=True,
+                        rows=3,
+                        variant="outlined",
+                        hide_details=True,
+                    )
+                    with vuetify.Template(v_if="scalarFieldAssistantStatus"):
+                        html.Div(
+                            "{{ scalarFieldAssistantStatus }}",
+                            class_="text-caption mt-2",
+                            style="color:#1b5e20;",
+                        )
+                    with vuetify.Template(v_if="scalarFieldAssistantError"):
+                        html.Div(
+                            "{{ scalarFieldAssistantError }}",
+                            class_="text-caption mt-2",
+                            style="color:#b00020;",
+                        )
+                    with vuetify.Template(v_if="scalarFieldAssistantClarification"):
+                        html.Div(
+                            "{{ scalarFieldAssistantClarification }}",
+                            class_="text-caption mt-2",
+                        )
+                    with vuetify.Template(v_if="scalarFieldAssistantProposalSummary"):
+                        html.Div(
+                            "{{ scalarFieldAssistantProposalSummary }}",
+                            class_="text-caption mt-2",
+                        )
+                with vuetify.VCardActions():
+                    vuetify.VSpacer()
+                    vuetify.VBtn(
+                        "Cancel",
+                        variant="text",
+                        click=ctrl.cancel_scalar_field_options_assistant,
+                    )
+                    vuetify.VBtn(
+                        "Ask",
+                        color="primary",
+                        variant="tonal",
+                        click=ctrl.translate_scalar_field_options_request,
+                        raw_attrs=[
+                            ':loading="scalarFieldAssistantBusy"',
+                            ':disabled="scalarFieldAssistantBusy"',
+                        ],
+                    )
+                    vuetify.VBtn(
+                        "Apply",
+                        variant="tonal",
+                        click=ctrl.apply_scalar_field_options_patch,
+                        raw_attrs=[
+                            ':disabled="scalarFieldAssistantBusy || !(scalarFieldAssistantPatch && Object.keys(scalarFieldAssistantPatch).length)"'
+                        ],
+                    )

@@ -73,6 +73,18 @@ def defaults():
         "scalarFieldSettingsContourMax": "",
         "scalarFieldSettingsContourCount": 10,
         "scalarFieldSettingsContourColor": "#ffffff",
+        "scalarFieldAssistantAvailable": False,
+        "scalarFieldAssistantProvider": "",
+        "showScalarFieldAssistantModal": False,
+        "scalarFieldAssistantCellIndex": -1,
+        "scalarFieldAssistantTitle": "",
+        "scalarFieldAssistantRequestText": "",
+        "scalarFieldAssistantBusy": False,
+        "scalarFieldAssistantStatus": "",
+        "scalarFieldAssistantError": "",
+        "scalarFieldAssistantProposalSummary": "",
+        "scalarFieldAssistantClarification": "",
+        "scalarFieldAssistantPatch": {},
     }
 
 
@@ -117,4 +129,14 @@ def right_pane_reset_defaults():
         "scalarFieldSettingsContourMax": "",
         "scalarFieldSettingsContourCount": 10,
         "scalarFieldSettingsContourColor": "#ffffff",
+        "showScalarFieldAssistantModal": False,
+        "scalarFieldAssistantCellIndex": -1,
+        "scalarFieldAssistantTitle": "",
+        "scalarFieldAssistantRequestText": "",
+        "scalarFieldAssistantBusy": False,
+        "scalarFieldAssistantStatus": "",
+        "scalarFieldAssistantError": "",
+        "scalarFieldAssistantProposalSummary": "",
+        "scalarFieldAssistantClarification": "",
+        "scalarFieldAssistantPatch": {},
     }

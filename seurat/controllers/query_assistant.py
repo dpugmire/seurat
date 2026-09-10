@@ -3,15 +3,17 @@
 import asyncio
 import math
 from dataclasses import replace
-from typing import Dict, List
+from typing import Any, Dict, Iterable, List, Tuple
 
 from query_parser import and_filter
 from seurat.query_assistant import (
     MAX_ASSISTANT_REQUEST_LENGTH,
+    MAX_CONTEXT_SOURCE_FILTER_VALUES,
     MAX_CONTEXT_SOURCES,
     MAX_CONTEXT_VARIABLES,
     QueryAssistantError,
     QueryContextVariable,
+    QuerySourceFilterContext,
     QueryTranslationRequest,
 )
 from seurat.viewer_actions import (
@@ -139,6 +141,83 @@ class QueryAssistantControllerMixin:
             )
         return compile_catalog_query(action, rank_value=rank_value)
 
+    @staticmethod
+    def _query_assistant_finite_float(value: Any):
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        return number if math.isfinite(number) else None
+
+    @staticmethod
+    def _query_assistant_numeric_range(values: Iterable[Any]) -> Tuple[Any, Any]:
+        finite = [
+            QueryAssistantControllerMixin._query_assistant_finite_float(value)
+            for value in values
+        ]
+        numbers = [value for value in finite if value is not None]
+        if not numbers:
+            return (None, None)
+        return (min(numbers), max(numbers))
+
+    @staticmethod
+    def _query_assistant_context_values(
+        values: Iterable[Any],
+    ) -> Tuple[Tuple[str, ...], bool]:
+        unique = sorted(
+            {
+                str(value or "").strip()
+                for value in values
+                if str(value or "").strip()
+            },
+            key=str.casefold,
+        )
+        return (
+            tuple(unique[:MAX_CONTEXT_SOURCE_FILTER_VALUES]),
+            len(unique) > MAX_CONTEXT_SOURCE_FILTER_VALUES,
+        )
+
+    def source_filter_translation_context(self) -> QuerySourceFilterContext:
+        rows = list(self.all_source_rows())
+        visible_rows = list(getattr(self.state, "sourceRows", []) or [])
+        values = [self.source_filter_values(row) for row in rows]
+
+        source_datasets, source_datasets_truncated = (
+            self._query_assistant_context_values(
+                value.get("source_dataset", "") for value in values
+            )
+        )
+        producers, producers_truncated = self._query_assistant_context_values(
+            value.get("producer", "") for value in values
+        )
+        casenames, casenames_truncated = self._query_assistant_context_values(
+            value.get("casename", "") for value in values
+        )
+        files, files_truncated = self._query_assistant_context_values(
+            value.get("file", "") for value in values
+        )
+
+        return QuerySourceFilterContext(
+            row_count=len(rows),
+            visible_row_count=len(visible_rows),
+            source_datasets=source_datasets,
+            producers=producers,
+            casenames=casenames,
+            files=files,
+            minimum_range=self._query_assistant_numeric_range(
+                value.get("min", None) for value in values
+            ),
+            maximum_range=self._query_assistant_numeric_range(
+                value.get("max", None) for value in values
+            ),
+            context_truncated=(
+                source_datasets_truncated
+                or producers_truncated
+                or casenames_truncated
+                or files_truncated
+            ),
+        )
+
     def query_translation_request(self, request_text: str) -> QueryTranslationRequest:
         navigation = self.application.get_navigation(
             {
@@ -222,6 +301,11 @@ class QueryAssistantControllerMixin:
             context_truncated=(
                 len(variables) > MAX_CONTEXT_VARIABLES
                 or len(source_datasets) > MAX_CONTEXT_SOURCES
+            ),
+            source_filter_context=(
+                self.source_filter_translation_context()
+                if target == "source_filter"
+                else None
             ),
         )
 
@@ -636,6 +720,18 @@ class QueryAssistantControllerMixin:
             status = (
                 f"Valid · {source_count} source row"
                 f"{'s' if source_count != 1 else ''}"
+            )
+            rank_value = getattr(self, "_query_assistant_rank_value", None)
+            tie_count = int(getattr(self.state, "queryAssistantTieCount", 0) or 0)
+            self.state.queryAssistantProposalSummary = (
+                summarize_catalog_query(
+                    action,
+                    rank_value=rank_value,
+                    tie_count=tie_count,
+                )
+                + " Preview: "
+                + f"{source_count} matching source row"
+                + ("." if source_count == 1 else "s.")
             )
         else:
             status = (

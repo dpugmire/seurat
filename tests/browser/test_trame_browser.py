@@ -1257,6 +1257,23 @@ def test_query_assistant_reviews_before_applying(page, seurat_server):
     assert console_errors == [], response_errors
 
 
+def test_query_assistant_panel_drags(page, seurat_server):
+    _open_app(page, seurat_server)
+
+    page.get_by_role("button", name="Ask").click()
+    panel = page.locator("#seurat-query-assistant-panel")
+    panel.wait_for(state="visible")
+    handle = panel.locator(".seurat-floating-panel-drag-handle")
+    initial = panel.bounding_box()
+    assert initial is not None
+
+    _drag(page, handle, delta_x=48, delta_y=32)
+    moved = panel.bounding_box()
+    assert moved["x"] == pytest.approx(initial["x"] + 48, abs=2)
+    assert moved["y"] == pytest.approx(initial["y"] + 32, abs=2)
+    assert not panel.evaluate("panel => panel.classList.contains('is-dragging')")
+
+
 def test_visualization_assistant_reviews_before_adding_to_grid(
     page, seurat_server
 ):

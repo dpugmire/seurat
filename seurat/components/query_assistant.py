@@ -8,13 +8,17 @@ from trame.widgets import vuetify3 as vuetify
 class QueryAssistantDialog(TrameComponent):
     def build(self):
         ctrl = self.ctrl
-        with vuetify.VDialog(
-            v_model=("showQueryAssistant",),
-            max_width="780",
-            persistent=True,
+        with html.Div(
+            id="seurat-query-assistant-panel",
+            v_show=("showQueryAssistant",),
+            classes=(
+                "seurat-floating-options-panel "
+                "seurat-ai-assistant-panel "
+                "seurat-query-assistant-panel"
+            ),
         ):
-            with vuetify.VCard():
-                with vuetify.VCardTitle():
+            with vuetify.VCard(classes="seurat-floating-options-card", elevation=6):
+                with vuetify.VCardTitle(classes="seurat-floating-options-titlebar"):
                     with html.Div(
                         style=(
                             "display:flex; align-items:center; gap:8px; width:100%;"
@@ -24,7 +28,8 @@ class QueryAssistantDialog(TrameComponent):
                             "{{ queryAssistantTarget === 'source_filter' "
                             "? 'Source Filter Assistant' "
                             ": (queryAssistantTarget === 'visualization' "
-                            "? 'Visualization Assistant' : 'Query Assistant') }}"
+                            "? 'Visualization Assistant' : 'Query Assistant') }}",
+                            classes="seurat-floating-panel-drag-handle",
                         )
                         vuetify.VSpacer()
                         vuetify.VBtn(
@@ -34,7 +39,7 @@ class QueryAssistantDialog(TrameComponent):
                             click=ctrl.close_query_assistant,
                         )
 
-                with vuetify.VCardText():
+                with vuetify.VCardText(classes="seurat-floating-options-content"):
                     with vuetify.Template(
                         v_if="queryAssistantTarget === 'source_filter'"
                     ):

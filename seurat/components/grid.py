@@ -10,6 +10,7 @@ from seurat.widgets import GridRuntime
 from .dialogs import (
     PlotSettingsPanel,
     PluginOptionsPanel,
+    ScalarFieldAssistantPanel,
     ScalarFieldSettingsPanel,
     ScalarPlotDialog,
     SourceDialog,
@@ -693,6 +694,7 @@ class GridWorkspace(TrameComponent):
         self.plot_settings_panel = PlotSettingsPanel(server)
         self.plugin_options_panel = PluginOptionsPanel(server)
         self.scalar_field_settings_panel = ScalarFieldSettingsPanel(server)
+        self.scalar_field_assistant_panel = ScalarFieldAssistantPanel(server)
 
     def build(self):
         ctrl = self.ctrl
@@ -942,7 +944,7 @@ class GridWorkspace(TrameComponent):
                                 v_if="gridLayoutMode !== 'freeform' || (tile && (tile.variable_name || tile.src || (tile.plot && Object.keys(tile.plot).length) || (tile.status && tile.status !== 'empty')))",
                                 click=(
                                     ctrl.set_active_grid_cell,
-                                    "[i, (($event && $event.target && $event.target.closest && $event.target.closest('.seurat-cell-close, .seurat-timeline-driver-btn, .seurat-grid-track-resize-handle')) ? 1 : 0), (($event && $event.shiftKey) ? 1 : 0)]",
+                                    "[i, (($event && $event.target && $event.target.closest && $event.target.closest('.seurat-cell-close, .seurat-timeline-driver-btn, .seurat-scalar-field-ai-btn, .seurat-grid-track-resize-handle')) ? 1 : 0), (($event && $event.shiftKey) ? 1 : 0)]",
                                 ),
                                 classes="seurat-dropcell",
                                 raw_attrs=[
@@ -1104,6 +1106,39 @@ class GridWorkspace(TrameComponent):
                                         html.Div(
                                             "{{ tile.display_title || tile.variable_name || 'variable' }}",
                                             style="flex:1 1 auto; min-width:0; font-size:0.9rem; font-weight:400; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;",
+                                        )
+                                        html.Button(
+                                            "AI",
+                                            v_if=(
+                                                "scalarFieldAssistantAvailable"
+                                                " && (tile.media_type === 'plot1d'"
+                                                " || tile.variable_type === 'scalarField'"
+                                                " || tile.payload_type === 'SCALAR_FIELD'"
+                                                " || tile.visualization_item_type === 'SCALAR_FIELD')"
+                                            ),
+                                            classes="seurat-scalar-field-ai-btn",
+                                            click=(
+                                                ctrl.open_scalar_field_options_assistant,
+                                                "[i]",
+                                            ),
+                                            raw_attrs=[
+                                                'type="button"',
+                                                'aria-label="Open plot options assistant"',
+                                            ],
+                                            style=(
+                                                "flex:0 0 auto;"
+                                                "height:20px;"
+                                                "min-width:26px;"
+                                                "padding:0 5px;"
+                                                "font-size:11px;"
+                                                "line-height:18px;"
+                                                "border:1px solid currentColor;"
+                                                "border-radius:3px;"
+                                                "background:rgba(255,255,255,.9);"
+                                                "color:#111;"
+                                                "cursor:pointer;"
+                                            ),
+                                            title="Open plot options assistant",
                                         )
                                         with html.Button(
                                             v_if=(
@@ -1502,3 +1537,4 @@ class GridWorkspace(TrameComponent):
             self.plot_settings_panel.build()
             self.plugin_options_panel.build()
             self.scalar_field_settings_panel.build()
+            self.scalar_field_assistant_panel.build()

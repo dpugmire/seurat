@@ -1431,6 +1431,14 @@ body.seurat-panzoom-zooming * {
   left: max(8px, min(240px, calc(100vw - 768px)));
   width: min(760px, calc(100vw - 16px));
 }
+.seurat-floating-options-panel.seurat-ai-assistant-panel {
+  left: max(8px, min(280px, calc(100vw - 648px)));
+  width: min(640px, calc(100vw - 16px));
+}
+.seurat-floating-options-panel.seurat-query-assistant-panel {
+  left: max(8px, min(220px, calc(100vw - 788px)));
+  width: min(780px, calc(100vw - 16px));
+}
 .seurat-floating-options-panel.is-dragging {
   user-select: none;
 }

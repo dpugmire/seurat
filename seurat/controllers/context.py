@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
 from seurat.backends import SeuratBackend
+from seurat.plot_options_assistant import PlotOptionsTranslator
 from seurat.query_assistant import QueryTranslator
 
 
@@ -18,4 +19,5 @@ class ControllerContext:
     image_association_schema_path: str = ""
     campaign_schema_path: str = ""
     query_translator: Optional[QueryTranslator] = None
+    plot_options_translator: Optional[PlotOptionsTranslator] = None
     interaction_log: Optional[Any] = None

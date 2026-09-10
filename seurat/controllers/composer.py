@@ -107,6 +107,7 @@ def attach_controllers(
     campaign_schema_path: str = "",
     backend: Optional[SeuratBackend] = None,
     query_translator=None,
+    plot_options_translator=None,
     interaction_log=None,
 ):
     catalog_backend = backend if backend is not None else LocalCampaignBackend(db)
@@ -120,6 +121,7 @@ def attach_controllers(
         image_association_schema_path=image_association_schema_path,
         campaign_schema_path=campaign_schema_path,
         query_translator=query_translator,
+        plot_options_translator=plot_options_translator,
         interaction_log=interaction_log,
     )
     controller = SeuratController(context).register()
