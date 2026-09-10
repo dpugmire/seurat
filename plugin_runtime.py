@@ -36,6 +36,8 @@ _BUILTIN_PLUGIN_MODULES = (
     "seurat_plugins.divertor_lambda_q_timeseries",
     "seurat_plugins.divertor_load_map",
     "seurat_plugins.divertor_target_totals_timeseries",
+    "seurat_plugins.mhd_energy_conservation",
+    "seurat_plugins.mhd_energy_partition",
 )
 _FAILED_BUILTIN_PLUGIN_IMPORTS: set[str] = set()
 
