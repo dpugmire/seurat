@@ -3352,10 +3352,17 @@ def test_physical_timeline_uses_declared_time_values(page, seurat_server):
     _open_app(page, seurat_server, mode="physical")
 
     label = page.locator("#seurat-vcr-time-value")
+    slider = page.locator("#seurat-vcr-step-slider")
     image = page.locator('img[data-grid-image-sequence="1"]')
     label.wait_for(state="visible")
     assert label.text_content() == "Time = 0"
     assert image.get_attribute("data-current-frame") == "0"
+    label_box = label.bounding_box()
+    slider_box = slider.bounding_box()
+    assert label_box is not None
+    assert slider_box is not None
+    assert label_box["y"] + label_box["height"] <= slider_box["y"] + 1
+    slider_width = slider_box["width"]
 
     page.get_by_title("Forward step").click()
 
@@ -3363,6 +3370,12 @@ def test_physical_timeline_uses_declared_time_values(page, seurat_server):
         "document.querySelector('#seurat-vcr-time-value').textContent === 'Time = 0.25'"
     )
     assert image.get_attribute("data-current-frame") == "1"
+    label_box = label.bounding_box()
+    slider_box = slider.bounding_box()
+    assert label_box is not None
+    assert slider_box is not None
+    assert label_box["y"] + label_box["height"] <= slider_box["y"] + 1
+    assert slider_box["width"] == pytest.approx(slider_width, abs=1)
 
 
 def test_mixed_step_sequence_uses_declared_time_for_split_plot_cursor(

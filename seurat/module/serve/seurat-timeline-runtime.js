@@ -480,6 +480,7 @@
       } else {
         label.textContent = (plots.length ? "Step = " : "Time = ") + formatTimelineValue(safeSeconds);
       }
+      label.setAttribute("title", label.textContent || "");
     }
 
     const slider = gridRuntimeElementById("seurat-vcr-step-slider");
