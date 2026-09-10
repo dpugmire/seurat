@@ -5,7 +5,11 @@ import numpy as np
 import pytest
 
 from db import CampaignDb
-from ingest_campaign import _load_unified_representation_index, parse_campaign
+from ingest_campaign import (
+    _load_unified_representation_index,
+    _load_visualization_api_index,
+    parse_campaign,
+)
 from plugin_runtime import render_plugin_tile
 from seurat.demo_campaign import (
     DEMO_SOURCES,
@@ -19,6 +23,23 @@ from seurat.demo_campaign import (
     temporary_demo_campaign,
 )
 from sqlite_store import open_sqlite_collection
+
+
+def _require_unified_demo_api():
+    hpc_campaign = pytest.importorskip("hpc_campaign")
+    required = (
+        "add_variable",
+        "add_image_sequence",
+        "add_activity",
+        "data",
+        "set_schema",
+    )
+    missing = [name for name in required if not hasattr(hpc_campaign.Manager, name)]
+    if missing:
+        pytest.skip(
+            "installed hpc-campaign does not provide unified demo API "
+            f"(missing: {', '.join(missing)})"
+        )
 
 
 def test_analytical_fields_are_deterministic_and_time_varying():
@@ -102,7 +123,7 @@ def test_demo_sources_preserve_defaults_and_add_deterministic_variants():
 
 
 def test_generated_demo_archive_and_ingestion(tmp_path: Path):
-    pytest.importorskip("hpc_campaign")
+    _require_unified_demo_api()
     config = DemoConfig(
         steps=3,
         samples_1d=16,
@@ -243,8 +264,83 @@ def test_generated_demo_archive_and_ingestion(tmp_path: Path):
         collection.close()
 
 
+def test_legacy_visualization_api_archive_is_supported(tmp_path: Path):
+    campaign_path = tmp_path / "legacy.aca"
+    con = sqlite3.connect(campaign_path)
+    try:
+        con.executescript(
+            """
+            create table dataset(
+                rowid integer primary key,
+                uuid text,
+                name text,
+                fileformat text,
+                deltime integer
+            );
+            create table visualization_sequence(
+                visid integer primary key,
+                name text,
+                vistype text,
+                metadata text
+            );
+            create table visualization_item(
+                visid integer,
+                item_order integer,
+                item_type text,
+                item_uuid text,
+                metadata text
+            );
+            create table visualization_variable(
+                visid integer,
+                datasetid integer,
+                variable_name text,
+                role text
+            );
+            """
+        )
+        con.execute(
+            "insert into dataset(rowid, uuid, name, fileformat, deltime) values (?, ?, ?, ?, ?)",
+            (1, "source-uuid", "run/output.bp", "BP", 0),
+        )
+        con.execute(
+            "insert into dataset(rowid, uuid, name, fileformat, deltime) values (?, ?, ?, ?, ?)",
+            (2, "item-uuid", "visualizations/pressure/image.0000.png", "IMAGE", 0),
+        )
+        con.execute(
+            "insert into visualization_sequence(visid, name, vistype, metadata) values (?, ?, ?, ?)",
+            (1, "pressure/heatmap", "field_2d", "{}"),
+        )
+        con.execute(
+            "insert into visualization_item(visid, item_order, item_type, item_uuid, metadata) values (?, ?, ?, ?, ?)",
+            (1, 0, "IMAGE", "item-uuid", "{}"),
+        )
+        con.execute(
+            "insert into visualization_variable(visid, datasetid, variable_name, role) values (?, ?, ?, ?)",
+            (1, 1, "pressure", "color-by"),
+        )
+        con.commit()
+    finally:
+        con.close()
+
+    assert _load_unified_representation_index(str(campaign_path)) == {}
+    visualization_index = _load_visualization_api_index(str(campaign_path))
+    assert list(visualization_index) == ["visualizations/pressure/image.0000.png"]
+    entry = visualization_index["visualizations/pressure/image.0000.png"]
+    assert entry["sequence_name"] == "pressure/heatmap"
+    assert entry["visualization_name"] == "heatmap"
+    assert entry["visualization_kind"] == "field_2d"
+    assert entry["item_type"] == "IMAGE"
+    assert entry["display_variables"] == [
+        {
+            "name": "pressure",
+            "roles": ["color-by"],
+            "source_dataset": "run/output.bp",
+        }
+    ]
+
+
 def test_temporary_demo_campaign_removes_generated_files():
-    pytest.importorskip("hpc_campaign")
+    _require_unified_demo_api()
     config = DemoConfig(steps=2, samples_1d=8, shape_2d=(4, 4))
     with temporary_demo_campaign(config=config) as demo:
         root = demo.root

@@ -49,3 +49,4 @@ class LifecycleControllerMixin:
         except Exception as e:
             self.state.dbOk = False
             self.state.dbStatus = f"Load failed: {type(e).__name__}: {e}"
+            print(self.state.dbStatus, flush=True)

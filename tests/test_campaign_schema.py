@@ -201,6 +201,68 @@ class CampaignSchemaTests(unittest.TestCase):
 
         self.assertEqual(layout["file_groups"]["simulation"]["datasets"], [self.simulation_a])
 
+    def test_run_relative_append_path_matches_immediate_campaign_children(self):
+        schema = {
+            "schema_version": 1,
+            "name": "mhd_orszag_tang",
+            "time": {"variable": "time"},
+            "files": {
+                "output": {
+                    "role": "time_series",
+                    "mode": "append",
+                    "path": "output.bp",
+                },
+            },
+        }
+        datasets = [
+            "__campaign_schema.yaml",
+            "hll_first_order/output.bp",
+            "hll_first_order/output.bp/visualizations/pressure/image.000000.png",
+            "plans/render.py",
+            "rusanov_first_order/output.bp",
+        ]
+        layout = _interpret_campaign_schema(schema, datasets, {})
+
+        self.assertEqual(
+            layout["schema_scope_prefixes"],
+            ["hll_first_order", "rusanov_first_order"],
+        )
+        self.assertEqual(
+            layout["file_groups"]["output"]["datasets"],
+            ["hll_first_order/output.bp", "rusanov_first_order/output.bp"],
+        )
+
+        values = {
+            "hll_first_order/output.bp/time": [0.0, 0.5, 1.0],
+            "rusanov_first_order/output.bp/time": [0.0, 0.25],
+        }
+        variables = {
+            path: {"AvailableStepsCount": str(len(time_values))}
+            for path, time_values in values.items()
+        }
+        context = _build_schema_time_context(
+            layout,
+            FakeReader(values),
+            variables,
+        )
+
+        self.assertEqual(
+            _schema_metadata_for_file(
+                context,
+                "hll_first_order/output.bp",
+                frame_index=1,
+            )["physical_time"],
+            0.5,
+        )
+        self.assertEqual(
+            _schema_metadata_for_file(
+                context,
+                "rusanov_first_order/output.bp",
+                frame_index=1,
+            )["physical_time"],
+            0.25,
+        )
+
     def test_external_campaign_schema_preserves_file_group_pattern(self):
         datasets = ["xgc.3d.00010.bp", "xgc.3d.00012.bp"]
         with tempfile.TemporaryDirectory() as temp_dir:

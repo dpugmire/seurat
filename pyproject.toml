@@ -22,7 +22,7 @@ schema = [
     "PyYAML",
 ]
 demo = [
-    "hpc-campaign>=0.7",
+    "hpc-campaign>=0.7.1",
     # hpc-campaign 0.7 imports dateutil but does not declare it yet.
     "python-dateutil>=2.9",
 ]

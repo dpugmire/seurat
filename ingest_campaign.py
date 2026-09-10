@@ -57,10 +57,16 @@ _VISUALIZATION_API_TABLES = {
     "dataset",
 }
 _UNIFIED_VARIABLE_TABLES = {
+    "action_spec",
+    "activity",
+    "activity_input",
+    "activity_input_step_mapping",
+    "activity_kind",
+    "activity_output",
+    "campaign_run",
     "logical_variable",
-    "variable_derivation_edge",
     "variable_chunk",
-    "variable_chunk_source_step",
+    "variable_definition",
     "dataset",
 }
 _CAMPAIGN_SCHEMA_TABLES = {
@@ -707,7 +713,97 @@ def _resolve_schema_time_series_datasets(
     return result
 
 
-def _interpret_campaign_schema(
+def _schema_layout_dataset_count(layout: Dict[str, Any]) -> int:
+    return sum(
+        len(group.get("datasets", []) or [])
+        for group in (layout.get("file_groups", {}) or {}).values()
+    )
+
+
+def _schema_immediate_child_prefixes(dataset_names: List[str]) -> List[str]:
+    prefixes = {
+        name.split("/", 1)[0]
+        for name in dataset_names
+        if "/" in name and name.split("/", 1)[0]
+    }
+    return sorted(prefixes)
+
+
+def _strip_schema_scope_prefix(prefix: str, dataset_names: List[str]) -> List[str]:
+    prefix_slash = f"{prefix}/"
+    return [
+        name[len(prefix_slash) :]
+        for name in dataset_names
+        if name.startswith(prefix_slash)
+    ]
+
+
+def _strip_schema_timeseries_scope_prefix(
+    prefix: str,
+    timeseries: Dict[str, List[str]],
+) -> Dict[str, List[str]]:
+    prefix_slash = f"{prefix}/"
+    scoped: Dict[str, List[str]] = {}
+    for name, datasets in timeseries.items():
+        scoped_datasets = [
+            dataset[len(prefix_slash) :]
+            for dataset in datasets
+            if dataset.startswith(prefix_slash)
+        ]
+        if not scoped_datasets:
+            continue
+        scoped_name = name[len(prefix_slash) :] if name.startswith(prefix_slash) else name
+        scoped[scoped_name] = scoped_datasets
+    return scoped
+
+
+def _prefix_schema_layout_datasets(prefix: str, layout: Dict[str, Any]) -> Dict[str, Any]:
+    prefixed = dict(layout)
+    prefixed["scope"] = prefix
+    file_groups: Dict[str, Dict[str, Any]] = {}
+    for group_name, group in (layout.get("file_groups", {}) or {}).items():
+        prefixed_group = dict(group)
+        prefixed_group["datasets"] = [
+            f"{prefix}/{dataset}" for dataset in group.get("datasets", []) or []
+        ]
+        file_groups[str(group_name)] = prefixed_group
+    prefixed["file_groups"] = file_groups
+    return prefixed
+
+
+def _merge_scoped_schema_layouts(
+    schema: Dict[str, Any],
+    layouts: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    file_groups: Dict[str, Dict[str, Any]] = {}
+    for layout in layouts:
+        for group_name, group in (layout.get("file_groups", {}) or {}).items():
+            group_key = str(group_name)
+            if group_key not in file_groups:
+                merged_group = dict(group)
+                merged_group["datasets"] = []
+                if "step_indices" in merged_group:
+                    merged_group["step_indices"] = []
+                file_groups[group_key] = merged_group
+
+            target = file_groups[group_key]
+            target["datasets"].extend(group.get("datasets", []) or [])
+            if "step_indices" in target:
+                target["step_indices"].extend(group.get("step_indices", []) or [])
+
+    layout = {
+        "schema_version": int(schema.get("schema_version", 0)),
+        "schema_name": str(schema.get("name", "") or ""),
+        "schema_scope_prefixes": [
+            str(layout.get("scope", "") or "") for layout in layouts
+        ],
+        "file_groups": file_groups,
+    }
+    layout.update(_interpret_schema_optional_metadata(schema, file_groups))
+    return layout
+
+
+def _interpret_campaign_schema_at_root(
     schema: Dict[str, Any],
     dataset_names: List[str],
     timeseries: Dict[str, List[str]],
@@ -782,6 +878,38 @@ def _interpret_campaign_schema(
     }
     layout.update(_interpret_schema_optional_metadata(schema, file_groups))
     return layout
+
+
+def _interpret_campaign_schema(
+    schema: Dict[str, Any],
+    dataset_names: List[str],
+    timeseries: Dict[str, List[str]],
+) -> Dict[str, Any]:
+    root_layout = _interpret_campaign_schema_at_root(
+        schema,
+        dataset_names,
+        timeseries,
+    )
+    if _schema_layout_dataset_count(root_layout) > 0:
+        return root_layout
+
+    scoped_layouts: List[Dict[str, Any]] = []
+    for prefix in _schema_immediate_child_prefixes(dataset_names):
+        scoped_dataset_names = _strip_schema_scope_prefix(prefix, dataset_names)
+        scoped_timeseries = _strip_schema_timeseries_scope_prefix(prefix, timeseries)
+        scoped_layout = _interpret_campaign_schema_at_root(
+            schema,
+            scoped_dataset_names,
+            scoped_timeseries,
+        )
+        if _schema_layout_dataset_count(scoped_layout) <= 0:
+            continue
+        scoped_layouts.append(_prefix_schema_layout_datasets(prefix, scoped_layout))
+
+    if scoped_layouts:
+        return _merge_scoped_schema_layouts(schema, scoped_layouts)
+
+    return root_layout
 
 
 def _load_campaign_schema(
@@ -1780,6 +1908,65 @@ def _json_object_or_empty(value: Any) -> Dict[str, Any]:
     return {"value": decoded}
 
 
+def _json_list_or_empty(value: Any) -> List[Any]:
+    if value is None:
+        return []
+
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="replace")
+
+    if isinstance(value, list):
+        return list(value)
+
+    if not isinstance(value, str):
+        return []
+
+    text = value.strip()
+    if not text:
+        return []
+
+    try:
+        decoded = json.loads(text)
+    except Exception:
+        return []
+
+    return list(decoded) if isinstance(decoded, list) else []
+
+
+def _activity_source_step(row: sqlite3.Row, chunk_index: int) -> int:
+    if row["mapping_id"] is None:
+        return chunk_index
+
+    try:
+        output_start = int(row["mapping_output_start"])
+        count = int(row["mapping_count"])
+    except Exception:
+        return chunk_index
+
+    offset = chunk_index - output_start
+    if offset < 0 or offset >= count:
+        return chunk_index
+
+    encoding = str(row["mapping_encoding"] or "").strip().lower()
+    if encoding in {"identity", "stride"}:
+        try:
+            source_start = int(row["mapping_source_start"])
+            stride = int(row["mapping_stride"])
+        except Exception:
+            return chunk_index
+        return source_start + offset * stride
+
+    if encoding == "explicit":
+        steps = _json_list_or_empty(row["mapping_explicit_steps"])
+        if offset < len(steps):
+            try:
+                return int(steps[offset])
+            except Exception:
+                return chunk_index
+
+    return chunk_index
+
+
 def _visualization_short_name(sequence_name: str) -> str:
     """
     Convert a full sequence path to the user-facing visualization token.
@@ -1996,7 +2183,7 @@ def _load_visualization_api_index(campaign_path: str) -> Dict[str, Dict[str, Any
 def _load_unified_representation_index(
     campaign_path: str,
 ) -> Dict[str, Dict[str, Any]]:
-    """Load image and scalar-field chunks from the unified variable graph."""
+    """Load image and scalar-field chunks from the activity variable graph."""
 
     path = Path(campaign_path).expanduser()
     if not path.exists():
@@ -2019,35 +2206,50 @@ def _load_unified_representation_index(
             select
                 derived.variableid as derived_variable_id,
                 derived.name as derived_variable_name,
-                derived.representation_kind as representation_kind,
-                derived.representation_metadata as representation_metadata,
+                definition.name as derived_definition_name,
                 derived_dataset.name as derived_dataset_name,
                 chunk.chunkid as chunk_id,
                 chunk.chunk_index as chunk_index,
                 payload.name as payload_name,
                 payload.uuid as payload_uuid,
                 payload.fileformat as payload_fileformat,
-                edge.edgeid as edge_id,
-                edge.role as source_role,
+                output.role as output_role,
+                activity.uuid as activity_uuid,
+                kind.name as action_name,
+                spec.metadata as action_spec_metadata,
+                input.inputid as input_id,
+                input.role as source_role,
                 source.name as source_variable_name,
                 source_dataset.name as source_dataset_name,
-                mapping.source_step as source_step
-            from logical_variable as derived
+                mapping.mappingid as mapping_id,
+                mapping.output_start as mapping_output_start,
+                mapping.count as mapping_count,
+                mapping.encoding as mapping_encoding,
+                mapping.source_start as mapping_source_start,
+                mapping.stride as mapping_stride,
+                mapping.explicit_steps as mapping_explicit_steps
+            from activity_output as output
+            join activity as activity on activity.activityid = output.activityid
+            join activity_kind as kind on kind.kindid = activity.kindid
+            join logical_variable as derived on derived.variableid = output.variableid
+            join variable_definition as definition on definition.definitionid = derived.definitionid
             join dataset as derived_dataset on derived_dataset.rowid = derived.datasetid
             join variable_chunk as chunk on chunk.variableid = derived.variableid
             join dataset as payload on payload.rowid = chunk.payload_datasetid
-            left join variable_derivation_edge as edge
-                on edge.derived_variable_id = derived.variableid
-            left join logical_variable as source
-                on source.variableid = edge.source_variable_id
+            left join action_spec as spec on spec.specid = activity.specid
+            left join activity_input as input on input.activityid = activity.activityid
+            left join logical_variable as source on source.variableid = input.variableid
             left join dataset as source_dataset
                 on source_dataset.rowid = source.datasetid
-            left join variable_chunk_source_step as mapping
-                on mapping.chunkid = chunk.chunkid and mapping.edgeid = edge.edgeid
-            where lower(derived.representation_kind) in ('image', 'scalar_field')
+            left join activity_input_step_mapping as mapping
+                on mapping.inputid = input.inputid
+               and mapping.output_variableid = derived.variableid
+               and chunk.chunk_index >= mapping.output_start
+               and chunk.chunk_index < mapping.output_start + mapping.count
+            where kind.name = 'visualization'
               and derived_dataset.deltime = 0
               and payload.deltime = 0
-            order by derived.variableid, chunk.chunk_index, edge.edgeid
+            order by derived.variableid, chunk.chunk_index, input.inputid
             """
         )
 
@@ -2056,12 +2258,35 @@ def _load_unified_representation_index(
             derived_id = int(row["derived_variable_id"])
             chunk_id = int(row["chunk_id"])
             key = (derived_id, chunk_id)
-            metadata = _json_object_or_empty(row["representation_metadata"])
-            representation_kind = str(row["representation_kind"] or "").strip().lower()
-            item_type = "IMAGE" if representation_kind == "image" else SCALAR_FIELD_ITEM_TYPE
+            chunk_index = int(row["chunk_index"])
+            metadata = _json_object_or_empty(row["action_spec_metadata"])
+            representation_kind = str(
+                metadata.get("representation_kind", "")
+                or metadata.get("item_type", "")
+                or metadata.get("payload_type", "")
+                or ""
+            ).strip().lower()
+            metadata_kind = str(metadata.get("kind", "") or "").strip().lower()
+            payload_fileformat = str(row["payload_fileformat"] or "").strip()
+            if payload_fileformat.upper() == "IMAGE":
+                item_type = "IMAGE"
+                representation_kind = "image"
+            elif representation_kind in {
+                "scalar_field",
+                "scalar-field",
+                "scalarfield",
+                SCALAR_FIELD_ITEM_TYPE.lower(),
+            } or metadata_kind == SCALAR_FIELD_VARIABLE_TYPE.lower():
+                item_type = SCALAR_FIELD_ITEM_TYPE
+                representation_kind = "scalar_field"
+            else:
+                continue
+
             visualization_name = str(metadata.get("visualization_name", "") or "").strip()
             if not visualization_name:
                 visualization_name = str(row["derived_variable_name"] or "").strip("/").rsplit("/", 1)[-1]
+            source_role = str(row["source_role"] or "").strip()
+            source_step = _activity_source_step(row, chunk_index)
 
             entry = chunks.setdefault(
                 key,
@@ -2076,18 +2301,16 @@ def _load_unified_representation_index(
                         metadata.get("visualization_kind", "") or representation_kind
                     ),
                     "sequence_metadata": metadata,
-                    "item_order": int(row["chunk_index"]),
+                    "item_order": chunk_index,
                     "item_type": item_type,
                     "item_uuid": str(row["payload_uuid"] or ""),
                     "item_metadata": {
-                        "source_step": (
-                            int(row["source_step"])
-                            if row["source_step"] is not None
-                            else int(row["chunk_index"])
-                        )
+                        "activity_uuid": str(row["activity_uuid"] or ""),
+                        "output_role": str(row["output_role"] or ""),
+                        "source_steps": {},
                     },
                     "item_dataset_name": str(row["payload_name"] or "").strip("/"),
-                    "item_file_format": str(row["payload_fileformat"] or ""),
+                    "item_file_format": payload_fileformat,
                     "scalar_field_metadata": (
                         metadata if item_type == SCALAR_FIELD_ITEM_TYPE else {}
                     ),
@@ -2098,9 +2321,12 @@ def _load_unified_representation_index(
 
             source_variable = str(row["source_variable_name"] or "").strip()
             if source_variable:
+                if source_role:
+                    entry["item_metadata"]["source_steps"][source_role] = source_step
+                entry["item_metadata"].setdefault("source_step", source_step)
                 variable_spec = {
                     "name": source_variable,
-                    "role": str(row["source_role"] or "source"),
+                    "role": source_role or "source",
                     "source_dataset": str(row["source_dataset_name"] or ""),
                 }
                 if variable_spec not in entry["variables"]:
@@ -2314,16 +2540,30 @@ def parse_campaign(
     visualization_api_matched = 0
     scalar_field_visualization_count = 0
     skipped_non_visual_data = 0
-    # Load the visualization API once from SQLite metadata, then use it while
-    # walking ADIOS variables. Older campaigns without these tables fall back to
-    # schema or legacy path parsing.
-    visualization_api_index = _load_visualization_api_index(campaign_path)
-    if visualization_api_index:
-        print("visualization API item associations:", len(visualization_api_index))
+    # Load explicit visualization metadata once from SQLite, then use it while
+    # walking ADIOS variables. Prefer the newer activity-backed representation
+    # graph when present, but keep accepting provenance-branch campaigns that
+    # still describe rendered output through visualization_* tables.
+    legacy_visualization_api_index = _load_visualization_api_index(campaign_path)
     unified_representation_index = _load_unified_representation_index(campaign_path)
+    visualization_api_index = unified_representation_index or legacy_visualization_api_index
+    visualization_metadata_source = (
+        "activity-backed"
+        if unified_representation_index
+        else "provenance visualization"
+        if legacy_visualization_api_index
+        else ""
+    )
     if unified_representation_index:
-        print("unified variable representation chunks:", len(unified_representation_index))
-        visualization_api_index.update(unified_representation_index)
+        print(
+            "activity-backed variable representation chunks:",
+            len(unified_representation_index),
+        )
+    elif legacy_visualization_api_index:
+        print(
+            "provenance visualization metadata items:",
+            len(legacy_visualization_api_index),
+        )
 
     dataset_rows = _load_campaign_dataset_rows(campaign_path)
     dataset_names = [row["name"] for row in dataset_rows if row.get("name")]
@@ -2771,12 +3011,12 @@ def parse_campaign(
         )
     if visualization_api_index:
         print(
-            "visualization API association summary:",
+            f"{visualization_metadata_source} representation summary:",
             f"matched={visualization_api_matched}",
             f"available={len(visualization_api_index)}",
         )
     if scalar_field_visualization_count:
-        print("visualization API scalar field associations:", scalar_field_visualization_count)
+        print("scalar field visualization associations:", scalar_field_visualization_count)
     if skipped_non_visual_data:
         print("Skipped non-visual datasets:", skipped_non_visual_data)
 

@@ -112,21 +112,27 @@ class GeneratedDemoCampaign:
 
 def _hpc_campaign_api():
     try:
-        from hpc_campaign import Manager, VariableRef  # type: ignore
+        from hpc_campaign import Manager, VariableSpec  # type: ignore
     except ImportError as exc:
         raise DemoDependencyError(
             "Demo mode requires unified hpc-campaign support. "
             "Install Seurat with: python -m pip install -e '.[schema,demo]'"
         ) from exc
 
-    required = ("add_variable", "add_image_sequence", "data", "set_schema")
+    required = (
+        "add_variable",
+        "add_image_sequence",
+        "add_activity",
+        "data",
+        "set_schema",
+    )
     missing = [name for name in required if not hasattr(Manager, name)]
     if missing:
         raise DemoDependencyError(
             "The installed hpc-campaign does not provide the unified variable API "
             f"required by demo mode (missing: {', '.join(missing)})."
         )
-    return Manager, VariableRef
+    return Manager, VariableSpec
 
 
 def _quiet_hpc_call(function, *args, **kwargs):
@@ -337,6 +343,10 @@ variable_groups:
 """
 
 
+def _store_campaign_schema(manager, schema_path: Path, root: Path) -> None:
+    _quiet_hpc_call(manager.set_schema, schema_path.relative_to(root))
+
+
 def generate_demo_campaign(
     root: Path,
     config: DemoConfig = DemoConfig(),
@@ -344,7 +354,7 @@ def generate_demo_campaign(
     """Generate one complete synthetic campaign below ``root``."""
 
     config.validate()
-    Manager, _VariableRef = _hpc_campaign_api()
+    Manager, VariableSpec = _hpc_campaign_api()
     root = Path(root).expanduser().resolve()
     root.mkdir(parents=True, exist_ok=True)
     sources_dir = root / "sources"
@@ -396,9 +406,12 @@ def generate_demo_campaign(
                     dataset=representation_dataset,
                     variable=f"{variable_name}/heatmap",
                     images=_heatmap_images(frames, heatmap_metadata),
-                    derived_from={"color-by": primary_variables[variable_name]},
+                    inputs={"color-by": primary_variables[variable_name]},
                     source_steps={"color-by": range(config.steps)},
-                    representation_metadata=heatmap_metadata,
+                    action_spec={
+                        **heatmap_metadata,
+                        "representation_kind": "image",
+                    },
                     store=True,
                 )
 
@@ -411,19 +424,27 @@ def generate_demo_campaign(
                     frames,
                 )
                 _quiet_hpc_call(
-                    manager.add_variable,
-                    dataset=representation_dataset,
-                    variable=f"{variable_name}/scalar_field",
-                    chunks=scalar_chunks,
-                    derived_from={"color-by": primary_variables[variable_name]},
-                    representation_kind="scalar_field",
-                    representation_metadata=scalar_metadata,
+                    manager.add_activity,
+                    action="visualization",
+                    inputs={"color-by": primary_variables[variable_name]},
+                    outputs={
+                        "result": VariableSpec(
+                            dataset=representation_dataset,
+                            variable=f"{variable_name}/scalar_field",
+                            definition=variable_name,
+                            chunks=scalar_chunks,
+                        ),
+                    },
+                    action_spec={
+                        **scalar_metadata,
+                        "representation_kind": "scalar_field",
+                    },
                     source_steps={"color-by": range(config.steps)},
                 )
 
         schema_path = root / "__campaign_schema.yaml"
         schema_path.write_text(_schema_text(), encoding="utf-8")
-        _quiet_hpc_call(manager.set_schema, schema_path.relative_to(root))
+        _store_campaign_schema(manager, schema_path, root)
         print("Synthetic campaign ready.")
     finally:
         if manager is not None:
