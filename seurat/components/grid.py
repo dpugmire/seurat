@@ -10,6 +10,7 @@ from seurat.widgets import GridRuntime
 from .dialogs import (
     PlotSettingsPanel,
     PluginOptionsPanel,
+    ProvenanceDialog,
     ScalarFieldAssistantPanel,
     ScalarFieldSettingsPanel,
     ScalarPlotDialog,
@@ -689,6 +690,7 @@ class GridWorkspace(TrameComponent):
     def __init__(self, server):
         super().__init__(server)
         self.runtime = None
+        self.provenance_dialog = ProvenanceDialog(server)
         self.source_dialog = SourceDialog(server)
         self.scalar_plot_dialog = ScalarPlotDialog(server)
         self.plot_settings_panel = PlotSettingsPanel(server)
@@ -1538,19 +1540,21 @@ class GridWorkspace(TrameComponent):
                                 html.Div("{{ 'QueryView: ' + queryViewLabel }}", class_="text-caption")
                             with vuetify.Template(v_if="detailsProvenanceChain"):
                                 with html.Div(
-                                    class_="text-caption",
-                                    style=(
-                                        "display:flex; align-items:center; gap:10px; "
-                                        "width:100%; flex-wrap:wrap;"
-                                    ),
+                                    classes="seurat-provenance-strip text-caption",
                                 ):
-                                    html.Span("Provenance", class_="font-weight-bold")
+                                    vuetify.VBtn(
+                                        "Provenance",
+                                        variant="tonal",
+                                        size="small",
+                                        click=ctrl.open_provenance_dialog,
+                                    )
                                     html.Span(
-                                        "{{ detailsProvenanceChain }}",
-                                        style="overflow-wrap:anywhere;",
+                                        "{{ detailsProvenanceCompact || detailsProvenanceChain }}",
+                                        classes="seurat-provenance-compact",
                                     )
                     with vuetify.Template(v_if="!detailsSelectedVar"):
                         html.Div("Select a variable", class_="text-caption")
+            self.provenance_dialog.build()
             self.source_dialog.build()
             self.scalar_plot_dialog.build()
             self.plot_settings_panel.build()

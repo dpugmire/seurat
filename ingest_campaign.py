@@ -2382,6 +2382,173 @@ def _normalize_activity_inputs(inputs: List[Dict[str, Any]]) -> List[Dict[str, A
     return normalized
 
 
+def _prov_reference(value: Any) -> str:
+    if isinstance(value, dict):
+        value = value.get("$", "")
+    return str(value or "").strip()
+
+
+def _prov_qname(value: Any) -> str:
+    text = _prov_reference(value)
+    if ":" in text:
+        return text.rsplit(":", 1)[-1]
+    return text
+
+
+def _prov_type_values(attrs: Dict[str, Any]) -> List[Any]:
+    raw = attrs.get("prov:type")
+    if isinstance(raw, list):
+        return raw
+    if raw is None:
+        return []
+    return [raw]
+
+
+def _prov_has_type(attrs: Dict[str, Any], name: str) -> bool:
+    target = str(name or "").casefold()
+    return any(_prov_qname(value).casefold() == target for value in _prov_type_values(attrs))
+
+
+def _prov_activity_kind(attrs: Dict[str, Any]) -> str:
+    if _prov_has_type(attrs, "QuantityOfInterest"):
+        return "quantity_of_interest"
+    if _prov_has_type(attrs, "Visualization"):
+        return "visualization"
+    for value in _prov_type_values(attrs):
+        name = _prov_qname(value)
+        if name:
+            return name
+    return ""
+
+
+def _prov_action_metadata(
+    entities: Dict[str, Any],
+    usages: Dict[str, Any],
+    activity_id: str,
+) -> Dict[str, Any]:
+    for usage in usages.values():
+        if _prov_reference(usage.get("prov:activity")) != activity_id:
+            continue
+        if _prov_qname(usage.get("prov:role")).casefold() != "action_specification":
+            continue
+        plan = entities.get(_prov_reference(usage.get("prov:entity")), {})
+        if not isinstance(plan, dict):
+            continue
+        return _json_object_or_empty(plan.get("prov:value", ""))
+    return {}
+
+
+def _prov_activity_operation(metadata: Dict[str, Any]) -> str:
+    return str(
+        metadata.get("operation", "")
+        or metadata.get("visualization_type", "")
+        or metadata.get("representation_kind", "")
+        or metadata.get("kind", "")
+        or ""
+    ).strip()
+
+
+def _prov_activity_uuid(activity_id: str) -> str:
+    text = _prov_reference(activity_id)
+    if "activity_" in text:
+        return text.rsplit("activity_", 1)[-1]
+    return text
+
+
+def _load_prov_json_activity_provenance_index(
+    con: sqlite3.Connection,
+) -> Dict[tuple[str, str], Dict[str, Any]]:
+    """Load compact activity provenance from ACA PROV-JSON documents."""
+
+    if "provenance_document" not in _sqlite_table_names(con):
+        return {}
+
+    rows = con.execute(
+        """
+        select content
+        from provenance_document
+        where format = 'prov-json' and active = 1
+        order by name
+        """
+    ).fetchall()
+
+    grouped: Dict[tuple[str, str], Dict[str, Any]] = {}
+    for row in rows:
+        try:
+            document = json.loads(str(row["content"] or ""))
+        except Exception:
+            continue
+        if not isinstance(document, dict):
+            continue
+
+        entities = document.get("entity", {})
+        activities = document.get("activity", {})
+        usages = document.get("used", {})
+        derivations = document.get("wasDerivedFrom", {})
+        if not all(
+            isinstance(value, dict)
+            for value in (entities, activities, usages, derivations)
+        ):
+            continue
+
+        for derivation in derivations.values():
+            if not isinstance(derivation, dict):
+                continue
+            output_id = _prov_reference(derivation.get("prov:generatedEntity"))
+            input_id = _prov_reference(derivation.get("prov:usedEntity"))
+            activity_id = _prov_reference(derivation.get("prov:activity"))
+            output = entities.get(output_id, {})
+            source = entities.get(input_id, {})
+            activity = activities.get(activity_id, {})
+            if not all(isinstance(value, dict) for value in (output, source, activity)):
+                continue
+            if not _prov_has_type(output, "LogicalVariable"):
+                continue
+
+            output_dataset = str(output.get("hpc:datasetName", "") or "").strip("/")
+            output_variable = str(output.get("hpc:variable", "") or "").strip("/")
+            if not output_dataset or not output_variable:
+                continue
+
+            metadata = _prov_action_metadata(entities, usages, activity_id)
+            key = (output_dataset, output_variable)
+            entry = grouped.setdefault(
+                key,
+                {
+                    "activity_uuid": _prov_activity_uuid(activity_id),
+                    "activity_kind": _prov_activity_kind(activity),
+                    "activity_operation": _prov_activity_operation(metadata),
+                    "activity_metadata": metadata,
+                    "output_role": "",
+                    "output_definition": str(
+                        output.get("hpc:variableDefinition", "") or ""
+                    ),
+                    "inputs": [],
+                },
+            )
+
+            source_variable = str(source.get("hpc:variable", "") or "").strip()
+            if not source_variable:
+                continue
+            usage = usages.get(_prov_reference(derivation.get("prov:usage")), {})
+            input_spec = {
+                "name": source_variable,
+                "definition": str(source.get("hpc:variableDefinition", "") or ""),
+                "role": (
+                    _prov_qname(usage.get("prov:role"))
+                    if isinstance(usage, dict)
+                    else "source"
+                ),
+                "source_dataset": str(source.get("hpc:datasetName", "") or ""),
+            }
+            if input_spec not in entry["inputs"]:
+                entry["inputs"].append(input_spec)
+
+    for entry in grouped.values():
+        entry["inputs"] = _normalize_activity_inputs(entry.get("inputs", []))
+    return grouped
+
+
 def _load_activity_provenance_index(campaign_path: str) -> Dict[tuple[str, str], Dict[str, Any]]:
     """Load compact activity provenance keyed by output dataset and variable."""
 
@@ -2409,7 +2576,7 @@ def _load_activity_provenance_index(campaign_path: str) -> Dict[tuple[str, str],
             "variable_definition",
         }
         if not required.issubset(available_tables):
-            return {}
+            return _load_prov_json_activity_provenance_index(con)
 
         rows = con.execute(
             """
@@ -2464,6 +2631,7 @@ def _load_activity_provenance_index(campaign_path: str) -> Dict[tuple[str, str],
                     "activity_uuid": str(row["activity_uuid"] or ""),
                     "activity_kind": str(row["activity_kind"] or ""),
                     "activity_operation": operation,
+                    "activity_metadata": metadata,
                     "output_role": str(row["output_role"] or ""),
                     "output_definition": str(row["output_definition_name"] or ""),
                     "inputs": [],
@@ -2483,7 +2651,7 @@ def _load_activity_provenance_index(campaign_path: str) -> Dict[tuple[str, str],
 
         for entry in grouped.values():
             entry["inputs"] = _normalize_activity_inputs(entry.get("inputs", []))
-        return grouped
+        return grouped or _load_prov_json_activity_provenance_index(con)
     except sqlite3.Error as e:
         print(f"[warn] could not read activity provenance metadata: {e}")
         return {}

@@ -399,6 +399,7 @@ class CampaignDbNavigationTests(unittest.TestCase):
                 "close_workspace_tab",
                 "close_query_assistant",
                 "close_help_modal",
+                "close_provenance_dialog",
                 "confirm_scalar_plot_generation",
                 "context_menu_cell_add_source",
                 "context_menu_cell_clear",
@@ -425,6 +426,7 @@ class CampaignDbNavigationTests(unittest.TestCase):
                 "move_workspace_tab",
                 "load_workspace_state",
                 "open_plot_settings_plugin_options",
+                "open_provenance_dialog",
                 "open_query_assistant",
                 "open_scalar_field_options_assistant",
                 "open_source_query_assistant",
@@ -468,6 +470,7 @@ class CampaignDbNavigationTests(unittest.TestCase):
                 "toggle_add_source",
                 "toggle_scalar_field_background",
                 "toggle_movie_details",
+                "toggle_provenance_node_details",
                 "toggle_source_visibility",
                 "toggle_sources",
                 "toggle_timeline_driver_cell",
@@ -1807,6 +1810,10 @@ class CampaignDbNavigationTests(unittest.TestCase):
             state.detailsProvenanceChain,
             "heatmap --> visualization --> density --> run-a/output.bp",
         )
+        self.assertEqual(
+            [node["shape"] for node in state.detailsProvenanceNodes],
+            ["box", "box", "box", "cylinder"],
+        )
 
         controller.actions["toggle_sources"]()
         self.assertIn("run-a/output", state.detailsProvenanceChain)
@@ -1821,6 +1828,8 @@ class CampaignDbNavigationTests(unittest.TestCase):
             state.detailsProvenanceChain,
             "heatmap --> visualization: scalar_field --> density --> run-b/output.bp",
         )
+        self.assertEqual(state.detailsProvenanceNodes[0]["kind"], "visualization")
+        self.assertEqual(state.detailsProvenanceNodes[-1]["label"], "run-b/output.bp")
 
     def test_plugin_plot1d_source_dialog_applies_multiple_labeled_sources(self):
         for source_dataset, producer in (

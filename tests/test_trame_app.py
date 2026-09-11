@@ -204,6 +204,7 @@ class SeuratAppTests(unittest.TestCase):
             ui.grid_workspace,
             ui.context_menu,
             ui.grid_workspace.source_dialog,
+            ui.grid_workspace.provenance_dialog,
             ui.grid_workspace.scalar_plot_dialog,
             ui.grid_workspace.plot_settings_panel,
             ui.grid_workspace.plugin_options_panel,
@@ -263,6 +264,19 @@ class SeuratAppTests(unittest.TestCase):
         self.assertIn("Min/Max", ui.layout.html)
         self.assertIn("Provenance", ui.layout.html)
         self.assertIn("detailsProvenanceChain", ui.layout.html)
+        self.assertIn("detailsProvenanceCompact", ui.layout.html)
+        self.assertIn("detailsProvenanceGraph", ui.layout.html)
+        self.assertIn("seurat-provenance-detail-btn", ui.layout.html)
+        self.assertIn("seurat-provenance-detail-table-block", ui.layout.html)
+        self.assertIn("seurat-provenance-input-table", ui.layout.html)
+        self.assertIn("input.variable", ui.layout.html)
+        self.assertIn("input.role", ui.layout.html)
+        self.assertIn("seurat-provenance-branch-section", ui.layout.html)
+        self.assertIn("showProvenanceModal", ui.layout.html)
+        self.assertIn("seurat-provenance-graph", ui.layout.html)
+        self.assertIn('id="seurat-provenance-panel"', ui.layout.html)
+        self.assertIn("seurat-provenance-dialog-content", ui.layout.html)
+        self.assertIn("seurat-provenance-dialog", ui.layout.html)
         self.assertNotIn("detailsProvenanceRows", ui.layout.html)
         self.assertIn("detailsGlobalMin", ui.layout.html)
         self.assertNotIn('id="seurat-representation-details"', ui.layout.html)

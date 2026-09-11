@@ -179,6 +179,35 @@ def _input_roles(item: Dict[str, Any]) -> List[str]:
     return [role] if role else []
 
 
+def _display_input_role(role: str) -> str:
+    normalized = _text(role).lower().replace("-", "_")
+    if not normalized:
+        return ""
+    if normalized in {"streamline_0", "streamline_x"}:
+        return "streamline-x"
+    if normalized in {"streamline_1", "streamline_y"}:
+        return "streamline-y"
+    if normalized in {"streamline_2", "streamline_z"}:
+        return "streamline-z"
+    if normalized in {"color", "color_by"}:
+        return "color-by"
+    if normalized in {"contour", "contour_by"}:
+        return "contour-by"
+    return normalized.replace("_", "-")
+
+
+def _input_role_labels(item: Dict[str, Any]) -> List[str]:
+    labels: List[str] = []
+    seen = set()
+    for role in _input_roles(item):
+        label = _display_input_role(role)
+        key = label.casefold()
+        if label and key not in seen:
+            seen.add(key)
+            labels.append(label)
+    return labels
+
+
 def _role_priority(role: str) -> tuple[int, int]:
     normalized = _text(role).lower().replace("-", "_")
     if normalized.startswith("streamline_"):
@@ -207,7 +236,7 @@ def _skip_input(roles: List[str]) -> bool:
     return bool(normalized) and normalized <= {"x_axis"}
 
 
-def _provenance_input_names(raw_inputs: Any) -> List[str]:
+def _provenance_input_items(raw_inputs: Any) -> List[Dict[str, Any]]:
     inputs = _list_value(raw_inputs)
     items: List[Dict[str, Any]] = []
     for index, raw in enumerate(inputs):
@@ -220,12 +249,29 @@ def _provenance_input_names(raw_inputs: Any) -> List[str]:
         if _skip_input(roles):
             continue
         name = _short_variable_name(
-            _first_text(item, "label", "name", "variable_name", "variable_id", "definition")
+            _first_text(
+                item,
+                "_display_name",
+                "label",
+                "name",
+                "variable_name",
+                "variable_id",
+                "definition",
+            )
         )
         if not name:
             continue
         priority = min((_role_priority(role) for role in roles), default=(60, index))
+        source_label = _first_text(
+            item,
+            "_source_label",
+            "source_label",
+            "source_dataset",
+            "dataset",
+            "datasetName",
+        )
         item["_display_name"] = name
+        item["_source_label"] = source_label
         item["_priority"] = priority
         item["_index"] = index
         items.append(item)
@@ -237,9 +283,25 @@ def _provenance_input_names(raw_inputs: Any) -> List[str]:
             str(item.get("_display_name", "")),
         )
     )
-    names: List[str] = []
+    normalized: List[Dict[str, Any]] = []
     seen = set()
     for item in items:
+        name = str(item.get("_display_name", "") or "")
+        source_label = str(item.get("_source_label", "") or "")
+        key = (name.casefold(), source_label.casefold())
+        if key in seen:
+            continue
+        seen.add(key)
+        item["_display_name"] = name
+        item["_source_label"] = source_label
+        normalized.append(item)
+    return normalized
+
+
+def _provenance_input_names(raw_inputs: Any) -> List[str]:
+    names: List[str] = []
+    seen = set()
+    for item in _provenance_input_items(raw_inputs):
         name = str(item.get("_display_name", "") or "")
         key = name.casefold()
         if key in seen:
@@ -294,6 +356,632 @@ def _chain(*parts: Any) -> str:
     return " --> ".join(_text(part) for part in parts if _text(part))
 
 
+def _detail_rows(*pairs: tuple[str, Any]) -> List[Dict[str, str]]:
+    rows: List[Dict[str, str]] = []
+    for label, value in pairs:
+        if isinstance(value, (list, tuple)):
+            value = ", ".join(_text(item) for item in value if _text(item))
+        text = _text(value)
+        if text:
+            rows.append({"label": str(label), "value": text})
+    return rows
+
+
+def _compact_source_label(value: Any) -> str:
+    text = _text(value).strip("/")
+    if not text:
+        return ""
+    parts = [part for part in text.split("/") if part]
+    if len(parts) >= 2 and parts[-1].endswith(".bp"):
+        return "/".join(parts[-2:])
+    return text
+
+
+def _input_display_name(item: Dict[str, Any]) -> str:
+    return str(item.get("_display_name", "") or "")
+
+
+def _input_source_label(item: Dict[str, Any]) -> str:
+    return str(item.get("_source_label", "") or "")
+
+
+def _input_effective_source_label(
+    item: Dict[str, Any],
+    fallback_source: str = "",
+) -> str:
+    return _input_source_label(item) or _text(fallback_source)
+
+
+def _source_labels_from_inputs(
+    input_items: List[Dict[str, Any]],
+    fallback: str = "",
+) -> List[str]:
+    labels: List[str] = []
+    seen = set()
+    for item in input_items:
+        label = _input_source_label(item)
+        key = label.casefold()
+        if label and key not in seen:
+            seen.add(key)
+            labels.append(label)
+    if labels:
+        return labels
+    fallback_label = _text(fallback)
+    return [fallback_label] if fallback_label else []
+
+
+def _compact_input_expression(
+    input_items: List[Dict[str, Any]],
+    source_labels: List[str],
+) -> str:
+    if not input_items:
+        return "..."
+
+    source_tags = {
+        label.casefold(): f"S{index + 1}"
+        for index, label in enumerate(source_labels)
+    }
+    use_tags = len(source_labels) > 1
+    visible = input_items if len(input_items) <= 3 else input_items[:2]
+    terms: List[str] = []
+    for item in visible:
+        name = _input_display_name(item)
+        if not name:
+            continue
+        if use_tags:
+            tag = source_tags.get(_input_source_label(item).casefold(), "?")
+            name = f"{name}[{tag}]"
+        terms.append(name)
+
+    if len(input_items) > len(visible):
+        terms.append("...")
+    return " + ".join(terms) if terms else "..."
+
+
+def _compact_source_suffix(source_labels: List[str]) -> str:
+    if not source_labels:
+        return ""
+    if len(source_labels) == 1:
+        return _compact_source_label(source_labels[0])
+    if len(source_labels) <= 3:
+        return " : ".join(
+            f"S{index + 1}={_compact_source_label(label)}"
+            for index, label in enumerate(source_labels)
+        )
+    return f"{len(source_labels)} sources"
+
+
+def _compact_activity_breadcrumb(
+    output_label: str,
+    operation: str,
+    input_items: List[Dict[str, Any]],
+    fallback_source: str,
+) -> str:
+    output = _text(output_label)
+    op = _text(operation) or "activity"
+    source_labels = _source_labels_from_inputs(input_items, fallback_source)
+    expression = f"{output} = {op}({_compact_input_expression(input_items, source_labels)})"
+    source_suffix = _compact_source_suffix(source_labels)
+    if source_suffix:
+        return f"{expression} : {source_suffix}"
+    return expression
+
+
+def _compact_visualization_breadcrumb(
+    visualization_label: str,
+    operation: str,
+    input_label: str,
+    input_items: List[Dict[str, Any]],
+    fallback_source: str,
+    derived_operation: str = "",
+    derived_input_items: Optional[List[Dict[str, Any]]] = None,
+    derived_fallback_source: str = "",
+) -> str:
+    visualization = _text(visualization_label)
+    op = _text(operation) or "visualization"
+    if derived_input_items is not None:
+        source_labels = _source_labels_from_inputs(
+            derived_input_items,
+            derived_fallback_source,
+        )
+        derived_expr = (
+            f"{_text(input_label)} = "
+            f"{_text(derived_operation) or 'activity'}("
+            f"{_compact_input_expression(derived_input_items, source_labels)})"
+        )
+    else:
+        source_labels = _source_labels_from_inputs(input_items, fallback_source)
+        derived_expr = _compact_input_expression(input_items, source_labels)
+
+    expression = f"{visualization} = {op}({derived_expr})"
+    source_suffix = _compact_source_suffix(source_labels)
+    if source_suffix:
+        return f"{expression} : {source_suffix}"
+    return expression
+
+
+def _input_details(
+    item: Dict[str, Any],
+    fallback_source: str = "",
+) -> List[Dict[str, str]]:
+    return _detail_rows(
+        ("Variable", _input_display_name(item)),
+        ("Definition", item.get("definition", "")),
+    )
+
+
+def _input_summary(
+    input_items: List[Dict[str, Any]],
+    include_sources: bool = False,
+    fallback_source: str = "",
+) -> str:
+    values: List[str] = []
+    for item in input_items:
+        name = _input_display_name(item)
+        if not name:
+            continue
+        source = _input_effective_source_label(item, fallback_source)
+        if include_sources and source:
+            name = f"{name} ({source})"
+        values.append(name)
+    return ", ".join(values)
+
+
+def _input_role_binding_summary(
+    input_items: List[Dict[str, Any]],
+    include_sources: bool = False,
+    fallback_source: str = "",
+) -> str:
+    values: List[str] = []
+    for item in input_items:
+        roles = _input_role_labels(item)
+        name = _input_display_name(item)
+        if not roles or not name:
+            continue
+        source = _input_effective_source_label(item, fallback_source)
+        if include_sources and source:
+            name = f"{name} ({source})"
+        values.append(f"{' + '.join(roles)}: {name}")
+    return ", ".join(values)
+
+
+def _source_details(
+    label: str,
+    input_items: Optional[List[Dict[str, Any]]] = None,
+) -> List[Dict[str, str]]:
+    if not input_items:
+        return _detail_rows(("Dataset", label))
+    source_labels = _source_labels_from_inputs(input_items, label)
+    if len(source_labels) <= 1:
+        return _detail_rows(("Dataset", source_labels[0] if source_labels else label))
+    return _detail_rows(
+        ("Sources", len(source_labels)),
+        *(
+            (f"S{index + 1}", source_label)
+            for index, source_label in enumerate(source_labels)
+        ),
+    )
+
+
+def _activity_metadata(activity_provenance: Dict[str, Any]) -> Dict[str, Any]:
+    metadata = _dict_value(activity_provenance.get("activity_metadata", {}))
+    if metadata:
+        return metadata
+    return _dict_value(activity_provenance.get("metadata", {}))
+
+
+def _input_table_detail(input_items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, str]] = []
+    for item in input_items:
+        name = _input_display_name(item)
+        if not name:
+            continue
+        rows.append(
+            {
+                "variable": name,
+                "role": ", ".join(_input_role_labels(item)),
+            }
+        )
+    if not rows:
+        return []
+    return [
+        {
+            "label": "Inputs",
+            "kind": "input_table",
+            "value": ", ".join(row["variable"] for row in rows),
+            "rows": rows,
+        }
+    ]
+
+
+def _activity_details(
+    activity_provenance: Dict[str, Any],
+    activity_label: str,
+    output_label: str,
+    output_source: str,
+    input_items: List[Dict[str, Any]],
+    input_source: str = "",
+) -> List[Dict[str, Any]]:
+    metadata = _activity_metadata(activity_provenance)
+    details: List[Dict[str, Any]] = _detail_rows(
+        ("Kind", _activity_label(activity_provenance.get("activity_kind", ""))),
+        ("Operation", activity_provenance.get("activity_operation", activity_label)),
+        ("Output", output_label),
+        ("Output source", output_source),
+    )
+    details.extend(_input_table_detail(input_items))
+    details.extend(
+        _detail_rows(
+            ("Script", metadata.get("script_dataset", "")),
+            ("Method", metadata.get("discretization", "")),
+        )
+    )
+    return details
+
+
+def _visualization_details(
+    visualization_label: str,
+    operation: str,
+    input_items: List[Dict[str, Any]],
+    input_source: str = "",
+) -> List[Dict[str, Any]]:
+    details: List[Dict[str, Any]] = _detail_rows(
+        ("Kind", "visualization"),
+        ("Operation", operation),
+        ("Output", visualization_label),
+    )
+    details.extend(_input_table_detail(input_items))
+    return details
+
+
+def _provenance_node(
+    node_id: str,
+    kind: str,
+    label: Any,
+    shape: str,
+    items: Optional[List[Dict[str, Any]]] = None,
+    details: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    node = {
+        "id": str(node_id or ""),
+        "kind": str(kind or ""),
+        "label": _text(label),
+        "shape": str(shape or ""),
+    }
+    if items:
+        node["items"] = items
+    if details:
+        node["details"] = details
+        node["expanded"] = False
+    return node
+
+
+def _apply_node_expansion(
+    raw_node: Dict[str, Any],
+    expanded_by_id: Dict[str, bool],
+) -> Dict[str, Any]:
+    node = dict(raw_node)
+    node_id = str(node.get("id", "") or "")
+    if node.get("details"):
+        node["expanded"] = bool(expanded_by_id.get(node_id, False))
+    else:
+        node.pop("expanded", None)
+    if node.get("items"):
+        node["items"] = [
+            _apply_node_expansion(dict(item), expanded_by_id)
+            for item in node.get("items", [])
+            if isinstance(item, dict)
+        ]
+    return node
+
+
+def _apply_provenance_expansion(
+    nodes: List[Dict[str, Any]],
+    expanded_by_id: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    expanded = {
+        str(node_id): bool(value)
+        for node_id, value in (expanded_by_id or {}).items()
+    }
+    updated: List[Dict[str, Any]] = []
+    for raw_node in nodes or []:
+        if not isinstance(raw_node, dict):
+            continue
+        updated.append(_apply_node_expansion(raw_node, expanded))
+    return updated
+
+
+def _apply_provenance_graph_expansion(
+    graph: List[Dict[str, Any]],
+    expanded_by_id: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    expanded = {
+        str(node_id): bool(value)
+        for node_id, value in (expanded_by_id or {}).items()
+    }
+    updated: List[Dict[str, Any]] = []
+    for raw_segment in graph or []:
+        if not isinstance(raw_segment, dict):
+            continue
+        segment = dict(raw_segment)
+        if segment.get("type") == "node" and isinstance(segment.get("node"), dict):
+            segment["node"] = _apply_node_expansion(segment["node"], expanded)
+        elif segment.get("type") == "branches":
+            branches: List[Dict[str, Any]] = []
+            for raw_branch in segment.get("branches", []) or []:
+                if not isinstance(raw_branch, dict):
+                    continue
+                branch = dict(raw_branch)
+                if isinstance(branch.get("input"), dict):
+                    branch["input"] = _apply_node_expansion(
+                        branch["input"],
+                        expanded,
+                    )
+                if isinstance(branch.get("source"), dict):
+                    branch["source"] = _apply_node_expansion(
+                        branch["source"],
+                        expanded,
+                    )
+                branches.append(branch)
+            segment["branches"] = branches
+            if isinstance(segment.get("shared_source"), dict):
+                segment["shared_source"] = _apply_node_expansion(
+                    segment["shared_source"],
+                    expanded,
+                )
+        updated.append(segment)
+    return updated
+
+
+def _provenance_detail_node_ids(nodes: List[Dict[str, Any]]) -> set[str]:
+    node_ids: set[str] = set()
+    for node in nodes or []:
+        if not isinstance(node, dict):
+            continue
+        node_id = str(node.get("id", "") or "")
+        if node_id and node.get("details"):
+            node_ids.add(node_id)
+        node_ids.update(_provenance_detail_node_ids(node.get("items", []) or []))
+    return node_ids
+
+
+def _provenance_graph_detail_node_ids(graph: List[Dict[str, Any]]) -> set[str]:
+    node_ids: set[str] = set()
+    for segment in graph or []:
+        if not isinstance(segment, dict):
+            continue
+        if segment.get("type") == "node":
+            node = segment.get("node")
+            if isinstance(node, dict):
+                node_ids.update(_provenance_detail_node_ids([node]))
+        elif segment.get("type") == "branches":
+            for branch in segment.get("branches", []) or []:
+                if not isinstance(branch, dict):
+                    continue
+                for key in ("input", "source"):
+                    node = branch.get(key)
+                    if isinstance(node, dict):
+                        node_ids.update(_provenance_detail_node_ids([node]))
+            shared_source = segment.get("shared_source")
+            if isinstance(shared_source, dict):
+                node_ids.update(_provenance_detail_node_ids([shared_source]))
+    return node_ids
+
+
+def _variable_provenance_node(
+    node_id: str,
+    label: Any,
+    details: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    return _provenance_node(node_id, "variable", label, "box", details=details)
+
+
+def _activity_provenance_node(
+    label: Any,
+    node_id: str = "activity",
+    details: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    return _provenance_node(node_id, "activity", label, "box", details=details)
+
+
+def _source_provenance_node(
+    label: Any,
+    details: Optional[List[Dict[str, Any]]] = None,
+    node_id: str = "source",
+) -> Dict[str, Any]:
+    return _provenance_node(node_id, "source", label, "cylinder", details=details)
+
+
+def _graph_node_segment(node: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "id": f"node-{str(node.get('id', '') or '')}",
+        "type": "node",
+        "node": node,
+    }
+
+
+def _graph_arrow_segment(index: int) -> Dict[str, Any]:
+    return {"id": f"arrow-{index}", "type": "arrow"}
+
+
+def _provenance_graph_segments(*items: Dict[str, Any]) -> List[Dict[str, Any]]:
+    segments: List[Dict[str, Any]] = []
+    previous_was_node = False
+    arrow_index = 0
+    for item in items:
+        if not item:
+            continue
+        if item.get("type") == "branches":
+            if item.get("branches"):
+                segments.append(item)
+            previous_was_node = False
+            continue
+        if previous_was_node:
+            arrow_index += 1
+            segments.append(_graph_arrow_segment(arrow_index))
+        segments.append(_graph_node_segment(item))
+        previous_was_node = True
+    return segments
+
+
+def _input_source_for_graph(item: Dict[str, Any], fallback_source: str) -> str:
+    return _input_source_label(item) or _text(fallback_source) or "source"
+
+
+def _needs_stored_source_edge(source_label: str, upstream_source_label: str) -> bool:
+    source = _text(source_label)
+    upstream_source = _text(upstream_source_label)
+    if not source or source.casefold() == "source":
+        return False
+    if not upstream_source:
+        return False
+    return source.casefold() != upstream_source.casefold()
+
+
+def _input_branch_segment(
+    input_items: List[Dict[str, Any]],
+    fallback_source: str,
+    input_prefix: str = "input",
+    source_prefix: str = "source",
+) -> Dict[str, Any]:
+    branches: List[Dict[str, Any]] = []
+    source_labels: List[str] = []
+    seen_sources = set()
+    for index, item in enumerate(input_items or []):
+        name = _input_display_name(item)
+        if not name:
+            continue
+        source_label = _input_source_for_graph(item, fallback_source)
+        source_key = source_label.casefold()
+        if source_key not in seen_sources:
+            seen_sources.add(source_key)
+            source_labels.append(source_label)
+        branches.append(
+            {
+                "id": f"{input_prefix}-{index}",
+                "input": _variable_provenance_node(
+                    f"{input_prefix}-{index}",
+                    name,
+                    details=_input_details(item, fallback_source),
+                ),
+                "source": _source_provenance_node(
+                    source_label,
+                    details=_source_details(source_label, [item]),
+                    node_id=f"{source_prefix}-{index}",
+                ),
+            }
+        )
+
+    shared_source = None
+    if len(branches) > 1 and len(source_labels) == 1:
+        shared_source = _source_provenance_node(
+            source_labels[0],
+            details=_source_details(source_labels[0], input_items),
+            node_id=source_prefix,
+        )
+
+    return {
+        "id": f"branches-{input_prefix}",
+        "type": "branches",
+        "branches": branches,
+        "shared_source": shared_source,
+    }
+
+
+def _input_provenance_nodes(
+    inputs: List[Any],
+    fallback_source: str = "",
+) -> List[Dict[str, Any]]:
+    specs: List[Dict[str, Any]] = []
+    for index, value in enumerate(inputs):
+        if isinstance(value, dict):
+            name = _input_display_name(value) or _text(value.get("label", ""))
+            details = _input_details(value, fallback_source)
+            source = _input_effective_source_label(value, fallback_source)
+        else:
+            name = _text(value)
+            details = []
+            source = ""
+        if not name:
+            continue
+        specs.append(
+            {
+                "index": index,
+                "name": name,
+                "details": details,
+                "source": source,
+            }
+        )
+
+    if not specs:
+        return []
+    if len(specs) == 1:
+        return [
+            _variable_provenance_node(
+                "input-0",
+                specs[0]["name"],
+                details=specs[0]["details"],
+            )
+        ]
+    return [
+        _provenance_node(
+            "inputs",
+            "variables",
+            "Inputs",
+            "group",
+            items=[
+                _variable_provenance_node(
+                    f"input-{spec['index']}",
+                    spec["name"],
+                    details=spec["details"],
+                )
+                for spec in specs
+            ],
+            details=_detail_rows(
+                (
+                    "Inputs",
+                    ", ".join(
+                        (
+                            f"{spec['name']} ({spec['source']})"
+                            if spec["source"]
+                            else str(spec["name"])
+                        )
+                        for spec in specs
+                    ),
+                )
+            ),
+        )
+    ]
+
+
+def _activity_input_source_label(
+    activity_provenance: Dict[str, Any],
+    fallback: str,
+) -> str:
+    labels: List[str] = []
+    seen = set()
+    for raw in _list_value(activity_provenance.get("inputs", [])):
+        if not isinstance(raw, dict):
+            continue
+        label = _first_text(
+            raw,
+            "source_label",
+            "source_dataset",
+            "dataset",
+            "datasetName",
+        )
+        key = label.casefold()
+        if label and key not in seen:
+            seen.add(key)
+            labels.append(label)
+
+    if len(labels) == 1:
+        return labels[0]
+    if len(labels) > 1:
+        return " + ".join(labels)
+    return fallback
+
+
 def _details_provenance_summary(
     variable_label: str,
     selected_rows: List[Dict[str, Any]],
@@ -303,13 +991,27 @@ def _details_provenance_summary(
     label = _text(variable_label)
     rows = [dict(row or {}) for row in selected_rows or [] if isinstance(row, dict)]
     if not label or not rows:
-        return {"kind": "", "chain": ""}
+        return {"kind": "", "chain": "", "compact": "", "nodes": [], "graph": []}
 
     if len(rows) > 1:
         count = len(rows)
+        nodes = [
+            _variable_provenance_node(
+                "variable",
+                label,
+                details=_detail_rows(("Variable", label)),
+            ),
+            _source_provenance_node(
+                f"{count} selected sources",
+                details=_detail_rows(("Sources", count)),
+            ),
+        ]
         return {
             "kind": "multiple_sources",
             "chain": f"{label} --> {count} selected sources",
+            "compact": f"{label} : {count} selected sources",
+            "nodes": nodes,
+            "graph": _provenance_graph_segments(*nodes),
         }
 
     row = rows[0]
@@ -327,33 +1029,287 @@ def _details_provenance_summary(
             visualization_name = _first_text(row, "visualization_name")
 
     if visualization_name:
-        activity = _activity_label("visualization", _visualization_operation(tile, row))
-        inputs = _provenance_input_names(
+        visualization_operation = _visualization_operation(tile, row)
+        activity = _activity_label("visualization", visualization_operation)
+        input_items = _provenance_input_items(
             tile.get("visualization_variables")
             or row.get("visualization_variables")
             or []
         )
+        if not input_items and variable_name:
+            input_items = [
+                {
+                    "_display_name": variable_name,
+                    "_source_label": source_label,
+                    "roles": ["source"],
+                }
+            ]
+        inputs = _provenance_input_names(input_items)
+        activity_provenance = _dict_value(row.get("activity_provenance", {}))
+        if activity_provenance and len(inputs) <= 1:
+            derived_activity = _activity_label(
+                activity_provenance.get("activity_kind", ""),
+                activity_provenance.get("activity_operation", ""),
+            )
+            derived_input_items = _provenance_input_items(
+                activity_provenance.get("inputs", [])
+            )
+            derived_inputs = _provenance_input_names(derived_input_items)
+            derived_source_label = _activity_input_source_label(
+                activity_provenance,
+                source_label,
+            )
+            input_label = inputs[0] if inputs else variable_name
+            visualization_input_source_label = source_label
+            if len(input_items) == 1:
+                visualization_input_source_label = _input_effective_source_label(
+                    input_items[0],
+                    source_label,
+                )
+            derived_operation = str(
+                activity_provenance.get("activity_operation", "") or ""
+            )
+            chain = _chain(
+                visualization_name,
+                activity,
+                input_label,
+                derived_activity,
+                " + ".join(derived_inputs),
+                derived_source_label,
+            )
+            nodes = [
+                _provenance_node(
+                    "visualization",
+                    "visualization",
+                    visualization_name,
+                    "box",
+                    details=_detail_rows(
+                        ("Visualization", visualization_name),
+                        ("Kind", visualization_operation),
+                    ),
+                ),
+                _activity_provenance_node(
+                    activity,
+                    "visualization-activity",
+                    details=_visualization_details(
+                        visualization_name,
+                        visualization_operation,
+                        input_items,
+                        visualization_input_source_label,
+                    ),
+                ),
+                _variable_provenance_node(
+                    "visualization-input",
+                    input_label,
+                    details=_detail_rows(
+                        ("Variable", input_label),
+                    ),
+                ),
+                _activity_provenance_node(
+                    derived_activity,
+                    "derived-activity",
+                    details=_activity_details(
+                        activity_provenance,
+                        derived_activity,
+                        input_label,
+                        visualization_input_source_label,
+                        derived_input_items,
+                        derived_source_label,
+                    ),
+                ),
+                *_input_provenance_nodes(
+                    derived_input_items,
+                    derived_source_label,
+                ),
+                _source_provenance_node(
+                    derived_source_label,
+                    details=_source_details(
+                        derived_source_label,
+                        derived_input_items,
+                    ),
+                ),
+            ]
+            stored_source_node = None
+            if _needs_stored_source_edge(
+                visualization_input_source_label,
+                derived_source_label,
+            ):
+                stored_source_node = _source_provenance_node(
+                    visualization_input_source_label,
+                    details=_source_details(visualization_input_source_label),
+                    node_id="visualization-input-source",
+                )
+                nodes[3:3] = [stored_source_node]
+
+            graph_main_nodes = nodes[:5] if stored_source_node else nodes[:4]
+            derived_input_branches = _input_branch_segment(
+                derived_input_items,
+                derived_source_label,
+            )
+            graph_tail = (
+                derived_input_branches
+                if derived_input_branches.get("branches")
+                else nodes[-1]
+            )
+            return {
+                "kind": "visualization",
+                "chain": chain,
+                "compact": _compact_visualization_breadcrumb(
+                    visualization_name,
+                    visualization_operation,
+                    input_label,
+                    input_items,
+                    source_label,
+                    derived_operation=derived_operation,
+                    derived_input_items=derived_input_items,
+                    derived_fallback_source=derived_source_label,
+                ),
+                "nodes": nodes,
+                "graph": _provenance_graph_segments(
+                    *graph_main_nodes,
+                    graph_tail,
+                ),
+            }
         input_label = " + ".join(inputs) if inputs else variable_name
         chain = _chain(visualization_name, activity, input_label, source_label)
-        return {"kind": "visualization", "chain": chain}
+        nodes = [
+            _provenance_node(
+                "visualization",
+                "visualization",
+                visualization_name,
+                "box",
+                details=_detail_rows(
+                    ("Visualization", visualization_name),
+                    ("Kind", visualization_operation),
+                ),
+            ),
+            _activity_provenance_node(
+                activity,
+                details=_visualization_details(
+                    visualization_name,
+                    visualization_operation,
+                    input_items,
+                    source_label,
+                ),
+            ),
+            *(
+                _input_provenance_nodes(input_items, source_label)
+                if input_items
+                else [_variable_provenance_node("input-0", variable_name)]
+            ),
+            _source_provenance_node(
+                source_label,
+                details=_source_details(source_label, input_items),
+            ),
+        ]
+        return {
+            "kind": "visualization",
+            "chain": chain,
+            "compact": _compact_visualization_breadcrumb(
+                visualization_name,
+                visualization_operation,
+                input_label,
+                input_items,
+                source_label,
+            ),
+            "nodes": nodes,
+            "graph": _provenance_graph_segments(
+                nodes[0],
+                nodes[1],
+                _input_branch_segment(input_items, source_label),
+            ),
+        }
 
     activity_provenance = _dict_value(row.get("activity_provenance", {}))
     if activity_provenance:
         activity = _activity_label(
             activity_provenance.get("activity_kind", ""),
-            activity_provenance.get("activity_operation", ""),
+                activity_provenance.get("activity_operation", ""),
+            )
+        input_items = _provenance_input_items(activity_provenance.get("inputs", []))
+        inputs = _provenance_input_names(input_items)
+        activity_source_label = _activity_input_source_label(
+            activity_provenance,
+            source_label,
         )
-        inputs = _provenance_input_names(activity_provenance.get("inputs", []))
         if inputs:
-            chain = _chain(variable_name, activity, " + ".join(inputs), source_label)
+            chain = _chain(
+                variable_name,
+                activity,
+                " + ".join(inputs),
+                activity_source_label,
+            )
         else:
-            chain = _chain(variable_name, activity, source_label)
-        return {"kind": "activity", "chain": chain}
+            chain = _chain(variable_name, activity, activity_source_label)
+        nodes = [
+            _variable_provenance_node(
+                "variable",
+                variable_name,
+                details=_detail_rows(
+                    ("Variable", variable_name),
+                    (
+                        "Definition",
+                        activity_provenance.get("output_definition", ""),
+                    ),
+                ),
+            ),
+            _activity_provenance_node(
+                activity,
+                details=_activity_details(
+                    activity_provenance,
+                    activity,
+                    variable_name,
+                    source_label,
+                    input_items,
+                    activity_source_label,
+                ),
+            ),
+            *_input_provenance_nodes(input_items, activity_source_label),
+            _source_provenance_node(
+                activity_source_label,
+                details=_source_details(activity_source_label, input_items),
+            ),
+        ]
+        input_branches = _input_branch_segment(input_items, activity_source_label)
+        graph_tail = input_branches if input_branches.get("branches") else nodes[-1]
+        return {
+            "kind": "activity",
+            "chain": chain,
+            "compact": _compact_activity_breadcrumb(
+                variable_name,
+                str(activity_provenance.get("activity_operation", "") or ""),
+                input_items,
+                activity_source_label,
+            ),
+            "nodes": nodes,
+            "graph": _provenance_graph_segments(nodes[0], nodes[1], graph_tail),
+        }
 
     chain = _chain(variable_name, source_label)
     kind = "variable"
+    nodes = [
+        _variable_provenance_node(
+            "variable",
+            variable_name,
+            details=_detail_rows(("Variable", variable_name)),
+        ),
+        _source_provenance_node(
+            source_label,
+            details=_source_details(source_label),
+        ),
+    ]
 
-    return {"kind": kind, "chain": chain}
+    return {
+        "kind": kind,
+        "chain": chain,
+        "compact": (
+            f"{variable_name} : {_compact_source_label(source_label)}"
+            if source_label
+            else variable_name
+        ),
+        "nodes": nodes,
+        "graph": _provenance_graph_segments(*nodes),
+    }
 
 
 class CatalogControllerMixin:
@@ -365,6 +1321,9 @@ class CatalogControllerMixin:
         ("show_query_help", "show_query_help"),
         ("show_source_filter_help", "show_source_filter_help"),
         ("close_help_modal", "close_help_modal"),
+        ("open_provenance_dialog", "open_provenance_dialog"),
+        ("close_provenance_dialog", "close_provenance_dialog"),
+        ("toggle_provenance_node_details", "toggle_provenance_node_details"),
         ("run_query", "run_query"),
         ("clear_query", "clear_query"),
     )
@@ -766,6 +1725,18 @@ Notes:
         )
         self.state.detailsProvenanceKind = str(provenance.get("kind", "") or "")
         self.state.detailsProvenanceChain = str(provenance.get("chain", "") or "")
+        self.state.detailsProvenanceCompact = str(
+            provenance.get("compact", "") or ""
+        )
+        self.state.detailsProvenanceExpanded = {}
+        self.state.detailsProvenanceNodes = _apply_provenance_expansion(
+            list(provenance.get("nodes", []) or []),
+            self.state.detailsProvenanceExpanded,
+        )
+        self.state.detailsProvenanceGraph = _apply_provenance_graph_expansion(
+            list(provenance.get("graph", []) or []),
+            self.state.detailsProvenanceExpanded,
+        )
 
     def details_provenance_includes_visualization(self) -> bool:
         return (
@@ -806,6 +1777,46 @@ Notes:
 
     def set_dragged_var(self, var_name: str, **_):
         self.state.draggedVar = str(var_name or "")
+
+    def open_provenance_dialog(self, **_):
+        if self.state.detailsProvenanceChain:
+            self.state.showProvenanceModal = True
+
+    def close_provenance_dialog(self, **_):
+        self.state.showProvenanceModal = False
+
+    def toggle_provenance_node_details(self, node_id: str, **_):
+        target = str(node_id or "")
+        if not target:
+            return
+
+        nodes = [
+            dict(node)
+            for node in (getattr(self.state, "detailsProvenanceNodes", []) or [])
+            if isinstance(node, dict)
+        ]
+        graph = [
+            dict(segment)
+            for segment in (getattr(self.state, "detailsProvenanceGraph", []) or [])
+            if isinstance(segment, dict)
+        ]
+        detail_node_ids = _provenance_detail_node_ids(
+            nodes
+        ) | _provenance_graph_detail_node_ids(graph)
+        if target not in detail_node_ids:
+            return
+
+        expanded = dict(getattr(self.state, "detailsProvenanceExpanded", {}) or {})
+        expanded[target] = not bool(expanded.get(target, False))
+        self.state.detailsProvenanceExpanded = expanded
+        self.state.detailsProvenanceNodes = _apply_provenance_expansion(
+            nodes,
+            expanded,
+        )
+        self.state.detailsProvenanceGraph = _apply_provenance_graph_expansion(
+            graph,
+            expanded,
+        )
 
     def toggle_variable_group(self, group_name: str, **_):
         name = str(group_name or "").strip()

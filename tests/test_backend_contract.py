@@ -473,6 +473,13 @@ class LocalCampaignBackendTests(unittest.TestCase):
 
 
 class BackendInjectionTests(unittest.TestCase):
+    @staticmethod
+    def provenance_node_shapes(nodes):
+        return [
+            {key: node[key] for key in ("id", "kind", "label", "shape")}
+            for node in nodes
+        ]
+
     def test_application_delegates_to_explicit_backend(self):
         source = {"id": "remote-source:7", "label": "run/output"}
         backend = FakeCatalogBackend(
@@ -608,6 +615,36 @@ class BackendInjectionTests(unittest.TestCase):
 
         self.assertEqual(state.detailsProvenanceKind, "variable")
         self.assertEqual(state.detailsProvenanceChain, "Energy --> run/output")
+        self.assertEqual(state.detailsProvenanceCompact, "Energy : run/output")
+        self.assertEqual(
+            self.provenance_node_shapes(state.detailsProvenanceNodes),
+            [
+                {
+                    "id": "variable",
+                    "kind": "variable",
+                    "label": "Energy",
+                    "shape": "box",
+                },
+                {
+                    "id": "source",
+                    "kind": "source",
+                    "label": "run/output",
+                    "shape": "cylinder",
+                },
+            ],
+        )
+        self.assertFalse(state.detailsProvenanceNodes[0]["expanded"])
+
+        server.controller.actions["toggle_provenance_node_details"]("variable")
+        self.assertEqual(state.detailsProvenanceExpanded, {"variable": True})
+        self.assertTrue(state.detailsProvenanceNodes[0]["expanded"])
+        self.assertTrue(state.detailsProvenanceGraph[0]["node"]["expanded"])
+        self.assertFalse(state.detailsProvenanceNodes[1]["expanded"])
+
+        server.controller.actions["toggle_provenance_node_details"]("variable")
+        self.assertEqual(state.detailsProvenanceExpanded, {"variable": False})
+        self.assertFalse(state.detailsProvenanceNodes[0]["expanded"])
+        self.assertFalse(state.detailsProvenanceGraph[0]["node"]["expanded"])
 
     def test_controller_details_show_visualization_provenance_in_visualization_context(self):
         backend = FakeCatalogBackend(source_summary=source_summary_with_one_source())
@@ -651,6 +688,7 @@ class BackendInjectionTests(unittest.TestCase):
 
         self.assertEqual(state.detailsProvenanceKind, "variable")
         self.assertEqual(state.detailsProvenanceChain, "Energy --> run/output")
+        self.assertEqual(state.detailsProvenanceCompact, "Energy : run/output")
 
         owner = server.controller.actions["pick_var"].__self__
         owner.update_selected_var_panels(
@@ -663,6 +701,39 @@ class BackendInjectionTests(unittest.TestCase):
         self.assertEqual(
             state.detailsProvenanceChain,
             "heatmap --> visualization: scalar_field --> Energy --> run/output",
+        )
+        self.assertEqual(
+            state.detailsProvenanceCompact,
+            "heatmap = scalar_field(Energy) : run/output",
+        )
+        self.assertEqual(
+            self.provenance_node_shapes(state.detailsProvenanceNodes),
+            [
+                {
+                    "id": "visualization",
+                    "kind": "visualization",
+                    "label": "heatmap",
+                    "shape": "box",
+                },
+                {
+                    "id": "activity",
+                    "kind": "activity",
+                    "label": "visualization: scalar_field",
+                    "shape": "box",
+                },
+                {
+                    "id": "input-0",
+                    "kind": "variable",
+                    "label": "Energy",
+                    "shape": "box",
+                },
+                {
+                    "id": "source",
+                    "kind": "source",
+                    "label": "run/output",
+                    "shape": "cylinder",
+                },
+            ],
         )
 
     def test_controller_details_show_streamline_activity_inputs(self):
@@ -712,6 +783,48 @@ class BackendInjectionTests(unittest.TestCase):
             state.detailsProvenanceChain,
             "velocity_streamlines --> visualization: streamlines --> vx + vy + speed --> run/output",
         )
+        self.assertEqual(
+            state.detailsProvenanceCompact,
+            "velocity_streamlines = streamlines(vx + vy + speed) : run/output",
+        )
+        self.assertEqual(
+            [node["kind"] for node in state.detailsProvenanceNodes],
+            ["visualization", "activity", "variables", "source"],
+        )
+        action_details = state.detailsProvenanceNodes[1]["details"]
+        action_labels = [row["label"] for row in action_details]
+        input_detail = next(row for row in action_details if row["label"] == "Inputs")
+        self.assertEqual(input_detail["kind"], "input_table")
+        self.assertNotIn("run/output", str(input_detail["rows"]))
+        self.assertEqual(
+            input_detail["rows"],
+            [
+                {"variable": "vx", "role": "streamline-x"},
+                {"variable": "vy", "role": "streamline-y"},
+                {"variable": "speed", "role": "color-by"},
+            ],
+        )
+        self.assertNotIn("Input roles", action_labels)
+        self.assertEqual(state.detailsProvenanceNodes[2]["shape"], "group")
+        self.assertEqual(
+            [item["label"] for item in state.detailsProvenanceNodes[2]["items"]],
+            ["vx", "vy", "speed"],
+        )
+        for item in state.detailsProvenanceNodes[2]["items"]:
+            self.assertNotIn(
+                "Roles",
+                [row["label"] for row in item.get("details", [])],
+            )
+        self.assertEqual(
+            [segment["type"] for segment in state.detailsProvenanceGraph],
+            ["node", "arrow", "node", "branches"],
+        )
+        branch_segment = state.detailsProvenanceGraph[-1]
+        self.assertEqual(
+            [branch["input"]["label"] for branch in branch_segment["branches"]],
+            ["vx", "vy", "speed"],
+        )
+        self.assertEqual(branch_segment["shared_source"]["label"], "run/output")
 
     def test_controller_details_show_derived_activity_provenance(self):
         summary = source_summary_with_one_source()
@@ -754,6 +867,206 @@ class BackendInjectionTests(unittest.TestCase):
         self.assertEqual(
             state.detailsProvenanceChain,
             "div_b --> derived: divergence --> bx + by --> run/output",
+        )
+        self.assertEqual(
+            state.detailsProvenanceCompact,
+            "div_b = divergence(bx + by) : run/output",
+        )
+        self.assertEqual(
+            [node["kind"] for node in state.detailsProvenanceNodes],
+            ["variable", "activity", "variables", "source"],
+        )
+        self.assertEqual(state.detailsProvenanceNodes[1]["shape"], "box")
+        action_details = state.detailsProvenanceNodes[1]["details"]
+        action_labels = [row["label"] for row in action_details]
+        input_detail = next(row for row in action_details if row["label"] == "Inputs")
+        self.assertEqual(input_detail["kind"], "input_table")
+        self.assertNotIn("run/output", str(input_detail["rows"]))
+        self.assertEqual(
+            input_detail["rows"],
+            [
+                {"variable": "bx", "role": "magnetic-x"},
+                {"variable": "by", "role": "magnetic-y"},
+            ],
+        )
+        self.assertNotIn("Input roles", action_labels)
+        self.assertEqual(state.detailsProvenanceNodes[2]["shape"], "group")
+        for item in state.detailsProvenanceNodes[2]["items"]:
+            self.assertNotIn(
+                "Roles",
+                [row["label"] for row in item.get("details", [])],
+            )
+        self.assertEqual(
+            [segment["type"] for segment in state.detailsProvenanceGraph],
+            ["node", "arrow", "node", "branches"],
+        )
+
+    def test_controller_visualization_extends_analysis_provenance_to_output_source(self):
+        summary = source_summary_with_one_source()
+        summary["variable_id"] = "grad_rho_abs"
+        source = summary["sources"][0]
+        source.update(
+            {
+                "source_label": "hll_128/analysis.bp",
+                "variable_id": "grad_rho_abs",
+                "variable_name": "grad_rho_abs",
+                "variable_path": "hll_128/analysis.bp/grad_rho_abs",
+                "source_dataset": "hll_128/analysis.bp",
+                "file": "analysis.bp",
+                "activity_provenance": {
+                    "activity_kind": "quantity_of_interest",
+                    "activity_operation": "gradient_magnitude",
+                    "inputs": [
+                        {
+                            "name": "rho",
+                            "roles": ["density"],
+                            "source_dataset": "hll_128/output.bp",
+                        },
+                    ],
+                },
+            }
+        )
+        backend = FakeCatalogBackend(source_summary=summary)
+        state = RecordingState()
+        db = SimpleNamespace(ok=True, last_error="")
+        db.distinct_visualization_names_for_variable = (
+            lambda *_args, **_kwargs: ["grad_rho_abs_heatmap"]
+        )
+        db.get_first_movie_tiles_for_variable = lambda *_args, **_kwargs: [
+            {
+                "variable_id": "grad_rho_abs",
+                "variable_name": "grad_rho_abs",
+                "visualization_name": "grad_rho_abs_heatmap",
+                "source_dataset": "hll_128/analysis.bp",
+                "status": "ok",
+                "visualization_sequence_metadata": {
+                    "visualization_type": "heatmap",
+                },
+                "visualization_variables": [
+                    {
+                        "name": "grad_rho_abs",
+                        "roles": ["color-by"],
+                        "source_dataset": "hll_128/analysis.bp",
+                    },
+                ],
+            }
+        ]
+        init_state(state, db)
+        state.variableLabelsById = {"grad_rho_abs": "grad_rho_abs"}
+        server = SimpleNamespace(state=state, controller=RecordingController())
+
+        attach_controllers(
+            server=server,
+            backend=backend,
+            db=db,
+            collection=SimpleNamespace(),
+            parse_campaign=lambda *_args, **_kwargs: None,
+            campaign_path="/campaign/example.aca",
+        )
+        state.change_callbacks["selectedVar"][0]("grad_rho_abs")
+
+        self.assertEqual(
+            state.detailsProvenanceChain,
+            "grad_rho_abs --> derived: gradient_magnitude --> rho --> hll_128/output.bp",
+        )
+        self.assertEqual(
+            state.detailsProvenanceCompact,
+            "grad_rho_abs = gradient_magnitude(rho) : hll_128/output.bp",
+        )
+
+        owner = server.controller.actions["pick_var"].__self__
+        owner.update_selected_var_panels(
+            "grad_rho_abs",
+            include_visualization_provenance=True,
+            preferred_visualization="grad_rho_abs_heatmap",
+        )
+
+        self.assertEqual(state.detailsProvenanceKind, "visualization")
+        self.assertEqual(
+            state.detailsProvenanceChain,
+            "grad_rho_abs_heatmap --> visualization: heatmap --> grad_rho_abs --> derived: gradient_magnitude --> rho --> hll_128/output.bp",
+        )
+        self.assertEqual(
+            state.detailsProvenanceCompact,
+            "grad_rho_abs_heatmap = heatmap(grad_rho_abs = gradient_magnitude(rho)) : hll_128/output.bp",
+        )
+        self.assertEqual(
+            [node["kind"] for node in state.detailsProvenanceNodes],
+            [
+                "visualization",
+                "activity",
+                "variable",
+                "source",
+                "activity",
+                "variable",
+                "source",
+            ],
+        )
+        visualization_details = state.detailsProvenanceNodes[1]["details"]
+        visualization_input_detail = next(
+            row for row in visualization_details if row["label"] == "Inputs"
+        )
+        self.assertEqual(visualization_input_detail["kind"], "input_table")
+        self.assertEqual(
+            visualization_input_detail["rows"],
+            [{"variable": "grad_rho_abs", "role": "color-by"}],
+        )
+        self.assertNotIn("hll_128/analysis.bp", str(visualization_input_detail["rows"]))
+        self.assertNotIn(
+            "Input roles",
+            [row["label"] for row in visualization_details],
+        )
+        derived_details = state.detailsProvenanceNodes[4]["details"]
+        derived_input_detail = next(
+            row for row in derived_details if row["label"] == "Inputs"
+        )
+        self.assertEqual(derived_input_detail["kind"], "input_table")
+        self.assertEqual(
+            derived_input_detail["rows"],
+            [{"variable": "rho", "role": "density"}],
+        )
+        self.assertNotIn("hll_128/output.bp", str(derived_input_detail["rows"]))
+        self.assertNotIn("Input roles", [row["label"] for row in derived_details])
+        self.assertNotIn(
+            "Roles",
+            [row["label"] for row in state.detailsProvenanceNodes[2]["details"]],
+        )
+        self.assertNotIn(
+            "Roles",
+            [row["label"] for row in state.detailsProvenanceNodes[5]["details"]],
+        )
+        self.assertEqual(
+            state.detailsProvenanceNodes[-1]["label"],
+            "hll_128/output.bp",
+        )
+        self.assertEqual(
+            [segment["type"] for segment in state.detailsProvenanceGraph],
+            [
+                "node",
+                "arrow",
+                "node",
+                "arrow",
+                "node",
+                "arrow",
+                "node",
+                "arrow",
+                "node",
+                "branches",
+            ],
+        )
+        visualization_input_segment = state.detailsProvenanceGraph[4]
+        self.assertEqual(
+            visualization_input_segment["node"]["label"],
+            "grad_rho_abs",
+        )
+        stored_source_segment = state.detailsProvenanceGraph[6]
+        self.assertEqual(
+            stored_source_segment["node"]["label"],
+            "hll_128/analysis.bp",
+        )
+        self.assertEqual(
+            state.detailsProvenanceGraph[-1]["branches"][0]["source"]["label"],
+            "hll_128/output.bp",
         )
 
     def test_controller_source_restriction_uses_injected_backend(self):

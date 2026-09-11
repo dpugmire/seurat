@@ -279,6 +279,155 @@ def test_app_mounts_and_renders_structural_ui(page, seurat_server):
     assert console_errors == [], response_errors
 
 
+def test_provenance_detail_buttons_expand_in_popup(page, seurat_server):
+    console_errors, page_errors, response_errors = _open_app(page, seurat_server)
+
+    page.get_by_role("button", name="Provenance", exact=True).click()
+    panel = page.locator("#seurat-provenance-panel")
+    panel.wait_for(state="visible")
+    dialog = page.locator(".seurat-provenance-dialog")
+    dialog.wait_for(state="visible")
+    content_styles = panel.locator(".seurat-provenance-dialog-content").evaluate(
+        """element => {
+            const style = window.getComputedStyle(element);
+            return {
+                maxHeight: style.maxHeight,
+                overflowX: style.overflowX,
+                overflowY: style.overflowY,
+            };
+        }"""
+    )
+    graph_styles = panel.locator(".seurat-provenance-graph").evaluate(
+        """element => {
+            const style = window.getComputedStyle(element);
+            return {
+                overflowX: style.overflowX,
+                overflowY: style.overflowY,
+            };
+        }"""
+    )
+    assert content_styles["maxHeight"] != "none"
+    assert content_styles["overflowY"] in {"auto", "scroll"}
+    assert graph_styles["overflowX"] in {"auto", "scroll"}
+    assert dialog.locator(".seurat-provenance-node-details").count() == 0
+    assert dialog.locator(".seurat-provenance-branch-section").count() == 1
+    assert dialog.locator(".seurat-provenance-input-row").get_by_text(
+        "vx",
+        exact=True,
+    ).is_visible()
+    assert dialog.locator(".seurat-provenance-input-row").get_by_text(
+        "vy",
+        exact=True,
+    ).is_visible()
+    assert dialog.locator(".seurat-provenance-input-row").get_by_text(
+        "pressure",
+        exact=True,
+    ).is_visible()
+    assert dialog.locator(".seurat-provenance-shared-source-row").get_by_text(
+        "hll_128/output.bp",
+        exact=True,
+    ).is_visible()
+
+    dialog.locator(".seurat-provenance-detail-btn").first.click()
+    page.wait_for_function(
+        """() => {
+            const dialog = document.querySelector('.seurat-provenance-dialog');
+            return Boolean(
+                dialog
+                && dialog.querySelector('.seurat-provenance-node-details')
+                && dialog.querySelector('.seurat-provenance-detail-btn')
+                    ?.getAttribute('aria-expanded') === 'true'
+            );
+        }"""
+    )
+    assert dialog.locator(".seurat-provenance-detail-row").filter(
+        has_text="Visualization"
+    ).first.is_visible()
+    assert dialog.locator(".seurat-provenance-detail-row").filter(
+        has_text="velocity_streamlines"
+    ).first.is_visible()
+
+    dialog.locator(".seurat-provenance-detail-btn").first.click()
+    page.wait_for_function(
+        """() => {
+            const dialog = document.querySelector('.seurat-provenance-dialog');
+            return Boolean(
+                dialog
+                && !dialog.querySelector('.seurat-provenance-node-details')
+                && dialog.querySelector('.seurat-provenance-detail-btn')
+                    ?.getAttribute('aria-expanded') === 'false'
+            );
+        }"""
+    )
+    action_node = dialog.locator(".seurat-provenance-node.is-activity").first
+    action_node.locator(".seurat-provenance-detail-btn").click()
+    page.wait_for_function(
+        """() => {
+            const action = document.querySelector(
+              '.seurat-provenance-node.is-activity'
+            );
+            return Boolean(
+                action
+                && action.querySelector('.seurat-provenance-node-details')
+                && action.querySelector('.seurat-provenance-input-table')
+                && action.textContent.includes('Variable')
+                && action.textContent.includes('Role')
+                && action.textContent.includes('vx')
+                && action.textContent.includes('streamline-x')
+                && action.textContent.includes('vy')
+                && action.textContent.includes('streamline-y')
+                && action.textContent.includes('pressure')
+                && action.textContent.includes('color-by')
+                && !action.textContent.includes('hll_128/output.bp')
+            );
+        }"""
+    )
+
+    input_node = dialog.locator(
+        ".seurat-provenance-input-row .seurat-provenance-node.is-variable"
+    ).first
+    input_node.locator(".seurat-provenance-detail-btn").click()
+    page.wait_for_function(
+        """() => {
+            const input = document.querySelector(
+              '.seurat-provenance-input-row .seurat-provenance-node.is-variable'
+            );
+            return Boolean(
+                input && input.querySelector('.seurat-provenance-node-details')
+            );
+        }"""
+    )
+    input_detail_labels = input_node.locator(
+        ".seurat-provenance-detail-label"
+    ).evaluate_all("labels => labels.map(label => label.textContent.trim())")
+    assert input_detail_labels == ["Variable"]
+
+    assert page_errors == []
+    assert console_errors == [], response_errors
+
+
+def test_provenance_popup_drags_and_clamps(page, seurat_server):
+    _open_app(page, seurat_server)
+
+    page.get_by_role("button", name="Provenance", exact=True).click()
+    panel = page.locator("#seurat-provenance-panel")
+    panel.wait_for(state="visible")
+    handle = panel.locator(".seurat-floating-panel-drag-handle")
+    initial = panel.bounding_box()
+    assert initial is not None
+
+    _drag(page, handle, delta_x=50, delta_y=30)
+    moved = panel.bounding_box()
+    assert moved["x"] == pytest.approx(initial["x"] + 50, abs=2)
+    assert moved["y"] == pytest.approx(initial["y"] + 30, abs=2)
+    assert not panel.evaluate("panel => panel.classList.contains('is-dragging')")
+
+    _drag(page, handle, delta_x=2000, delta_y=2000)
+    clamped = panel.bounding_box()
+    assert clamped["x"] + clamped["width"] <= page.viewport_size["width"] - 7
+    assert clamped["y"] + clamped["height"] <= page.viewport_size["height"] - 7
+
+
 def test_workspace_tabs_and_split_panes_preserve_grid_content(
     page, seurat_server
 ):
